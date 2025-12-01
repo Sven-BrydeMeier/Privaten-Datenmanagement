@@ -19,7 +19,7 @@ class PDFProcessor:
     def ist_trennblatt(self, seite: fitz.Page, seiten_nr: int) -> bool:
         """
         Prüft, ob eine Seite ein Trennblatt ist.
-        Trennblatt = Seite enthält im Wesentlichen nur ein "T"
+        Trennblatt = Seite enthält im Wesentlichen nur ein "T" (oft mit großer Schrift)
         """
         text = seite.get_text("text").strip()
 
@@ -36,7 +36,36 @@ class PDFProcessor:
                 self.debug_info.append(f"  → TRENNBLATT erkannt (exakt 'T')")
             return True
 
-        # Auch erlauben: wenig Text, aber "T" dominant
+        # Prüfe auf große Schriftgröße (für T mit Schriftgröße 500)
+        try:
+            text_dict = seite.get_text("dict")
+            for block in text_dict.get("blocks", []):
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line.get("spans", []):
+                            text_span = span.get("text", "").strip().upper()
+                            font_size = span.get("size", 0)
+
+                            # Debug: Zeige Schriftgrößen
+                            if self.debug and text_span:
+                                self.debug_info.append(f"    Text: '{text_span}' | Schriftgröße: {font_size:.1f}")
+
+                            # Großes T (Schriftgröße > 100) ist eindeutig ein Trennblatt
+                            if text_span in ['T', 'T.', 'T:'] and font_size > 100:
+                                if self.debug:
+                                    self.debug_info.append(f"  → TRENNBLATT erkannt (großes T, Schriftgröße: {font_size:.1f})")
+                                return True
+
+                            # Auch wenn nur "T" auf der Seite und Schrift > 50
+                            if 'T' in text_span and font_size > 50 and len(text_clean) <= 5:
+                                if self.debug:
+                                    self.debug_info.append(f"  → TRENNBLATT erkannt (T mit Schriftgröße: {font_size:.1f})")
+                                return True
+        except Exception as e:
+            if self.debug:
+                self.debug_info.append(f"  Warnung: Schriftgröße konnte nicht gelesen werden: {e}")
+
+        # Fallback: Auch erlauben - wenig Text, aber "T" dominant
         if len(text_clean) <= 10 and 'T' in text_clean.upper():
             # Prüfe, ob mindestens 50% des Textes "T" ist
             t_count = text_clean.upper().count('T')
@@ -51,14 +80,6 @@ class PDFProcessor:
             if self.debug:
                 self.debug_info.append(f"  → TRENNBLATT erkannt (eine Zeile)")
             return True
-
-        # Alternative: Sehr große Schrift mit nur "T" (typisch für Trennblätter)
-        if len(text_clean) <= 20 and text.upper().count('T') > 0:
-            # Prüfe auf große Schriftgröße (wenn möglich)
-            if len(lines) <= 2 and any('T' in line.upper() for line in lines):
-                if self.debug:
-                    self.debug_info.append(f"  → TRENNBLATT erkannt (wenig Text mit T)")
-                return True
 
         return False
 
