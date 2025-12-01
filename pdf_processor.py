@@ -19,62 +19,76 @@ class PDFProcessor:
     def ist_trennblatt(self, seite: fitz.Page, seiten_nr: int) -> bool:
         """
         Prüft, ob eine Seite ein Trennblatt ist.
-        Trennblatt = Seite enthält im Wesentlichen nur ein "T" (oft mit großer Schrift)
+
+        NEUE METHODE: Da OCR das "T" nicht erkennt, verwenden wir strukturelle Analyse:
+        - Trennblätter haben EXTREM wenig Text (< 50 Zeichen)
+        - Trennblätter haben sehr wenige Textblöcke (1-2)
+        - Trennblätter haben große Schriftgrößen (wenn erkannt)
         """
         text = seite.get_text("text").strip()
+        text_clean = re.sub(r'\s+', '', text)
 
-        # Debug-Info - zeige ersten Teil des Textes
+        # Debug-Info
         if self.debug:
             text_preview = text[:200] if len(text) > 200 else text
             text_preview = text_preview.replace('\n', ' ')
             self.debug_info.append(f"  Text-Vorschau: '{text_preview}'")
             self.debug_info.append(f"  Text-Länge: {len(text)} Zeichen")
+            self.debug_info.append(f"  Bereinigter Text: '{text_clean}' ({len(text_clean)} Zeichen)")
 
-        # Bereinige Text von Whitespace
-        text_clean = re.sub(r'\s+', '', text)
-        if self.debug:
-            self.debug_info.append(f"  Bereinigter Text: '{text_clean}'")
-
-        # PRIORITÄT 1: Prüfe auf große Schriftgröße (ZUVERLÄSSIGSTE Methode!)
-        # Für T mit Schriftgröße 500 - das ist das eindeutigste Signal
+        # NEUE PRIORITÄT 1: Strukturelle Analyse (funktioniert OHNE OCR-Text!)
         try:
             text_dict = seite.get_text("dict")
+            blocks = text_dict.get("blocks", [])
+            text_blocks = [b for b in blocks if "lines" in b]
+
+            # Zähle Textblöcke und größte Schriftgröße
+            block_count = len(text_blocks)
             max_font_size = 0
-            found_t = False
+            total_chars = 0
 
-            for block in text_dict.get("blocks", []):
-                if "lines" in block:
-                    for line in block["lines"]:
-                        for span in line.get("spans", []):
-                            text_span = span.get("text", "").strip()
-                            font_size = span.get("size", 0)
+            for block in text_blocks:
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        text_span = span.get("text", "").strip()
+                        font_size = span.get("size", 0)
 
-                            # Debug: Zeige ALLE Texte mit Schriftgrößen
-                            if self.debug and text_span:
-                                self.debug_info.append(f"    '{text_span}' → Größe: {font_size:.1f}")
+                        if self.debug and text_span:
+                            self.debug_info.append(f"    '{text_span}' → Größe: {font_size:.1f}")
 
-                            # Tracke größte Schriftgröße
-                            if font_size > max_font_size:
-                                max_font_size = font_size
-
-                            # Prüfe auf "T" (case-insensitive)
-                            if text_span.upper() in ['T', 'T.', 'T:']:
-                                found_t = True
-                                # Jede Schriftgröße > 50 mit "T" = Trennblatt
-                                if font_size > 50:
-                                    if self.debug:
-                                        self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (T mit Größe {font_size:.1f})")
-                                    return True
+                        if font_size > max_font_size:
+                            max_font_size = font_size
+                        total_chars += len(text_span)
 
             if self.debug:
-                self.debug_info.append(f"  Max. Schriftgröße auf Seite: {max_font_size:.1f}")
-                self.debug_info.append(f"  'T' gefunden: {found_t}")
+                self.debug_info.append(f"  Anzahl Textblöcke: {block_count}")
+                self.debug_info.append(f"  Max. Schriftgröße: {max_font_size:.1f}")
+                self.debug_info.append(f"  Zeichen in Spans: {total_chars}")
+
+            # KRITERIUM 1: Sehr große Schriftgröße (> 100) = fast immer Trennblatt
+            if max_font_size > 100:
+                if self.debug:
+                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Riesige Schrift: {max_font_size:.1f})")
+                return True
+
+            # KRITERIUM 2: Wenig Text + große Schrift + wenige Blöcke
+            if block_count <= 3 and max_font_size > 50 and total_chars < 20:
+                if self.debug:
+                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Wenig Text + große Schrift)")
+                return True
+
+            # KRITERIUM 3: Extrem wenig Textinhalt (< 5 Zeichen im bereinigten Text)
+            if len(text_clean) > 0 and len(text_clean) <= 5:
+                if self.debug:
+                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Nur {len(text_clean)} Zeichen)")
+                return True
 
         except Exception as e:
             if self.debug:
-                self.debug_info.append(f"  ⚠ Fehler beim Lesen der Schriftgröße: {e}")
+                self.debug_info.append(f"  ⚠ Fehler bei struktureller Analyse: {e}")
 
-        # PRIORITÄT 2: Exaktes "T" im bereinigten Text
+        # PRIORITÄT 2: Text-basierte Erkennung (falls OCR doch funktioniert)
+        # Prüfe auf "T" (case-insensitive)
         if text_clean.upper() in ['T', 'T.', 'T:']:
             if self.debug:
                 self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (exakt 'T')")
