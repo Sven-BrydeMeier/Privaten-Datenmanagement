@@ -28,6 +28,23 @@ openai_api_key = st.sidebar.text_input(
     help="Ihr OpenAI API-Schlüssel für die Dokumentenanalyse"
 )
 
+# API-Key Verbindungstest
+if openai_api_key:
+    try:
+        from openai import OpenAI
+        test_client = OpenAI(api_key=openai_api_key)
+        # Einfacher Test: Liste verfügbare Modelle
+        test_client.models.list()
+        st.sidebar.markdown("🟢 **Verbindung erfolgreich**")
+    except Exception as e:
+        error_msg = str(e)
+        if "authentication" in error_msg.lower() or "api key" in error_msg.lower():
+            st.sidebar.markdown("🔴 **Ungültiger API-Key**")
+        else:
+            st.sidebar.markdown("🟡 **Verbindungsfehler**")
+else:
+    st.sidebar.markdown("⚪ **Kein API-Key eingegeben**")
+
 st.sidebar.markdown("---")
 st.sidebar.info("""
 **Sachbearbeiter:**
