@@ -98,9 +98,14 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                     # 2. PDF verarbeiten
                     status_text.text("📄 Analysiere PDF und trenne Dokumente...")
                     progress_bar.progress(20)
-                    processor = PDFProcessor(pdf_path)
-                    dokumente = processor.verarbeite_pdf()
+                    processor = PDFProcessor(pdf_path, debug=True)
+                    dokumente, debug_info = processor.verarbeite_pdf()
                     st.success(f"✅ {len(dokumente)} Einzeldokumente erkannt")
+
+                    # Debug-Informationen anzeigen
+                    with st.expander("🔍 Debug-Informationen zur PDF-Verarbeitung"):
+                        for info in debug_info:
+                            st.text(info)
 
                     # 3. Dokumente analysieren mit OpenAI
                     status_text.text("🤖 Analysiere Dokumente mit OpenAI...")

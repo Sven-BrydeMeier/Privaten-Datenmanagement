@@ -5,54 +5,81 @@ Verarbeitet OCR-PDFs, erkennt Trennblätter und segmentiert Dokumente
 
 import fitz  # PyMuPDF
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import re
 
 
 class PDFProcessor:
-    def __init__(self, pdf_path: Path):
+    def __init__(self, pdf_path: Path, debug: bool = False):
         self.pdf_path = pdf_path
         self.doc = fitz.open(pdf_path)
+        self.debug = debug
+        self.debug_info = []  # Speichert Debug-Informationen
 
-    def ist_trennblatt(self, seite: fitz.Page) -> bool:
+    def ist_trennblatt(self, seite: fitz.Page, seiten_nr: int) -> bool:
         """
         Prüft, ob eine Seite ein Trennblatt ist.
         Trennblatt = Seite enthält im Wesentlichen nur ein "T"
         """
         text = seite.get_text("text").strip()
 
+        # Debug-Info
+        if self.debug:
+            self.debug_info.append(f"Seite {seiten_nr + 1}: '{text[:100]}...' (Länge: {len(text)})")
+
         # Bereinige Text von Whitespace
         text_clean = re.sub(r'\s+', '', text)
 
         # Trennblatt: nur "T" oder sehr kurz mit "T"
-        if text_clean in ['T', 't']:
+        if text_clean.upper() in ['T', 'T.', 'T:']:
+            if self.debug:
+                self.debug_info.append(f"  → TRENNBLATT erkannt (exakt 'T')")
             return True
 
         # Auch erlauben: wenig Text, aber "T" dominant
-        if len(text_clean) <= 5 and 'T' in text_clean.upper():
-            return True
+        if len(text_clean) <= 10 and 'T' in text_clean.upper():
+            # Prüfe, ob mindestens 50% des Textes "T" ist
+            t_count = text_clean.upper().count('T')
+            if t_count / len(text_clean) >= 0.5:
+                if self.debug:
+                    self.debug_info.append(f"  → TRENNBLATT erkannt (kurz mit T)")
+                return True
 
         # Prüfe, ob Text fast nur aus "T" und Whitespace besteht
         lines = [line.strip() for line in text.split('\n') if line.strip()]
-        if len(lines) == 1 and lines[0].upper() in ['T', 'T.']:
+        if len(lines) == 1 and lines[0].upper() in ['T', 'T.', 'T:']:
+            if self.debug:
+                self.debug_info.append(f"  → TRENNBLATT erkannt (eine Zeile)")
             return True
+
+        # Alternative: Sehr große Schrift mit nur "T" (typisch für Trennblätter)
+        if len(text_clean) <= 20 and text.upper().count('T') > 0:
+            # Prüfe auf große Schriftgröße (wenn möglich)
+            if len(lines) <= 2 and any('T' in line.upper() for line in lines):
+                if self.debug:
+                    self.debug_info.append(f"  → TRENNBLATT erkannt (wenig Text mit T)")
+                return True
 
         return False
 
-    def ist_leerseite(self, seite: fitz.Page) -> bool:
+    def ist_leerseite(self, seite: fitz.Page, seiten_nr: int) -> bool:
         """
         Prüft, ob eine Seite eine Leerseite ist.
         Leerseite = keine sinnvollen Inhalte (nur Whitespace/Artefakte)
         """
         text = seite.get_text("text").strip()
 
-        # Keine oder minimal Text
-        if len(text) < 10:
+        # Sehr strenge Kriterien - nur wirklich leere Seiten
+        if len(text) == 0:
+            if self.debug:
+                self.debug_info.append(f"  → LEERSEITE (kein Text)")
             return True
 
-        # Prüfe, ob nur Whitespace/Sonderzeichen
+        # Nur Whitespace/Sonderzeichen - aber strenger
         text_alphanumeric = re.sub(r'[^a-zA-Z0-9]', '', text)
-        if len(text_alphanumeric) < 5:
+        if len(text_alphanumeric) == 0 and len(text) < 20:
+            if self.debug:
+                self.debug_info.append(f"  → LEERSEITE (nur Whitespace)")
             return True
 
         return False
@@ -61,33 +88,45 @@ class PDFProcessor:
         """Extrahiert OCR-Text von einer Seite"""
         return seite.get_text("text")
 
-    def verarbeite_pdf(self) -> List[Dict]:
+    def verarbeite_pdf(self) -> Tuple[List[Dict], List[str]]:
         """
         Hauptfunktion: Verarbeitet das PDF und erstellt Einzeldokumente
 
         Returns:
-            Liste von Dokumenten, jedes mit:
-            - pages: Liste der Seitennummern
-            - text: Volltext des Dokuments
-            - pdf_bytes: PDF-Bytes des Einzeldokuments
+            Tuple von (Dokumente, Debug-Info):
+            - Dokumente: Liste von Dokumenten, jedes mit:
+                - pages: Liste der Seitennummern
+                - text: Volltext des Dokuments
+                - pdf_bytes: PDF-Bytes des Einzeldokuments
+            - Debug-Info: Liste von Debug-Meldungen
         """
         dokumente = []
         aktuelle_seiten = []
         gesamt_text = []
+        trennblatt_count = 0
+        leerseiten_count = 0
+
+        if self.debug:
+            self.debug_info.append(f"=== PDF-Verarbeitung gestartet ===")
+            self.debug_info.append(f"Gesamt-Seiten: {len(self.doc)}")
 
         for seiten_nr in range(len(self.doc)):
             seite = self.doc[seiten_nr]
 
             # Prüfe auf Leerseite (überspringen)
-            if self.ist_leerseite(seite):
+            if self.ist_leerseite(seite, seiten_nr):
+                leerseiten_count += 1
                 continue
 
             # Prüfe auf Trennblatt
-            if self.ist_trennblatt(seite):
+            if self.ist_trennblatt(seite, seiten_nr):
+                trennblatt_count += 1
                 # Wenn aktuelle Seiten vorhanden, speichere als Dokument
                 if aktuelle_seiten:
                     dokument = self._erstelle_dokument(aktuelle_seiten, gesamt_text)
                     dokumente.append(dokument)
+                    if self.debug:
+                        self.debug_info.append(f"  ✓ Dokument #{len(dokumente)} erstellt (Seiten: {aktuelle_seiten[0]+1}-{aktuelle_seiten[-1]+1})")
                     aktuelle_seiten = []
                     gesamt_text = []
             else:
@@ -100,8 +139,16 @@ class PDFProcessor:
         if aktuelle_seiten:
             dokument = self._erstelle_dokument(aktuelle_seiten, gesamt_text)
             dokumente.append(dokument)
+            if self.debug:
+                self.debug_info.append(f"  ✓ Dokument #{len(dokumente)} erstellt (Seiten: {aktuelle_seiten[0]+1}-{aktuelle_seiten[-1]+1})")
 
-        return dokumente
+        if self.debug:
+            self.debug_info.append(f"=== Verarbeitung abgeschlossen ===")
+            self.debug_info.append(f"Erkannte Dokumente: {len(dokumente)}")
+            self.debug_info.append(f"Trennblätter: {trennblatt_count}")
+            self.debug_info.append(f"Leerseiten: {leerseiten_count}")
+
+        return dokumente, self.debug_info
 
     def _erstelle_dokument(self, seiten_nummern: List[int], text_liste: List[str]) -> Dict:
         """
