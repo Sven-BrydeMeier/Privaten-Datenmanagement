@@ -23,12 +23,17 @@ class PDFProcessor:
         """
         text = seite.get_text("text").strip()
 
-        # Debug-Info
+        # Debug-Info - zeige ersten Teil des Textes
         if self.debug:
-            self.debug_info.append(f"Seite {seiten_nr + 1}: '{text[:100]}...' (Länge: {len(text)})")
+            text_preview = text[:200] if len(text) > 200 else text
+            text_preview = text_preview.replace('\n', ' ')
+            self.debug_info.append(f"  Text-Vorschau: '{text_preview}'")
+            self.debug_info.append(f"  Text-Länge: {len(text)} Zeichen")
 
         # Bereinige Text von Whitespace
         text_clean = re.sub(r'\s+', '', text)
+        if self.debug:
+            self.debug_info.append(f"  Bereinigter Text: '{text_clean}'")
 
         # Trennblatt: nur "T" oder sehr kurz mit "T"
         if text_clean.upper() in ['T', 'T.', 'T:']:
@@ -134,14 +139,23 @@ class PDFProcessor:
         for seiten_nr in range(len(self.doc)):
             seite = self.doc[seiten_nr]
 
+            if self.debug:
+                self.debug_info.append(f"\n--- Verarbeite Seite {seiten_nr + 1} ---")
+
             # Prüfe auf Leerseite (überspringen)
             if self.ist_leerseite(seite, seiten_nr):
                 leerseiten_count += 1
+                if self.debug:
+                    self.debug_info.append(f"  ⊘ Seite {seiten_nr + 1} übersprungen (Leerseite)")
                 continue
 
             # Prüfe auf Trennblatt
             if self.ist_trennblatt(seite, seiten_nr):
                 trennblatt_count += 1
+                if self.debug:
+                    self.debug_info.append(f"  ✂ Seite {seiten_nr + 1} ist TRENNBLATT #{trennblatt_count}")
+                    self.debug_info.append(f"    Aktuelle Seiten im Buffer: {len(aktuelle_seiten)}")
+
                 # Wenn aktuelle Seiten vorhanden, speichere als Dokument
                 if aktuelle_seiten:
                     dokument = self._erstelle_dokument(aktuelle_seiten, gesamt_text)
@@ -150,11 +164,21 @@ class PDFProcessor:
                         self.debug_info.append(f"  ✓ Dokument #{len(dokumente)} erstellt (Seiten: {aktuelle_seiten[0]+1}-{aktuelle_seiten[-1]+1})")
                     aktuelle_seiten = []
                     gesamt_text = []
+                else:
+                    if self.debug:
+                        self.debug_info.append(f"    ⚠ Kein Dokument erstellt (keine Seiten im Buffer)")
+
+                if self.debug:
+                    self.debug_info.append(f"    → Fahre fort mit nächster Seite...")
             else:
                 # Normale Seite: zu aktuellem Dokument hinzufügen
+                if self.debug:
+                    self.debug_info.append(f"  📄 Seite {seiten_nr + 1} ist normale Dokumentseite")
                 aktuelle_seiten.append(seiten_nr)
                 text = self.extrahiere_text(seite)
                 gesamt_text.append(text)
+                if self.debug:
+                    self.debug_info.append(f"    → Seiten im Buffer: {len(aktuelle_seiten)}")
 
         # Letztes Dokument speichern (falls vorhanden)
         if aktuelle_seiten:
