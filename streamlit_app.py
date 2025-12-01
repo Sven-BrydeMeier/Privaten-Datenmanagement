@@ -115,12 +115,25 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                     # 2. PDF verarbeiten
                     status_text.text("📄 Analysiere PDF und trenne Dokumente...")
                     progress_bar.progress(20)
+
+                    # Live-Logging-Container
+                    log_container = st.empty()
+
                     processor = PDFProcessor(pdf_path, debug=True)
                     dokumente, debug_info = processor.verarbeite_pdf()
+
                     st.success(f"✅ {len(dokumente)} Einzeldokumente erkannt")
 
+                    # Zeige wichtige Statistiken
+                    st.info(f"""
+                    **Verarbeitungs-Statistik:**
+                    - Erkannte Dokumente: {len(dokumente)}
+                    - Trennblätter gefunden: {debug_info.count('TRENNBLATT')}
+                    - Leerseiten übersprungen: {debug_info.count('LEERSEITE')}
+                    """)
+
                     # Debug-Informationen anzeigen
-                    with st.expander("🔍 Debug-Informationen zur PDF-Verarbeitung"):
+                    with st.expander("🔍 Debug-Informationen zur PDF-Verarbeitung", expanded=True):
                         for info in debug_info:
                             st.text(info)
 

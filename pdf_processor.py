@@ -35,56 +35,68 @@ class PDFProcessor:
         if self.debug:
             self.debug_info.append(f"  Bereinigter Text: '{text_clean}'")
 
-        # Trennblatt: nur "T" oder sehr kurz mit "T"
-        if text_clean.upper() in ['T', 'T.', 'T:']:
-            if self.debug:
-                self.debug_info.append(f"  → TRENNBLATT erkannt (exakt 'T')")
-            return True
-
-        # Prüfe auf große Schriftgröße (für T mit Schriftgröße 500)
+        # PRIORITÄT 1: Prüfe auf große Schriftgröße (ZUVERLÄSSIGSTE Methode!)
+        # Für T mit Schriftgröße 500 - das ist das eindeutigste Signal
         try:
             text_dict = seite.get_text("dict")
+            max_font_size = 0
+            found_t = False
+
             for block in text_dict.get("blocks", []):
                 if "lines" in block:
                     for line in block["lines"]:
                         for span in line.get("spans", []):
-                            text_span = span.get("text", "").strip().upper()
+                            text_span = span.get("text", "").strip()
                             font_size = span.get("size", 0)
 
-                            # Debug: Zeige Schriftgrößen
+                            # Debug: Zeige ALLE Texte mit Schriftgrößen
                             if self.debug and text_span:
-                                self.debug_info.append(f"    Text: '{text_span}' | Schriftgröße: {font_size:.1f}")
+                                self.debug_info.append(f"    '{text_span}' → Größe: {font_size:.1f}")
 
-                            # Großes T (Schriftgröße > 100) ist eindeutig ein Trennblatt
-                            if text_span in ['T', 'T.', 'T:'] and font_size > 100:
-                                if self.debug:
-                                    self.debug_info.append(f"  → TRENNBLATT erkannt (großes T, Schriftgröße: {font_size:.1f})")
-                                return True
+                            # Tracke größte Schriftgröße
+                            if font_size > max_font_size:
+                                max_font_size = font_size
 
-                            # Auch wenn nur "T" auf der Seite und Schrift > 50
-                            if 'T' in text_span and font_size > 50 and len(text_clean) <= 5:
-                                if self.debug:
-                                    self.debug_info.append(f"  → TRENNBLATT erkannt (T mit Schriftgröße: {font_size:.1f})")
-                                return True
+                            # Prüfe auf "T" (case-insensitive)
+                            if text_span.upper() in ['T', 'T.', 'T:']:
+                                found_t = True
+                                # Jede Schriftgröße > 50 mit "T" = Trennblatt
+                                if font_size > 50:
+                                    if self.debug:
+                                        self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (T mit Größe {font_size:.1f})")
+                                    return True
+
+            if self.debug:
+                self.debug_info.append(f"  Max. Schriftgröße auf Seite: {max_font_size:.1f}")
+                self.debug_info.append(f"  'T' gefunden: {found_t}")
+
         except Exception as e:
             if self.debug:
-                self.debug_info.append(f"  Warnung: Schriftgröße konnte nicht gelesen werden: {e}")
+                self.debug_info.append(f"  ⚠ Fehler beim Lesen der Schriftgröße: {e}")
 
-        # Fallback: Auch erlauben - wenig Text, aber "T" dominant
-        if len(text_clean) <= 10 and 'T' in text_clean.upper():
-            # Prüfe, ob mindestens 50% des Textes "T" ist
+        # PRIORITÄT 2: Exaktes "T" im bereinigten Text
+        if text_clean.upper() in ['T', 'T.', 'T:']:
+            if self.debug:
+                self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (exakt 'T')")
+            return True
+
+        # PRIORITÄT 3: Sehr kurzer Text mit "T" dominant
+        if len(text_clean) <= 10 and len(text_clean) > 0:
             t_count = text_clean.upper().count('T')
             if t_count / len(text_clean) >= 0.5:
                 if self.debug:
-                    self.debug_info.append(f"  → TRENNBLATT erkannt (kurz mit T)")
+                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (kurzer Text, {t_count}/{len(text_clean)} ist T)")
                 return True
 
-        # Prüfe, ob Text fast nur aus "T" und Whitespace besteht
+        # PRIORITÄT 4: Eine Zeile mit nur "T"
         lines = [line.strip() for line in text.split('\n') if line.strip()]
         if len(lines) == 1 and lines[0].upper() in ['T', 'T.', 'T:']:
             if self.debug:
-                self.debug_info.append(f"  → TRENNBLATT erkannt (eine Zeile)")
+                self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (eine Zeile mit T)")
             return True
+
+        if self.debug:
+            self.debug_info.append(f"  → Keine Trennblatt-Kriterien erfüllt")
 
         return False
 
