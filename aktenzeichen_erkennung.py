@@ -23,15 +23,49 @@ class AktenzeichenErkenner:
         'M': 'M'
     }
 
-    # Sachbearbeiter-Namen zu Kürzel Mapping
+    # Sachbearbeiter-Namen zu Kürzel Mapping (alle Variationen)
     SACHBEARBEITER_NAMEN = {
-        'meier': 'SQ',         # Sven-Bryde Meier
-        'meyer': 'TS',         # Tamara Meyer
-        'marquardsen': 'M',    # Ann-Kathrin Marquardsen
-        'fürsen': 'FÜ',        # Dr. Fürsen
-        'fuersen': 'FÜ',       # Alternative Schreibweise
-        'ostertun': 'CV'       # Christian Ostertun
+        # SQ = Sven-Bryde Meier (Rechtsanwalt und Notar)
+        'meier': 'SQ',
+        'sven-bryde': 'SQ',
+        'sven': 'SQ',
+        'sven-bryde meier': 'SQ',
+        'sven meier': 'SQ',
+
+        # TS = Tamara Meyer (Rechtsanwältin)
+        'meyer': 'TS',
+        'tamara': 'TS',
+        'tamara meyer': 'TS',
+
+        # M/MQ = Ann-Kathrin Marquardsen (Rechtsanwältin)
+        'marquardsen': 'M',
+        'ann-kathrin': 'M',
+        'ann-kathrin marquardsen': 'M',
+
+        # FÜ = Dr. Ernst Joachim Fürsen (Rechtsanwalt, Notar a.D.)
+        'fürsen': 'FÜ',
+        'fuersen': 'FÜ',
+        'ernst joachim': 'FÜ',
+        'ernst-joachim': 'FÜ',
+        'ernst joachim fürsen': 'FÜ',
+        'ernst-joachim fürsen': 'FÜ',
+        'ernst joachim fuersen': 'FÜ',
+        'ernst-joachim fuersen': 'FÜ',
+
+        # CV = Christian Ostertun (Rechtsanwalt)
+        'ostertun': 'CV',
+        'christian': 'CV',
+        'christian ostertun': 'CV',
+        'vollbrecht': 'CV'  # Alternative Name
     }
+
+    # Titel-Variationen (für erweiterte Suche)
+    TITEL_VARIATIONEN = [
+        'rechtsanwalt', 'rechtsanwältin', 'ra', 'rae', 'r.a.',
+        'notar', 'notar a.d.', 'notar a. d.',
+        'fachanwalt', 'fachanwältin', 'fa', 'fain',
+        'dr.', 'dr', 'doktor'
+    ]
 
     # Schlagwörter für "Ihr Zeichen" etc.
     ZEICHEN_KEYWORDS = [
@@ -89,8 +123,9 @@ class AktenzeichenErkenner:
 
         Regeln:
         1. Suche in Anreden wie "Sehr geehrter Herr Kollege Meier"
-        2. Suche in Anschriften, ABER NICHT wenn der Name nur in Kanzleinamen
-           wie "Radtke, Heigener und Meier" erscheint
+        2. Suche mit Titeln wie "Rechtsanwalt Meier", "Notar Meier", "Fachanwältin Meyer"
+        3. Suche in Anschriften, ABER NICHT wenn der Name nur in Kanzleinamen erscheint
+        4. Erkennt alle Namens-Variationen (Vorname + Nachname, nur Vorname, nur Nachname)
 
         Returns:
             Kürzel des Sachbearbeiters (SQ, TS, M, FÜ, CV) oder None
@@ -98,45 +133,75 @@ class AktenzeichenErkenner:
         text_lower = text.lower()
         lines = text.split('\n')
 
+        # Sortiere Namen nach Länge (längste zuerst) für spezifischere Matches
+        sorted_names = sorted(self.SACHBEARBEITER_NAMEN.items(), key=lambda x: len(x[0]), reverse=True)
+
         # PRIORITÄT 1: Anrede-Suche (höchste Priorität)
-        # Patterns wie "Sehr geehrter Herr Kollege [Name]" oder "Sehr geehrte Kollegin [Name]"
-        anrede_patterns = [
-            r'sehr\s+geehrte?[rn]?\s+(herr|frau|herrn)?\s*(kollege?|kollegin)?\s+(\w+)',
-            r'liebe?[rn]?\s+(herr|frau|kollege?|kollegin)?\s+(\w+)',
-            r'guten\s+tag\s+(herr|frau)?\s+(\w+)'
-        ]
+        # Erweiterte Patterns für Anreden mit Namen
+        for name, kuerzel in sorted_names:
+            # Escape Sonderzeichen für regex
+            name_escaped = re.escape(name)
 
-        for pattern in anrede_patterns:
-            matches = re.finditer(pattern, text_lower, re.IGNORECASE)
-            for match in matches:
-                # Hole letztes Wort (der Name)
-                name = match.group(match.lastindex)
-                if name in self.SACHBEARBEITER_NAMEN:
-                    return self.SACHBEARBEITER_NAMEN[name]
+            # Pattern: "Sehr geehrter Herr/Frau [Titel] [Name]"
+            anrede_patterns = [
+                rf'sehr\s+geehrte?[rn]?\s+(herr|frau|herrn)\s+(kollege?|kollegin)\s+({name_escaped})',
+                rf'sehr\s+geehrte?[rn]?\s+(herr|frau|herrn)\s+({name_escaped})',
+                rf'liebe?[rn]?\s+(herr|frau|kollege?|kollegin)\s+({name_escaped})',
+                rf'guten\s+tag\s+(herr|frau)\s+({name_escaped})',
+                rf'hallo\s+(herr|frau)\s+({name_escaped})'
+            ]
 
-        # PRIORITÄT 2: Anschrift-Suche (mit Ausschluss von Kanzleinamen)
+            for pattern in anrede_patterns:
+                if re.search(pattern, text_lower, re.IGNORECASE):
+                    return kuerzel
+
+        # PRIORITÄT 2: Titel + Name Kombinationen (z.B. "Rechtsanwalt Meier", "Notar Meier")
+        for name, kuerzel in sorted_names:
+            name_escaped = re.escape(name)
+
+            # Suche nach Titel + Name Kombinationen
+            for titel in self.TITEL_VARIATIONEN:
+                titel_escaped = re.escape(titel)
+                # Pattern: "[Titel] [und] [Titel] [Name]" oder einfach "[Titel] [Name]"
+                patterns = [
+                    rf'{titel_escaped}\s+und\s+\w+\s+{name_escaped}',  # "Rechtsanwalt und Notar Meier"
+                    rf'{titel_escaped}\s+{name_escaped}',               # "Rechtsanwalt Meier"
+                ]
+
+                for pattern in patterns:
+                    if re.search(pattern, text_lower, re.IGNORECASE):
+                        return kuerzel
+
+        # PRIORITÄT 3: Anschrift-Suche (mit Ausschluss von Kanzleinamen)
         # Suche in den ersten 30 Zeilen (typischer Anschriftenbereich)
         for i, line in enumerate(lines[:30]):
             line_lower = line.lower().strip()
 
-            # Überspringe Zeilen mit mehreren Nachnamen (Kanzleinamen)
-            # z.B. "Radtke, Heigener und Meier"
-            if ',' in line or ' und ' in line_lower or ' & ' in line:
-                # Prüfe ob es wie ein Kanzleiname aussieht (mehrere Namen)
+            # Überspringe Zeilen mit Kanzleinamen
+            # z.B. "Radtke, Heigener und Meier" (enthält Komma oder mehrere Namen)
+            if ',' in line:
+                # Prüfe ob es wie ein Kanzleiname aussieht (mehrere Namen getrennt durch Komma)
+                continue
+
+            # Überspringe Zeilen mit mehreren großgeschriebenen Namen (außer wenn Titel dabei)
+            if ' und ' in line_lower or ' & ' in line:
                 words = re.findall(r'\b[A-ZÄÖÜ][a-zäöüß]+\b', line)
-                if len(words) >= 3:  # Mindestens 3 Großgeschriebene Wörter = wahrscheinlich Kanzleiname
+                if len(words) >= 3:  # Mehrere Namen = wahrscheinlich Kanzleiname
                     continue
 
-            # Suche nach Sachbearbeiter-Namen in der Zeile
-            for name, kuerzel in self.SACHBEARBEITER_NAMEN.items():
-                # Suche nach dem Namen als ganzes Wort
-                if re.search(r'\b' + name + r'\b', line_lower):
-                    # Zusätzliche Prüfung: Ist es Teil einer Adresszeile?
-                    # (enthält oft "Rechtsanwalt", "RAin", "Dr.", etc.)
-                    if any(keyword in line_lower for keyword in ['rechtsan', 'ra ', 'rae', 'notar', 'dr.', 'dr ']):
-                        return kuerzel
-                    # Wenn in Zeile 5-15 (typischer Empfängerbereich), akzeptiere auch ohne Keywords
-                    if 5 <= i <= 15:
+            # Suche nach Sachbearbeiter-Namen (längste Namen zuerst)
+            for name, kuerzel in sorted_names:
+                name_escaped = re.escape(name)
+
+                # Suche nach dem Namen als ganzes Wort/Phrase
+                if re.search(rf'\b{name_escaped}\b', line_lower):
+                    # Hat die Zeile Rechtsanwalts-Kontext?
+                    has_title = any(titel in line_lower for titel in self.TITEL_VARIATIONEN)
+
+                    # Akzeptiere wenn:
+                    # 1. Titel vorhanden (z.B. "Rechtsanwalt Meier")
+                    # 2. In Zeilen 5-15 (typischer Empfängerbereich)
+                    if has_title or (5 <= i <= 15):
                         return kuerzel
 
         return None
