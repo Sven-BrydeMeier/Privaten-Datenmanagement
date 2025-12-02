@@ -5,7 +5,7 @@ Erstellt Excel-Dateien pro Sachbearbeiter und Gesamt-Excel
 
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Dict, List
@@ -22,11 +22,12 @@ class ExcelGenerator:
         'Absendertyp',            # F
         'Sachbearbeiter',         # G
         'Fristdatum',             # H
-        'Fristtyp',               # I
-        'Fristquelle',            # J
-        'Textauszug',             # K
-        'PDF-Datei',              # L
-        'Status'                  # M
+        '⚠',                      # I - Frist-Indikator (Roter Kreis)
+        'Fristtyp',               # J
+        'Fristquelle',            # K
+        'Textauszug',             # L
+        'PDF-Datei',              # M
+        'Status'                  # N
     ]
 
     def __init__(self):
@@ -114,6 +115,9 @@ class ExcelGenerator:
         """
         heute_str = self.heute.strftime('%Y-%m-%d')
 
+        # Frist-Indikator: Roter Kreis wenn Frist vorhanden
+        frist_indikator = '🔴' if frist else ''
+
         zeile = [
             heute_str,  # Eingangsdatum
             akt_info.get('internes_az', ''),  # Internes AZ
@@ -123,6 +127,7 @@ class ExcelGenerator:
             analyse.get('absendertyp', 'Sonstige'),  # Absendertyp
             sb,  # Sachbearbeiter
             frist.get('datum', '') if frist else '',  # Fristdatum
+            frist_indikator,  # ⚠ Frist-Indikator
             frist.get('typ', '') if frist else '',  # Fristtyp
             frist.get('quelle', '') if frist else '',  # Fristquelle
             analyse.get('textauszug', '')[:200],  # Textauszug (gekürzt)
@@ -134,25 +139,83 @@ class ExcelGenerator:
 
     def _markiere_fristen(self, excel_bytes: bytes) -> bytes:
         """
-        Markiert Fristen farblich:
-        - Rot: ≤ 3 Tage
-        - Orange: ≤ 7 Tage
+        Professionelle Excel-Formatierung:
+        - Farbige Kopfzeilen (dunkelblau mit weißer Schrift)
+        - Zebra-Streifen für bessere Lesbarkeit
+        - Borders um alle Zellen
+        - Frist-Highlighting:
+          * Rot: ≤ 3 Tage
+          * Orange: ≤ 7 Tage
+          * Gelb: ≤ 14 Tage
+        - Automatische Spaltenbreite
         """
         buffer = BytesIO(excel_bytes)
         wb = load_workbook(buffer)
         ws = wb['Fristen']
 
-        # Farben
-        rot = PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid")
-        orange = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        # === FARBEN DEFINIEREN ===
+        # Header
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")  # Dunkelblau
+        header_font = Font(bold=True, color="FFFFFF", size=11)  # Weiß, Fett
 
-        # Spalte H = Fristdatum (Index 8, da 1-basiert)
+        # Fristen (ganze Zeile)
+        frist_rot = PatternFill(start_color="FF6B6B", end_color="FF6B6B", fill_type="solid")  # Rot
+        frist_orange = PatternFill(start_color="FFB84D", end_color="FFB84D", fill_type="solid")  # Orange
+        frist_gelb = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")  # Gelb
+
+        # Zebra-Streifen
+        zebra_fill = PatternFill(start_color="F8F9FA", end_color="F8F9FA", fill_type="solid")  # Hellgrau
+
+        # Borders
+        thin_border = Border(
+            left=Side(style='thin', color='D3D3D3'),
+            right=Side(style='thin', color='D3D3D3'),
+            top=Side(style='thin', color='D3D3D3'),
+            bottom=Side(style='thin', color='D3D3D3')
+        )
+
+        # Alignment
+        center_aligned = Alignment(horizontal='center', vertical='center')
+        left_aligned = Alignment(horizontal='left', vertical='center', wrap_text=True)
+
+        # === SPALTENBREITEN SETZEN ===
+        column_widths = {
+            'A': 14,   # Eingangsdatum
+            'B': 18,   # Internes AZ
+            'C': 20,   # Externes AZ
+            'D': 20,   # Mandant
+            'E': 20,   # Gegner
+            'F': 15,   # Absendertyp
+            'G': 12,   # Sachbearbeiter
+            'H': 12,   # Fristdatum
+            'I': 5,    # ⚠ Frist-Indikator
+            'J': 18,   # Fristtyp
+            'K': 35,   # Fristquelle
+            'L': 40,   # Textauszug
+            'M': 35,   # PDF-Datei
+            'N': 10    # Status
+        }
+
+        for col, width in column_widths.items():
+            ws.column_dimensions[col].width = width
+
+        # === HEADER-ROW FORMATIEREN ===
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_aligned
+            cell.border = thin_border
+
+        # Spalte H = Fristdatum (Index 8)
         fristdatum_col = 8
 
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):  # Ab Zeile 2 (Daten)
+        # === DATEN-ROWS FORMATIEREN ===
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
             fristdatum_cell = row[fristdatum_col - 1]  # -1 wegen 0-Index
             fristdatum_value = fristdatum_cell.value
 
+            # Prüfe Frist-Dringlichkeit
+            frist_fill = None
             if fristdatum_value:
                 try:
                     # Parse Datum
@@ -161,21 +224,55 @@ class ExcelGenerator:
                     elif isinstance(fristdatum_value, datetime):
                         frist_datum = fristdatum_value.date()
                     else:
-                        continue
+                        frist_datum = None
 
-                    # Berechne Differenz
-                    diff = (frist_datum - self.heute).days
+                    if frist_datum:
+                        # Berechne Differenz
+                        diff = (frist_datum - self.heute).days
 
-                    # Markiere
-                    if diff <= 3:
-                        for cell in row:
-                            cell.fill = rot
-                    elif diff <= 7:
-                        for cell in row:
-                            cell.fill = orange
+                        # Wähle Farbe
+                        if diff <= 3:
+                            frist_fill = frist_rot
+                        elif diff <= 7:
+                            frist_fill = frist_orange
+                        elif diff <= 14:
+                            frist_fill = frist_gelb
 
                 except:
                     pass
+
+            # Formatiere alle Zellen in der Zeile
+            for col_idx, cell in enumerate(row, start=1):
+                # Border
+                cell.border = thin_border
+
+                # Frist-Highlighting (ganze Zeile)
+                if frist_fill:
+                    cell.fill = frist_fill
+                # Zebra-Streifen (nur wenn keine Frist-Hervorhebung)
+                elif row_idx % 2 == 0:
+                    cell.fill = zebra_fill
+
+                # Alignment
+                if col_idx in [1, 2, 7, 8, 9, 14]:  # Datum, AZ, SB, Frist, Indikator, Status
+                    cell.alignment = center_aligned
+                else:
+                    cell.alignment = left_aligned
+
+                # Frist-Indikator-Spalte (I): Größere Schrift für Emoji
+                if col_idx == 9 and cell.value:  # Spalte I = Frist-Indikator
+                    cell.font = Font(size=14)
+                    cell.alignment = center_aligned
+
+        # Zeilen-Höhe anpassen
+        for row in range(2, ws.max_row + 1):
+            ws.row_dimensions[row].height = 25
+
+        # Header-Zeile etwas höher
+        ws.row_dimensions[1].height = 30
+
+        # Freeze erste Zeile (Header)
+        ws.freeze_panes = 'A2'
 
         # Zurück in BytesIO
         output = BytesIO()
