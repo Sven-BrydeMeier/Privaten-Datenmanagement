@@ -53,12 +53,33 @@ class AktenzeichenErkenner:
         """Lädt aktenregister.xlsx, Blatt 'akten'"""
         df = pd.read_excel(excel_path, sheet_name='akten', header=1)
 
-        # Spalten bereinigen
-        df['Akte'] = df['Akte'].astype(str).str.strip()
-        df['SB'] = df['SB'].astype(str).str.strip().str.upper()
+        # Prüfe ob erforderliche Spalten vorhanden sind
+        if 'Akte' not in df.columns or 'SB' not in df.columns:
+            # Zeige verfügbare Spalten für Debugging
+            print(f"⚠️ Warnung: Erforderliche Spalten nicht gefunden!")
+            print(f"Verfügbare Spalten: {list(df.columns)}")
 
-        # FU zu FÜ normalisieren
-        df['SB'] = df['SB'].replace('FU', 'FÜ')
+            # Versuche alternative Spaltennamen
+            column_mapping = {}
+            for col in df.columns:
+                col_lower = str(col).lower().strip()
+                if 'akt' in col_lower and 'Akte' not in df.columns:
+                    column_mapping[col] = 'Akte'
+                elif col_lower in ['sb', 'sachbearbeiter', 'bearbeiter'] and 'SB' not in df.columns:
+                    column_mapping[col] = 'SB'
+
+            if column_mapping:
+                df = df.rename(columns=column_mapping)
+                print(f"✓ Spalten umbenannt: {column_mapping}")
+
+        # Spalten bereinigen (nur wenn vorhanden)
+        if 'Akte' in df.columns:
+            df['Akte'] = df['Akte'].astype(str).str.strip()
+
+        if 'SB' in df.columns:
+            df['SB'] = df['SB'].astype(str).str.strip().str.upper()
+            # FU zu FÜ normalisieren
+            df['SB'] = df['SB'].replace('FU', 'FÜ')
 
         return df
 
@@ -252,11 +273,15 @@ class AktenzeichenErkenner:
         Prüft, ob ein Stamm im Aktenregister existiert
         Returns internes AZ = Akte + SB aus Register
         """
+        # Prüfe ob erforderliche Spalten vorhanden sind
+        if 'Akte' not in self.akten_register.columns:
+            return None
+
         treffer = self.akten_register[self.akten_register['Akte'] == stamm]
 
         if not treffer.empty:
             row = treffer.iloc[0]
-            sb = row['SB']
+            sb = row.get('SB', 'nicht-zugeordnet')
             sb_norm = self.KUERZEL_NORMALISIERT.get(sb, sb)
 
             return {
@@ -407,6 +432,10 @@ class AktenzeichenErkenner:
         Holt zusätzliche Informationen aus dem Register
         (Mandant, Gegner, Kurzbez, etc.)
         """
+        # Prüfe ob erforderliche Spalten vorhanden sind
+        if 'Akte' not in self.akten_register.columns:
+            return None
+
         treffer = self.akten_register[self.akten_register['Akte'] == stamm]
 
         if not treffer.empty:
