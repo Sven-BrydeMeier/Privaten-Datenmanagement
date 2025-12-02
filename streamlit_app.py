@@ -299,10 +299,21 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not can_proce
                             'aktenzeichen_info': akt_info,
                             'analyse': analyse,
                             'sachbearbeiter': sb,
+                            'sachbearbeiter_aus_text': sb_aus_text,  # Debug-Info speichern
                             'dateiname': dateiname
                         })
 
-                        st.text(f"  → {dateiname} → SB: {sb}")
+                        # Zeige Zuordnung mit Debug-Info
+                        debug_text = f"  → {dateiname} → SB: {sb}"
+                        if sb_aus_text:
+                            debug_text += f" (aus Text erkannt: {sb_aus_text})"
+                        elif akt_info.get('kuerzel'):
+                            debug_text += f" (aus AZ: {akt_info.get('kuerzel')})"
+                        elif 'register_data' in akt_info:
+                            debug_text += " (aus Register)"
+                        else:
+                            debug_text += " (nicht zugeordnet)"
+                        st.text(debug_text)
 
                     # 4. Excel-Dateien generieren
                     status_text.text("📊 Generiere Excel-Dateien...")
@@ -361,7 +372,8 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not can_proce
                                 label=f"📦 {sb}.zip ({sachbearbeiter_stats[sb]} Dokumente)",
                                 data=zip_bytes,
                                 file_name=f"{sb}.zip",
-                                mime="application/zip"
+                                mime="application/zip",
+                                key=f"download_zip_{sb}"  # Eindeutiger Key
                             )
                             col_idx += 1
 
@@ -370,7 +382,8 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not can_proce
                         label="📊 Gesamt-Excel: Fristen & Akten",
                         data=gesamt_excel,
                         file_name="Fristen_und_Akten_Gesamt.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_gesamt_excel"  # Eindeutiger Key
                     )
 
                 except Exception as e:

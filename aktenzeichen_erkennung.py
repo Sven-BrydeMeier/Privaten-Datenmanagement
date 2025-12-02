@@ -136,6 +136,10 @@ class AktenzeichenErkenner:
         # Sortiere Namen nach Länge (längste zuerst) für spezifischere Matches
         sorted_names = sorted(self.SACHBEARBEITER_NAMEN.items(), key=lambda x: len(x[0]), reverse=True)
 
+        # Definiere "kurze" Namen, die strengere Kontext-Prüfung brauchen
+        # (nur Vornamen ohne Nachname)
+        short_names = {'sven', 'tamara', 'christian', 'ann-kathrin', 'ernst joachim', 'ernst-joachim'}
+
         # PRIORITÄT 1: Anrede-Suche (höchste Priorität)
         # Erweiterte Patterns für Anreden mit Namen
         for name, kuerzel in sorted_names:
@@ -198,6 +202,14 @@ class AktenzeichenErkenner:
                     # Hat die Zeile Rechtsanwalts-Kontext?
                     has_title = any(titel in line_lower for titel in self.TITEL_VARIATIONEN)
 
+                    # Für kurze Namen (nur Vornamen): IMMER Titel erforderlich
+                    if name in short_names:
+                        if has_title:
+                            return kuerzel
+                        # Kurze Namen ohne Titel ignorieren (zu unsicher)
+                        continue
+
+                    # Für längere Namen (mit Nachnamen):
                     # Akzeptiere wenn:
                     # 1. Titel vorhanden (z.B. "Rechtsanwalt Meier")
                     # 2. In Zeilen 5-15 (typischer Empfängerbereich)
