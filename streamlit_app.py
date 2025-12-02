@@ -4,12 +4,14 @@ import tempfile
 from pathlib import Path
 import zipfile
 from io import BytesIO
+from datetime import datetime
 
 # Import der Verarbeitungsmodule
 from pdf_processor import PDFProcessor
 from aktenzeichen_erkennung import AktenzeichenErkenner
 from document_analyzer import DocumentAnalyzer
 from excel_generator import ExcelGenerator
+from storage import PersistentStorage
 
 st.set_page_config(
     page_title="RHM Posteingangsverarbeitung",
@@ -20,12 +22,19 @@ st.set_page_config(
 st.title("📄 RHM | Automatisierter Posteingang")
 st.markdown("---")
 
-# Initialisiere Session State für API Keys
+# Initialisiere Persistent Storage
+if 'storage' not in st.session_state:
+    st.session_state.storage = PersistentStorage()
+
+storage = st.session_state.storage
+
+# Lade gespeicherte API Keys beim ersten Laden
 if 'api_keys' not in st.session_state:
+    saved_keys = storage.load_api_keys()
     st.session_state.api_keys = {
-        'openai': '',
-        'claude': '',
-        'gemini': ''
+        'openai': saved_keys.get('openai', ''),
+        'claude': saved_keys.get('claude', ''),
+        'gemini': saved_keys.get('gemini', '')
     }
 if 'api_provider' not in st.session_state:
     st.session_state.api_provider = 'OpenAI (ChatGPT)'
@@ -43,7 +52,7 @@ api_provider = st.sidebar.selectbox(
 )
 st.session_state.api_provider = api_provider
 
-# API-Key Eingabe (mit Persistierung)
+# API-Key Eingabe (mit persistenter Speicherung)
 provider_key_map = {
     "OpenAI (ChatGPT)": "openai",
     "Claude (Anthropic)": "claude",
@@ -51,19 +60,34 @@ provider_key_map = {
 }
 current_provider_key = provider_key_map[api_provider]
 
+# Zeige Status: Gespeicherter Key vorhanden?
+has_saved_key = storage.has_api_key(current_provider_key)
+if has_saved_key:
+    st.sidebar.success(f"💾 Gespeicherter {api_provider} Key gefunden")
+
 # Zeige gespeicherten Key als Placeholder
 stored_key = st.session_state.api_keys.get(current_provider_key, '')
 api_key_input = st.sidebar.text_input(
-    f"{api_provider} API Key",
+    f"{api_provider} API Key" + (" (neu eingeben zum Ändern)" if has_saved_key else ""),
     value=stored_key,
     type="password",
-    help=f"Ihr {api_provider} API-Schlüssel (wird in der Session gespeichert)",
+    help=f"Neuer Key überschreibt gespeicherten Key",
     key=f"api_key_input_{current_provider_key}"
 )
 
-# Speichere Key in Session State
-if api_key_input:
+# Speichere Key in Session State und persistentem Storage
+if api_key_input and api_key_input != stored_key:
     st.session_state.api_keys[current_provider_key] = api_key_input
+    # Speichere persistent (verschlüsselt)
+    storage.save_api_key(current_provider_key, api_key_input)
+    st.sidebar.success("✅ API-Key gespeichert!")
+
+# Lösch-Button für gespeicherten Key
+if has_saved_key:
+    if st.sidebar.button(f"🗑️ {api_provider} Key löschen", key=f"delete_{current_provider_key}"):
+        storage.delete_api_key(current_provider_key)
+        st.session_state.api_keys[current_provider_key] = ''
+        st.rerun()
 
 # Hole aktuellen Key
 current_api_key = st.session_state.api_keys.get(current_provider_key, '')
@@ -129,22 +153,33 @@ with col1:
 
 with col2:
     st.subheader("📊 Aktenregister hochladen")
+
+    # Zeige Status: Gespeichertes Register vorhanden?
+    if storage.has_aktenregister():
+        stats = storage.get_aktenregister_stats()
+        st.success(f"💾 Gespeichertes Register: {stats['count']} Akten")
+
+        # Lösch-Button
+        if st.button("🗑️ Gespeichertes Register löschen"):
+            storage.delete_aktenregister()
+            st.rerun()
+
     uploaded_excel = st.file_uploader(
-        "aktenregister.xlsx",
+        "Neues Aktenregister (wird mit vorhandenem gemergt)" if storage.has_aktenregister() else "aktenregister.xlsx",
         type=["xlsx"],
-        help="Laden Sie die Aktenregister-Datei hoch"
+        help="Neue Daten werden mit gespeicherten Daten zusammengeführt",
+        key="excel_uploader"
     )
 
 st.markdown("---")
 
-# Verarbeitungsbutton
-if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded_pdf and uploaded_excel and current_api_key)):
+# Verarbeitungsbutton (Excel ist optional wenn gespeichert)
+can_process = uploaded_pdf and current_api_key and (uploaded_excel or storage.has_aktenregister())
+if st.button("🚀 Verarbeitung starten", type="primary", disabled=not can_process):
     if not current_api_key:
         st.error(f"❌ Bitte geben Sie Ihren {api_provider} API-Key ein!")
     elif not uploaded_pdf:
         st.error("❌ Bitte laden Sie eine PDF-Datei hoch!")
-    elif not uploaded_excel:
-        st.error("❌ Bitte laden Sie die Aktenregister-Datei hoch!")
     else:
         # Temporäres Verzeichnis für die Verarbeitung
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -156,8 +191,6 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
 
             with open(pdf_path, "wb") as f:
                 f.write(uploaded_pdf.read())
-            with open(excel_path, "wb") as f:
-                f.write(uploaded_excel.read())
 
             # Progress-Container
             progress_container = st.container()
@@ -167,11 +200,28 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                 status_text = st.empty()
 
                 try:
-                    # 1. Aktenregister laden
+                    # 1. Aktenregister vorbereiten
                     status_text.text("📊 Lade Aktenregister...")
                     progress_bar.progress(10)
+
+                    if uploaded_excel:
+                        # Neues Excel hochgeladen: Merge mit gespeichertem
+                        import pandas as pd
+                        new_df = pd.read_excel(BytesIO(uploaded_excel.read()), sheet_name='akten', header=1)
+
+                        # Speichere und merge mit vorhandenem
+                        merged_df = storage.save_aktenregister(new_df, merge=storage.has_aktenregister())
+                        st.success(f"✅ Aktenregister aktualisiert: {len(merged_df)} Akten")
+
+                        # Verwende gespeicherte Version
+                        excel_path = storage.aktenregister_file
+                    else:
+                        # Verwende nur gespeichertes Register
+                        excel_path = storage.aktenregister_file
+                        df = storage.load_aktenregister()
+                        st.info(f"📂 Verwende gespeichertes Register: {len(df)} Akten")
+
                     erkenner = AktenzeichenErkenner(excel_path)
-                    st.success(f"✅ Aktenregister geladen ({len(erkenner.akten_register)} Akten)")
 
                     # 2. PDF verarbeiten
                     status_text.text("📄 Analysiere PDF und trenne Dokumente...")
