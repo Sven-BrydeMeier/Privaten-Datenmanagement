@@ -63,7 +63,15 @@ current_provider_key = provider_key_map[api_provider]
 # Zeige Status: Gespeicherter Key vorhanden?
 has_saved_key = storage.has_api_key(current_provider_key)
 if has_saved_key:
-    st.sidebar.success(f"💾 Gespeicherter {api_provider} Key gefunden")
+    timestamp = storage.get_api_key_timestamp(current_provider_key)
+    if timestamp:
+        # Convert ISO to German format
+        from datetime import datetime
+        dt = datetime.fromisoformat(timestamp)
+        formatted = dt.strftime('%d.%m.%Y %H:%M')
+        st.sidebar.success(f"💾 Gespeicherter {api_provider} Key gefunden\n\n*Zuletzt aktualisiert: {formatted}*")
+    else:
+        st.sidebar.success(f"💾 Gespeicherter {api_provider} Key gefunden")
 
 # Zeige gespeicherten Key als Placeholder
 stored_key = st.session_state.api_keys.get(current_provider_key, '')
@@ -157,7 +165,11 @@ with col2:
     # Zeige Status: Gespeichertes Register vorhanden?
     if storage.has_aktenregister():
         stats = storage.get_aktenregister_stats()
-        st.success(f"💾 Gespeichertes Register: {stats['count']} Akten")
+        # Format timestamp
+        from datetime import datetime
+        dt = datetime.fromtimestamp(stats['last_modified'])
+        formatted = dt.strftime('%d.%m.%Y %H:%M')
+        st.success(f"💾 Gespeichertes Register: {stats['count']} Akten\n\n*Zuletzt aktualisiert: {formatted}*")
 
         # Lösch-Button
         if st.button("🗑️ Gespeichertes Register löschen"):

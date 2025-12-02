@@ -54,7 +54,7 @@ class PersistentStorage:
 
     def save_api_key(self, provider: str, api_key: str) -> None:
         """
-        Speichert API-Key verschlüsselt.
+        Speichert API-Key verschlüsselt mit Zeitstempel.
         Überschreibt vorhandenen Key für diesen Provider.
 
         Args:
@@ -62,13 +62,17 @@ class PersistentStorage:
             api_key: Der API-Schlüssel
         """
         # Lade vorhandene Keys
-        keys = self.load_api_keys()
+        keys_data = self._load_api_keys_data()
 
-        # Aktualisiere/Füge hinzu
-        keys[provider] = api_key
+        # Aktualisiere/Füge hinzu mit Zeitstempel
+        from datetime import datetime
+        keys_data[provider] = {
+            'key': api_key,
+            'updated_at': datetime.now().isoformat()
+        }
 
         # Verschlüssele und speichere
-        json_data = json.dumps(keys)
+        json_data = json.dumps(keys_data)
         encrypted = self.cipher.encrypt(json_data.encode())
 
         with open(self.api_keys_file, 'wb') as f:
@@ -77,13 +81,8 @@ class PersistentStorage:
         # Setze Dateiberechtigungen
         self.api_keys_file.chmod(0o600)
 
-    def load_api_keys(self) -> Dict[str, str]:
-        """
-        Lädt gespeicherte API-Keys.
-
-        Returns:
-            Dict mit provider -> api_key
-        """
+    def _load_api_keys_data(self) -> Dict:
+        """Lädt vollständige Key-Daten (inkl. Timestamps)"""
         if not self.api_keys_file.exists():
             return {}
 
@@ -92,21 +91,53 @@ class PersistentStorage:
                 encrypted = f.read()
 
             decrypted = self.cipher.decrypt(encrypted)
-            keys = json.loads(decrypted.decode())
-            return keys
+            keys_data = json.loads(decrypted.decode())
+
+            # Konvertiere altes Format (nur Strings) zu neuem Format (Dict mit Timestamp)
+            for provider, value in keys_data.items():
+                if isinstance(value, str):
+                    # Altes Format: nur Key als String
+                    from datetime import datetime
+                    keys_data[provider] = {
+                        'key': value,
+                        'updated_at': datetime.now().isoformat()  # Zeitstempel für alte Keys
+                    }
+
+            return keys_data
         except Exception as e:
-            # Bei Fehler: Leeres Dict zurückgeben
             return {}
+
+    def load_api_keys(self) -> Dict[str, str]:
+        """
+        Lädt gespeicherte API-Keys (ohne Timestamps).
+
+        Returns:
+            Dict mit provider -> api_key
+        """
+        keys_data = self._load_api_keys_data()
+        return {provider: data['key'] for provider, data in keys_data.items() if 'key' in data}
+
+    def get_api_key_timestamp(self, provider: str) -> Optional[str]:
+        """
+        Gibt Zeitstempel der letzten Aktualisierung zurück.
+
+        Returns:
+            ISO-Format Zeitstempel oder None
+        """
+        keys_data = self._load_api_keys_data()
+        if provider in keys_data and 'updated_at' in keys_data[provider]:
+            return keys_data[provider]['updated_at']
+        return None
 
     def delete_api_key(self, provider: str) -> None:
         """Löscht API-Key für einen Provider"""
-        keys = self.load_api_keys()
-        if provider in keys:
-            del keys[provider]
+        keys_data = self._load_api_keys_data()
+        if provider in keys_data:
+            del keys_data[provider]
 
-            if keys:
+            if keys_data:
                 # Speichere verbleibende Keys
-                json_data = json.dumps(keys)
+                json_data = json.dumps(keys_data)
                 encrypted = self.cipher.encrypt(json_data.encode())
                 with open(self.api_keys_file, 'wb') as f:
                     f.write(encrypted)
