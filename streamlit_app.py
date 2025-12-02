@@ -46,6 +46,20 @@ else:
     st.sidebar.markdown("⚪ **Kein API-Key eingegeben**")
 
 st.sidebar.markdown("---")
+
+# Trennungsmodus auswählen
+st.sidebar.subheader("📑 Dokumententrennung")
+trennmodus = st.sidebar.radio(
+    "Wie sollen Dokumente getrennt werden?",
+    options=["Trennseiten (T)", "Aktenzeichen-Wechsel", "Text 'Trennseite'"],
+    help="""
+    - Trennseiten (T): Nach Seiten mit großem 'T'
+    - Aktenzeichen-Wechsel: Neues Dokument bei jedem neuen Aktenzeichen
+    - Text 'Trennseite': Nach Seiten mit dem Text 'Trennseite'
+    """
+)
+
+st.sidebar.markdown("---")
 st.sidebar.info("""
 **Sachbearbeiter:**
 - SQ: Rechtsanwalt und Notar Sven-Bryde Meier
@@ -119,7 +133,7 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                     # Live-Logging-Container
                     log_container = st.empty()
 
-                    processor = PDFProcessor(pdf_path, debug=True)
+                    processor = PDFProcessor(pdf_path, debug=True, trennmodus=trennmodus)
                     dokumente, debug_info = processor.verarbeite_pdf()
 
                     st.success(f"✅ {len(dokumente)} Einzeldokumente erkannt")
