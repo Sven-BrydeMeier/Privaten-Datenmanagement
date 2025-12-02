@@ -1,9 +1,9 @@
 """
-Dokumentenanalyse-Modul mit OpenAI
+Dokumentenanalyse-Modul mit Multi-API-Support
+Unterstützt: OpenAI, Claude (Anthropic), Gemini (Google)
 Extrahiert Mandant, Gegner, Datum, Stichworte, etc.
 """
 
-from openai import OpenAI
 from typing import Dict, Optional
 import json
 import re
@@ -11,12 +11,25 @@ from datetime import datetime
 
 
 class DocumentAnalyzer:
-    def __init__(self, api_key: str):
-        self.client = OpenAI(api_key=api_key)
+    def __init__(self, api_key: str, api_provider: str = "OpenAI (ChatGPT)"):
+        self.api_key = api_key
+        self.api_provider = api_provider
+
+        # Initialisiere entsprechenden Client
+        if api_provider == "OpenAI (ChatGPT)":
+            from openai import OpenAI
+            self.client = OpenAI(api_key=api_key)
+        elif api_provider == "Claude (Anthropic)":
+            import anthropic
+            self.client = anthropic.Anthropic(api_key=api_key)
+        elif api_provider == "Gemini (Google)":
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            self.client = genai
 
     def analysiere_dokument(self, text: str, akt_info: Dict) -> Dict:
         """
-        Analysiert ein Dokument mit OpenAI und extrahiert:
+        Analysiert ein Dokument mit dem gewählten KI-Dienst und extrahiert:
         - Mandant
         - Gegner / Absender
         - Frühestes Datum
@@ -27,36 +40,112 @@ class DocumentAnalyzer:
         # Begrenze Text auf erste 4000 Zeichen (API-Kosten sparen)
         text_gekuerzt = text[:4000]
 
-        # Prompt für OpenAI
-        prompt = self._erstelle_analyse_prompt(text_gekuerzt, akt_info)
-
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",  # Günstiges, schnelles Modell
-                messages=[
-                    {"role": "system", "content": "Du bist ein Assistent für eine Anwaltskanzlei und analysierst eingehende Dokumente."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
-
-            result = json.loads(response.choices[0].message.content)
-
-            # Fallback-Werte
-            return {
-                'mandant': result.get('mandant'),
-                'gegner': result.get('gegner'),
-                'datum': result.get('datum'),
-                'stichworte': result.get('stichworte', []),
-                'absendertyp': result.get('absendertyp', 'Sonstige'),
-                'fristen': result.get('fristen', []),
-                'textauszug': self._erstelle_textauszug(text)
-            }
-
+            # Route zu entsprechendem API-Provider
+            if self.api_provider == "OpenAI (ChatGPT)":
+                return self._analysiere_mit_openai(text_gekuerzt, akt_info, text)
+            elif self.api_provider == "Claude (Anthropic)":
+                return self._analysiere_mit_claude(text_gekuerzt, akt_info, text)
+            elif self.api_provider == "Gemini (Google)":
+                return self._analysiere_mit_gemini(text_gekuerzt, akt_info, text)
         except Exception as e:
             # Fallback bei Fehler: Versuche manuelle Extraktion
             return self._fallback_analyse(text)
+
+    def _analysiere_mit_openai(self, text_gekuerzt: str, akt_info: Dict, volltext: str) -> Dict:
+        """Analyse mit OpenAI GPT"""
+        prompt = self._erstelle_analyse_prompt(text_gekuerzt, akt_info)
+
+        response = self.client.chat.completions.create(
+            model="gpt-4o-mini",  # Günstiges, schnelles Modell
+            messages=[
+                {"role": "system", "content": "Du bist ein Assistent für eine Anwaltskanzlei und analysierst eingehende Dokumente."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+
+        result = json.loads(response.choices[0].message.content)
+
+        return {
+            'mandant': result.get('mandant'),
+            'gegner': result.get('gegner'),
+            'datum': result.get('datum'),
+            'stichworte': result.get('stichworte', []),
+            'absendertyp': result.get('absendertyp', 'Sonstige'),
+            'fristen': result.get('fristen', []),
+            'textauszug': self._erstelle_textauszug(volltext)
+        }
+
+    def _analysiere_mit_claude(self, text_gekuerzt: str, akt_info: Dict, volltext: str) -> Dict:
+        """Analyse mit Claude (Anthropic)"""
+        prompt = self._erstelle_analyse_prompt(text_gekuerzt, akt_info)
+        prompt += "\n\nAntworte NUR mit einem gültigen JSON-Objekt, keine zusätzlichen Erklärungen!"
+
+        response = self.client.messages.create(
+            model="claude-3-5-haiku-20241022",  # Schnelles, kostengünstiges Modell
+            max_tokens=1024,
+            temperature=0.1,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        # Extrahiere JSON aus der Antwort
+        response_text = response.content[0].text
+        # Versuche JSON zu extrahieren (falls Claude zusätzlichen Text hinzufügt)
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+        else:
+            result = json.loads(response_text)
+
+        return {
+            'mandant': result.get('mandant'),
+            'gegner': result.get('gegner'),
+            'datum': result.get('datum'),
+            'stichworte': result.get('stichworte', []),
+            'absendertyp': result.get('absendertyp', 'Sonstige'),
+            'fristen': result.get('fristen', []),
+            'textauszug': self._erstelle_textauszug(volltext)
+        }
+
+    def _analysiere_mit_gemini(self, text_gekuerzt: str, akt_info: Dict, volltext: str) -> Dict:
+        """Analyse mit Gemini (Google)"""
+        prompt = self._erstelle_analyse_prompt(text_gekuerzt, akt_info)
+        prompt += "\n\nAntworte NUR mit einem gültigen JSON-Objekt, keine zusätzlichen Erklärungen oder Markdown-Formatierung!"
+
+        model = self.client.GenerativeModel('gemini-1.5-flash')  # Schnelles, kostengünstiges Modell
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                'temperature': 0.1,
+                'candidate_count': 1
+            }
+        )
+
+        # Extrahiere JSON aus der Antwort
+        response_text = response.text
+        # Entferne mögliche Markdown-Code-Blöcke
+        response_text = re.sub(r'```json\s*', '', response_text)
+        response_text = re.sub(r'```\s*', '', response_text)
+        # Versuche JSON zu extrahieren
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+        else:
+            result = json.loads(response_text)
+
+        return {
+            'mandant': result.get('mandant'),
+            'gegner': result.get('gegner'),
+            'datum': result.get('datum'),
+            'stichworte': result.get('stichworte', []),
+            'absendertyp': result.get('absendertyp', 'Sonstige'),
+            'fristen': result.get('fristen', []),
+            'textauszug': self._erstelle_textauszug(volltext)
+        }
 
     def _erstelle_analyse_prompt(self, text: str, akt_info: Dict) -> str:
         """Erstellt den Prompt für OpenAI"""

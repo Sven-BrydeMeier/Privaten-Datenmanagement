@@ -20,28 +20,83 @@ st.set_page_config(
 st.title("📄 RHM | Automatisierter Posteingang")
 st.markdown("---")
 
-# Sidebar für API-Key
+# Initialisiere Session State für API Keys
+if 'api_keys' not in st.session_state:
+    st.session_state.api_keys = {
+        'openai': '',
+        'claude': '',
+        'gemini': ''
+    }
+if 'api_provider' not in st.session_state:
+    st.session_state.api_provider = 'OpenAI (ChatGPT)'
+
+# Sidebar für API-Konfiguration
 st.sidebar.header("⚙️ Einstellungen")
-openai_api_key = st.sidebar.text_input(
-    "OpenAI API Key",
+
+# API-Anbieter-Auswahl
+st.sidebar.subheader("🤖 KI-Anbieter")
+api_provider = st.sidebar.selectbox(
+    "Wählen Sie den KI-Dienst:",
+    options=["OpenAI (ChatGPT)", "Claude (Anthropic)", "Gemini (Google)"],
+    index=0,  # OpenAI als Standard
+    help="Wählen Sie den KI-Dienst für die Dokumentenanalyse"
+)
+st.session_state.api_provider = api_provider
+
+# API-Key Eingabe (mit Persistierung)
+provider_key_map = {
+    "OpenAI (ChatGPT)": "openai",
+    "Claude (Anthropic)": "claude",
+    "Gemini (Google)": "gemini"
+}
+current_provider_key = provider_key_map[api_provider]
+
+# Zeige gespeicherten Key als Placeholder
+stored_key = st.session_state.api_keys.get(current_provider_key, '')
+api_key_input = st.sidebar.text_input(
+    f"{api_provider} API Key",
+    value=stored_key,
     type="password",
-    help="Ihr OpenAI API-Schlüssel für die Dokumentenanalyse"
+    help=f"Ihr {api_provider} API-Schlüssel (wird in der Session gespeichert)",
+    key=f"api_key_input_{current_provider_key}"
 )
 
+# Speichere Key in Session State
+if api_key_input:
+    st.session_state.api_keys[current_provider_key] = api_key_input
+
+# Hole aktuellen Key
+current_api_key = st.session_state.api_keys.get(current_provider_key, '')
+
 # API-Key Verbindungstest
-if openai_api_key:
+if current_api_key:
     try:
-        from openai import OpenAI
-        test_client = OpenAI(api_key=openai_api_key)
-        # Einfacher Test: Liste verfügbare Modelle
-        test_client.models.list()
-        st.sidebar.markdown("🟢 **Verbindung erfolgreich**")
+        if api_provider == "OpenAI (ChatGPT)":
+            from openai import OpenAI
+            test_client = OpenAI(api_key=current_api_key)
+            test_client.models.list()
+            st.sidebar.markdown("🟢 **Verbindung erfolgreich**")
+
+        elif api_provider == "Claude (Anthropic)":
+            import anthropic
+            test_client = anthropic.Anthropic(api_key=current_api_key)
+            # Test mit einfachem API-Aufruf
+            test_client.models.list()
+            st.sidebar.markdown("🟢 **Verbindung erfolgreich**")
+
+        elif api_provider == "Gemini (Google)":
+            import google.generativeai as genai
+            genai.configure(api_key=current_api_key)
+            # Test: Liste verfügbare Modelle
+            list(genai.list_models())
+            st.sidebar.markdown("🟢 **Verbindung erfolgreich**")
+
     except Exception as e:
         error_msg = str(e)
-        if "authentication" in error_msg.lower() or "api key" in error_msg.lower():
+        if "authentication" in error_msg.lower() or "api key" in error_msg.lower() or "api_key" in error_msg.lower():
             st.sidebar.markdown("🔴 **Ungültiger API-Key**")
         else:
-            st.sidebar.markdown("🟡 **Verbindungsfehler**")
+            st.sidebar.markdown(f"🟡 **Verbindungsfehler**: {error_msg[:100]}")
 else:
     st.sidebar.markdown("⚪ **Kein API-Key eingegeben**")
 
@@ -91,9 +146,9 @@ with col2:
 st.markdown("---")
 
 # Verarbeitungsbutton
-if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded_pdf and uploaded_excel and openai_api_key)):
-    if not openai_api_key:
-        st.error("❌ Bitte geben Sie Ihren OpenAI API-Key ein!")
+if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded_pdf and uploaded_excel and current_api_key)):
+    if not current_api_key:
+        st.error(f"❌ Bitte geben Sie Ihren {api_provider} API-Key ein!")
     elif not uploaded_pdf:
         st.error("❌ Bitte laden Sie eine PDF-Datei hoch!")
     elif not uploaded_excel:
@@ -151,10 +206,10 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                         for info in debug_info:
                             st.text(info)
 
-                    # 3. Dokumente analysieren mit OpenAI
-                    status_text.text("🤖 Analysiere Dokumente mit OpenAI...")
+                    # 3. Dokumente analysieren mit KI
+                    status_text.text(f"🤖 Analysiere Dokumente mit {api_provider}...")
                     progress_bar.progress(40)
-                    analyzer = DocumentAnalyzer(openai_api_key)
+                    analyzer = DocumentAnalyzer(current_api_key, api_provider=api_provider)
 
                     alle_daten = []
                     sachbearbeiter_stats = {"SQ": 0, "TS": 0, "M": 0, "FÜ": 0, "CV": 0, "nicht-zugeordnet": 0}

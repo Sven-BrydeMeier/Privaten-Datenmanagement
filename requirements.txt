@@ -3,3 +3,5 @@ PyMuPDF
 pandas
 openpyxl
 openai
+anthropic
+google-generativeai
