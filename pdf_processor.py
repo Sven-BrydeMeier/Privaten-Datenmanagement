@@ -7,130 +7,31 @@ import fitz  # PyMuPDF
 from pathlib import Path
 from typing import List, Dict, Tuple
 import re
-from aktenzeichen_erkennung import AktenzeichenErkenner
 
 
 class PDFProcessor:
-    def __init__(self, pdf_path: Path, debug: bool = False, trennmodus: str = "Trennseiten (T)", excel_path: Path = None):
+    def __init__(self, pdf_path: Path, debug: bool = False, trennmodus: str = "Text 'Trennseite'", excel_path: Path = None):
         self.pdf_path = pdf_path
         self.doc = fitz.open(pdf_path)
         self.debug = debug
-        self.trennmodus = trennmodus
         self.excel_path = excel_path
         self.debug_info = []  # Speichert Debug-Informationen
 
     def ist_trennblatt(self, seite: fitz.Page, seiten_nr: int) -> bool:
         """
         Prüft, ob eine Seite ein Trennblatt ist.
-
-        Abhängig vom gewählten Trennmodus:
-        - "Trennseiten (T)": Strukturelle Analyse für "T" mit großer Schrift
-        - "Text 'Trennseite'": Sucht nach dem Wort "Trennseite" im Text
-        - "Aktenzeichen-Wechsel": Wird in verarbeite_pdf() behandelt
+        Sucht nach dem Wort "Trennseite" im Text (case-insensitive).
         """
         text = seite.get_text("text").strip()
-        text_clean = re.sub(r'\s+', '', text)
-
-        # Modus: Text "Trennseite"
-        if self.trennmodus == "Text 'Trennseite'":
-            # Suche nach dem Wort "Trennseite" (case-insensitive)
-            if "trennseite" in text.lower():
-                if self.debug:
-                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Text 'Trennseite' gefunden)")
-                return True
-            return False
-
-        # Modus: Aktenzeichen-Wechsel
-        # (wird in verarbeite_pdf() durch andere Logik behandelt)
-        if self.trennmodus == "Aktenzeichen-Wechsel":
-            return False  # Keine Trennseiten-Erkennung
-
-        # Modus: Trennseiten (T) - Standardmodus
-        # Strukturelle Analyse für "T" mit großer Schrift
-
-        # Debug-Info
-        if self.debug:
-            text_preview = text[:200] if len(text) > 200 else text
-            text_preview = text_preview.replace('\n', ' ')
-            self.debug_info.append(f"  Text-Vorschau: '{text_preview}'")
-            self.debug_info.append(f"  Text-Länge: {len(text)} Zeichen")
-            self.debug_info.append(f"  Bereinigter Text: '{text_clean}' ({len(text_clean)} Zeichen)")
-
-        # NEUE PRIORITÄT 1: Strukturelle Analyse (funktioniert OHNE OCR-Text!)
-        try:
-            text_dict = seite.get_text("dict")
-            blocks = text_dict.get("blocks", [])
-            text_blocks = [b for b in blocks if "lines" in b]
-
-            # Zähle Textblöcke und größte Schriftgröße
-            block_count = len(text_blocks)
-            max_font_size = 0
-            total_chars = 0
-
-            for block in text_blocks:
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        text_span = span.get("text", "").strip()
-                        font_size = span.get("size", 0)
-
-                        if self.debug and text_span:
-                            self.debug_info.append(f"    '{text_span}' → Größe: {font_size:.1f}")
-
-                        if font_size > max_font_size:
-                            max_font_size = font_size
-                        total_chars += len(text_span)
-
-            if self.debug:
-                self.debug_info.append(f"  Anzahl Textblöcke: {block_count}")
-                self.debug_info.append(f"  Max. Schriftgröße: {max_font_size:.1f}")
-                self.debug_info.append(f"  Zeichen in Spans: {total_chars}")
-
-            # KRITERIUM 1: Sehr große Schriftgröße (> 100) = fast immer Trennblatt
-            if max_font_size > 100:
-                if self.debug:
-                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Riesige Schrift: {max_font_size:.1f})")
-                return True
-
-            # KRITERIUM 2: Wenig Text + große Schrift + wenige Blöcke
-            if block_count <= 3 and max_font_size > 50 and total_chars < 20:
-                if self.debug:
-                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Wenig Text + große Schrift)")
-                return True
-
-            # KRITERIUM 3: Extrem wenig Textinhalt (< 5 Zeichen im bereinigten Text)
-            if len(text_clean) > 0 and len(text_clean) <= 5:
-                if self.debug:
-                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Nur {len(text_clean)} Zeichen)")
-                return True
-
-        except Exception as e:
-            if self.debug:
-                self.debug_info.append(f"  ⚠ Fehler bei struktureller Analyse: {e}")
-
-        # PRIORITÄT 2: Text-basierte Erkennung (falls OCR doch funktioniert)
-        # Prüfe auf "T" (case-insensitive)
-        if text_clean.upper() in ['T', 'T.', 'T:']:
-            if self.debug:
-                self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (exakt 'T')")
-            return True
-
-        # PRIORITÄT 3: Sehr kurzer Text mit "T" dominant
-        if len(text_clean) <= 10 and len(text_clean) > 0:
-            t_count = text_clean.upper().count('T')
-            if t_count / len(text_clean) >= 0.5:
-                if self.debug:
-                    self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (kurzer Text, {t_count}/{len(text_clean)} ist T)")
-                return True
-
-        # PRIORITÄT 4: Eine Zeile mit nur "T"
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        if len(lines) == 1 and lines[0].upper() in ['T', 'T.', 'T:']:
-            if self.debug:
-                self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (eine Zeile mit T)")
-            return True
 
         if self.debug:
-            self.debug_info.append(f"  → Keine Trennblatt-Kriterien erfüllt")
+            self.debug_info.append(f"  Text-Vorschau: '{text[:100]}...'")
+
+        # Suche nach dem Wort "Trennseite" (case-insensitive)
+        if "trennseite" in text.lower():
+            if self.debug:
+                self.debug_info.append(f"  ✂ TRENNBLATT erkannt! (Text 'Trennseite' gefunden)")
+            return True
 
         return False
 
@@ -162,93 +63,6 @@ class PDFProcessor:
         """Extrahiert OCR-Text von einer Seite"""
         return seite.get_text("text")
 
-    def _verarbeite_nach_aktenzeichen(self) -> Tuple[List[Dict], List[str]]:
-        """
-        Verarbeitet PDF nach Aktenzeichen-Wechsel.
-        Neues Dokument wird erstellt, wenn sich das Aktenzeichen ändert.
-        """
-        dokumente = []
-        aktuelle_seiten = []
-        gesamt_text = []
-        leerseiten_count = 0
-
-        aktenzeichen_erkenner = AktenzeichenErkenner(self.excel_path)
-        letztes_aktenzeichen = None
-
-        if self.debug:
-            self.debug_info.append(f"=== Modus: Aktenzeichen-Wechsel ===")
-
-        for seiten_nr in range(len(self.doc)):
-            try:
-                seite = self.doc[seiten_nr]
-
-                if self.debug:
-                    self.debug_info.append(f"\n--- Verarbeite Seite {seiten_nr + 1} von {len(self.doc)} ---")
-
-                # Prüfe auf Leerseite (überspringen)
-                ist_leer = self.ist_leerseite(seite, seiten_nr)
-                if ist_leer:
-                    leerseiten_count += 1
-                    if self.debug:
-                        self.debug_info.append(f"  ⊘ Seite {seiten_nr + 1} übersprungen (Leerseite)")
-                    continue
-
-                # Extrahiere Text und Aktenzeichen
-                text = self.extrahiere_text(seite)
-                aktenzeichen_info = aktenzeichen_erkenner.erkenne_aktenzeichen(text)
-                aktuelles_aktenzeichen = aktenzeichen_info.get('aktenzeichen')
-
-                if self.debug:
-                    self.debug_info.append(f"  📋 Aktenzeichen: {aktuelles_aktenzeichen or 'Nicht erkannt'}")
-                    self.debug_info.append(f"  📋 Letztes AZ: {letztes_aktenzeichen or 'Keins'}")
-
-                # Prüfe auf Aktenzeichen-Wechsel
-                if aktuelles_aktenzeichen and letztes_aktenzeichen and aktuelles_aktenzeichen != letztes_aktenzeichen:
-                    if self.debug:
-                        self.debug_info.append(f"  ✂ AKTENZEICHEN-WECHSEL erkannt!")
-                        self.debug_info.append(f"    Alt: {letztes_aktenzeichen} → Neu: {aktuelles_aktenzeichen}")
-
-                    # Speichere aktuelles Dokument
-                    if aktuelle_seiten:
-                        dokument = self._erstelle_dokument(aktuelle_seiten, gesamt_text)
-                        dokumente.append(dokument)
-                        if self.debug:
-                            self.debug_info.append(f"  ✓ Dokument #{len(dokumente)} erstellt (Seiten: {aktuelle_seiten[0]+1}-{aktuelle_seiten[-1]+1}, AZ: {letztes_aktenzeichen})")
-                        aktuelle_seiten = []
-                        gesamt_text = []
-
-                # Füge Seite zu aktuellem Dokument hinzu
-                aktuelle_seiten.append(seiten_nr)
-                gesamt_text.append(text)
-
-                # Update letztes Aktenzeichen (nur wenn erkannt)
-                if aktuelles_aktenzeichen:
-                    letztes_aktenzeichen = aktuelles_aktenzeichen
-
-                if self.debug:
-                    self.debug_info.append(f"    → Seiten im Buffer: {len(aktuelle_seiten)}")
-
-            except Exception as e:
-                if self.debug:
-                    self.debug_info.append(f"  ❌ FEHLER bei Seite {seiten_nr + 1}: {str(e)}")
-                    import traceback
-                    self.debug_info.append(f"     {traceback.format_exc()}")
-                continue
-
-        # Letztes Dokument speichern
-        if aktuelle_seiten:
-            dokument = self._erstelle_dokument(aktuelle_seiten, gesamt_text)
-            dokumente.append(dokument)
-            if self.debug:
-                self.debug_info.append(f"\n✓ Letztes Dokument #{len(dokumente)} erstellt (Seiten: {aktuelle_seiten[0]+1}-{aktuelle_seiten[-1]+1}, AZ: {letztes_aktenzeichen})")
-
-        if self.debug:
-            self.debug_info.append(f"\n=== Verarbeitung abgeschlossen ===")
-            self.debug_info.append(f"Dokumente erstellt: {len(dokumente)}")
-            self.debug_info.append(f"Leerseiten übersprungen: {leerseiten_count}")
-
-        return dokumente, self.debug_info
-
     def verarbeite_pdf(self) -> Tuple[List[Dict], List[str]]:
         """
         Hauptfunktion: Verarbeitet das PDF und erstellt Einzeldokumente
@@ -269,14 +83,7 @@ class PDFProcessor:
 
         if self.debug:
             self.debug_info.append(f"=== PDF-Verarbeitung gestartet ===")
-            self.debug_info.append(f"Trennmodus: {self.trennmodus}")
             self.debug_info.append(f"Gesamt-Seiten: {len(self.doc)}")
-
-        # Spezialbehandlung für Aktenzeichen-Wechsel Modus
-        if self.trennmodus == "Aktenzeichen-Wechsel":
-            return self._verarbeite_nach_aktenzeichen()
-
-        # Standard-Verarbeitung mit Trennseiten
 
         for seiten_nr in range(len(self.doc)):
             try:

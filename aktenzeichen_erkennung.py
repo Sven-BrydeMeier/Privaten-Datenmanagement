@@ -23,6 +23,16 @@ class AktenzeichenErkenner:
         'M': 'M'
     }
 
+    # Sachbearbeiter-Namen zu Kürzel Mapping
+    SACHBEARBEITER_NAMEN = {
+        'meier': 'SQ',         # Sven-Bryde Meier
+        'meyer': 'TS',         # Tamara Meyer
+        'marquardsen': 'M',    # Ann-Kathrin Marquardsen
+        'fürsen': 'FÜ',        # Dr. Fürsen
+        'fuersen': 'FÜ',       # Alternative Schreibweise
+        'ostertun': 'CV'       # Christian Ostertun
+    }
+
     # Schlagwörter für "Ihr Zeichen" etc.
     ZEICHEN_KEYWORDS = [
         'ihr zeichen', 'unser zeichen', 'ihr az', 'ihr az.',
@@ -51,6 +61,64 @@ class AktenzeichenErkenner:
         df['SB'] = df['SB'].replace('FU', 'FÜ')
 
         return df
+
+    def erkenne_sachbearbeiter_aus_text(self, text: str) -> Optional[str]:
+        """
+        Extrahiert den Sachbearbeiter aus Anreden und Anschriften im Text.
+
+        Regeln:
+        1. Suche in Anreden wie "Sehr geehrter Herr Kollege Meier"
+        2. Suche in Anschriften, ABER NICHT wenn der Name nur in Kanzleinamen
+           wie "Radtke, Heigener und Meier" erscheint
+
+        Returns:
+            Kürzel des Sachbearbeiters (SQ, TS, M, FÜ, CV) oder None
+        """
+        text_lower = text.lower()
+        lines = text.split('\n')
+
+        # PRIORITÄT 1: Anrede-Suche (höchste Priorität)
+        # Patterns wie "Sehr geehrter Herr Kollege [Name]" oder "Sehr geehrte Kollegin [Name]"
+        anrede_patterns = [
+            r'sehr\s+geehrte?[rn]?\s+(herr|frau|herrn)?\s*(kollege?|kollegin)?\s+(\w+)',
+            r'liebe?[rn]?\s+(herr|frau|kollege?|kollegin)?\s+(\w+)',
+            r'guten\s+tag\s+(herr|frau)?\s+(\w+)'
+        ]
+
+        for pattern in anrede_patterns:
+            matches = re.finditer(pattern, text_lower, re.IGNORECASE)
+            for match in matches:
+                # Hole letztes Wort (der Name)
+                name = match.group(match.lastindex)
+                if name in self.SACHBEARBEITER_NAMEN:
+                    return self.SACHBEARBEITER_NAMEN[name]
+
+        # PRIORITÄT 2: Anschrift-Suche (mit Ausschluss von Kanzleinamen)
+        # Suche in den ersten 30 Zeilen (typischer Anschriftenbereich)
+        for i, line in enumerate(lines[:30]):
+            line_lower = line.lower().strip()
+
+            # Überspringe Zeilen mit mehreren Nachnamen (Kanzleinamen)
+            # z.B. "Radtke, Heigener und Meier"
+            if ',' in line or ' und ' in line_lower or ' & ' in line:
+                # Prüfe ob es wie ein Kanzleiname aussieht (mehrere Namen)
+                words = re.findall(r'\b[A-ZÄÖÜ][a-zäöüß]+\b', line)
+                if len(words) >= 3:  # Mindestens 3 Großgeschriebene Wörter = wahrscheinlich Kanzleiname
+                    continue
+
+            # Suche nach Sachbearbeiter-Namen in der Zeile
+            for name, kuerzel in self.SACHBEARBEITER_NAMEN.items():
+                # Suche nach dem Namen als ganzes Wort
+                if re.search(r'\b' + name + r'\b', line_lower):
+                    # Zusätzliche Prüfung: Ist es Teil einer Adresszeile?
+                    # (enthält oft "Rechtsanwalt", "RAin", "Dr.", etc.)
+                    if any(keyword in line_lower for keyword in ['rechtsan', 'ra ', 'rae', 'notar', 'dr.', 'dr ']):
+                        return kuerzel
+                    # Wenn in Zeile 5-15 (typischer Empfängerbereich), akzeptiere auch ohne Keywords
+                    if 5 <= i <= 15:
+                        return kuerzel
+
+        return None
 
     def erkenne_aktenzeichen(self, text: str) -> Dict:
         """
@@ -246,16 +314,20 @@ class AktenzeichenErkenner:
 
         return list(set(externe))  # Duplikate entfernen
 
-    def ermittle_sachbearbeiter(self, akt_info: Dict, analyse: Dict) -> str:
+    def ermittle_sachbearbeiter(self, akt_info: Dict, analyse: Dict, sachbearbeiter_aus_text: Optional[str] = None) -> str:
         """
-        Ermittelt den Sachbearbeiter basierend auf Aktenzeichen und Analyse
+        Ermittelt den Sachbearbeiter basierend auf verschiedenen Quellen
 
         Priorität:
+        0. Sachbearbeiter aus Anrede/Anschrift (HÖCHSTE PRIORITÄT!)
         1. Kürzel aus internem AZ
         2. Register-Daten
-        3. Heuristik (nicht implementiert)
-        4. "nicht-zugeordnet"
+        3. "nicht-zugeordnet"
         """
+        # 0. Sachbearbeiter aus Text (Anrede/Anschrift) - HÖCHSTE PRIORITÄT
+        if sachbearbeiter_aus_text:
+            return sachbearbeiter_aus_text
+
         # 1. Kürzel aus internem AZ
         if akt_info.get('kuerzel'):
             return akt_info['kuerzel']

@@ -102,17 +102,9 @@ else:
 
 st.sidebar.markdown("---")
 
-# Trennungsmodus auswählen
+# Dokumententrennung (fest: nur "Trennseite"-Text)
 st.sidebar.subheader("📑 Dokumententrennung")
-trennmodus = st.sidebar.radio(
-    "Wie sollen Dokumente getrennt werden?",
-    options=["Trennseiten (T)", "Aktenzeichen-Wechsel", "Text 'Trennseite'"],
-    help="""
-    - Trennseiten (T): Nach Seiten mit großem 'T'
-    - Aktenzeichen-Wechsel: Neues Dokument bei jedem neuen Aktenzeichen
-    - Text 'Trennseite': Nach Seiten mit dem Text 'Trennseite'
-    """
-)
+st.sidebar.info("Dokumente werden durch Seiten mit dem Text **'Trennseite'** getrennt.")
 
 st.sidebar.markdown("---")
 st.sidebar.info("""
@@ -188,7 +180,7 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                     # Live-Logging-Container
                     log_container = st.empty()
 
-                    processor = PDFProcessor(pdf_path, debug=True, trennmodus=trennmodus, excel_path=excel_path)
+                    processor = PDFProcessor(pdf_path, debug=True, trennmodus="Text 'Trennseite'", excel_path=excel_path)
                     dokumente, debug_info = processor.verarbeite_pdf()
 
                     st.success(f"✅ {len(dokumente)} Einzeldokumente erkannt")
@@ -221,11 +213,14 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                         # Aktenzeichen erkennen
                         akt_info = erkenner.erkenne_aktenzeichen(doc['text'])
 
+                        # Sachbearbeiter aus Text erkennen (Anrede/Anschrift)
+                        sb_aus_text = erkenner.erkenne_sachbearbeiter_aus_text(doc['text'])
+
                         # Dokumenteninhalt analysieren
                         analyse = analyzer.analysiere_dokument(doc['text'], akt_info)
 
-                        # Sachbearbeiter zuordnen
-                        sb = erkenner.ermittle_sachbearbeiter(akt_info, analyse)
+                        # Sachbearbeiter zuordnen (mit Priorität für Text-Erkennung)
+                        sb = erkenner.ermittle_sachbearbeiter(akt_info, analyse, sachbearbeiter_aus_text=sb_aus_text)
                         sachbearbeiter_stats[sb] = sachbearbeiter_stats.get(sb, 0) + 1
 
                         # Dateiname generieren
