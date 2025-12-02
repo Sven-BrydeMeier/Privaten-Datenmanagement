@@ -133,7 +133,7 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not (uploaded
                     # Live-Logging-Container
                     log_container = st.empty()
 
-                    processor = PDFProcessor(pdf_path, debug=True, trennmodus=trennmodus)
+                    processor = PDFProcessor(pdf_path, debug=True, trennmodus=trennmodus, excel_path=excel_path)
                     dokumente, debug_info = processor.verarbeite_pdf()
 
                     st.success(f"✅ {len(dokumente)} Einzeldokumente erkannt")

@@ -11,11 +11,12 @@ from aktenzeichen_erkennung import AktenzeichenErkenner
 
 
 class PDFProcessor:
-    def __init__(self, pdf_path: Path, debug: bool = False, trennmodus: str = "Trennseiten (T)"):
+    def __init__(self, pdf_path: Path, debug: bool = False, trennmodus: str = "Trennseiten (T)", excel_path: Path = None):
         self.pdf_path = pdf_path
         self.doc = fitz.open(pdf_path)
         self.debug = debug
         self.trennmodus = trennmodus
+        self.excel_path = excel_path
         self.debug_info = []  # Speichert Debug-Informationen
 
     def ist_trennblatt(self, seite: fitz.Page, seiten_nr: int) -> bool:
@@ -171,7 +172,7 @@ class PDFProcessor:
         gesamt_text = []
         leerseiten_count = 0
 
-        aktenzeichen_erkenner = AktenzeichenErkenner()
+        aktenzeichen_erkenner = AktenzeichenErkenner(self.excel_path)
         letztes_aktenzeichen = None
 
         if self.debug:
