@@ -113,20 +113,33 @@ class ExcelGenerator:
         """
         Erstellt eine Zeile für die Excel-Tabelle
         """
-        heute_str = self.heute.strftime('%Y-%m-%d')
+        # Deutsches Datumsformat: DD.MM.YYYY
+        heute_str = self.heute.strftime('%d.%m.%Y')
 
         # Frist-Indikator: Roter Kreis wenn Frist vorhanden
         frist_indikator = '🔴' if frist else ''
 
+        # Fristdatum in deutsches Format konvertieren
+        fristdatum_str = ''
+        if frist and frist.get('datum'):
+            try:
+                # Parse Datum (Format von KI: YYYY-MM-DD)
+                frist_datum = datetime.strptime(frist.get('datum'), '%Y-%m-%d')
+                # Konvertiere zu deutschem Format
+                fristdatum_str = frist_datum.strftime('%d.%m.%Y')
+            except:
+                # Falls Parsing fehlschlägt, verwende Original
+                fristdatum_str = frist.get('datum', '')
+
         zeile = [
-            heute_str,  # Eingangsdatum
+            heute_str,  # Eingangsdatum (deutsches Format)
             akt_info.get('internes_az', ''),  # Internes AZ
             ', '.join(akt_info.get('externe_az', [])),  # Externe AZ
             analyse.get('mandant', ''),  # Mandant
             analyse.get('gegner', ''),  # Gegner / Absender
             analyse.get('absendertyp', 'Sonstige'),  # Absendertyp
             sb,  # Sachbearbeiter
-            frist.get('datum', '') if frist else '',  # Fristdatum
+            fristdatum_str,  # Fristdatum (deutsches Format)
             frist_indikator,  # ⚠ Frist-Indikator
             frist.get('typ', '') if frist else '',  # Fristtyp
             frist.get('quelle', '') if frist else '',  # Fristquelle
@@ -218,9 +231,14 @@ class ExcelGenerator:
             frist_fill = None
             if fristdatum_value:
                 try:
-                    # Parse Datum
+                    # Parse Datum (deutsches Format: DD.MM.YYYY)
                     if isinstance(fristdatum_value, str):
-                        frist_datum = datetime.strptime(fristdatum_value, '%Y-%m-%d').date()
+                        # Versuche deutsches Format
+                        try:
+                            frist_datum = datetime.strptime(fristdatum_value, '%d.%m.%Y').date()
+                        except ValueError:
+                            # Fallback: ISO-Format (für Kompatibilität)
+                            frist_datum = datetime.strptime(fristdatum_value, '%Y-%m-%d').date()
                     elif isinstance(fristdatum_value, datetime):
                         frist_datum = fristdatum_value.date()
                     else:
@@ -238,7 +256,8 @@ class ExcelGenerator:
                         elif diff <= 14:
                             frist_fill = frist_gelb
 
-                except:
+                except Exception as e:
+                    # Bei Fehler: Keine Farb-Hervorhebung
                     pass
 
             # Formatiere alle Zellen in der Zeile
