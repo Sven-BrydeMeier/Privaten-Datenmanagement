@@ -351,171 +351,199 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not can_proce
                     status_text.text("✅ Verarbeitung abgeschlossen!")
 
                     # Speichere Ergebnisse in Session State für persistente Download-Buttons
+                    # WICHTIG: Alle Daten müssen kopiert werden, nicht nur Referenzen
                     st.session_state.verarbeitung_ergebnisse = {
-                        'zip_dateien': zip_dateien,
-                        'gesamt_excel': gesamt_excel,
-                        'sachbearbeiter_stats': sachbearbeiter_stats
+                        'zip_dateien': dict(zip_dateien),  # Explizite Kopie
+                        'gesamt_excel': bytes(gesamt_excel),  # Explizite Kopie
+                        'sachbearbeiter_stats': dict(sachbearbeiter_stats)  # Explizite Kopie
                     }
+                    st.session_state.verarbeitung_abgeschlossen = True  # Flag setzen
 
                 except Exception as e:
                     st.error(f"❌ Fehler bei der Verarbeitung: {str(e)}")
                     st.exception(e)
 
 # Zeige Download-Buttons außerhalb des Processing-Blocks (persistent)
-if 'verarbeitung_ergebnisse' in st.session_state:
+# Prüfe ob Verarbeitung abgeschlossen und Ergebnisse vorhanden
+if (st.session_state.get('verarbeitung_abgeschlossen', False) and
+    'verarbeitung_ergebnisse' in st.session_state):
+
     ergebnisse = st.session_state.verarbeitung_ergebnisse
 
-    # Ergebnisse anzeigen
-    st.markdown("---")
-    st.success("🎉 Verarbeitung erfolgreich abgeschlossen!")
-
-    # Statistik
-    st.subheader("📊 Verteilung")
-    cols = st.columns(6)
-    for i, (sb, count) in enumerate(ergebnisse['sachbearbeiter_stats'].items()):
-        if count > 0:
-            cols[i].metric(sb, count)
-
-    # Downloads
-    st.subheader("📥 Downloads")
-
-    # ZIP-Dateien
-    col_downloads = st.columns(3)
-    col_idx = 0
-    for sb, zip_bytes in ergebnisse['zip_dateien'].items():
-        with col_downloads[col_idx % 3]:
-            st.download_button(
-                label=f"📦 {sb}.zip ({ergebnisse['sachbearbeiter_stats'][sb]} Dokumente)",
-                data=zip_bytes,
-                file_name=f"{sb}.zip",
-                mime="application/zip",
-                key=f"download_zip_{sb}"  # Eindeutiger Key
-            )
-            col_idx += 1
-
-    # Gesamt-Excel
-    st.download_button(
-        label="📊 Gesamt-Excel: Fristen & Akten",
-        data=ergebnisse['gesamt_excel'],
-        file_name="Fristen_und_Akten_Gesamt.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="download_gesamt_excel"  # Eindeutiger Key
-    )
-
-    # Email-Versand an RENOs
-    st.markdown("---")
-    st.subheader("📧 Email-Versand an RENOs")
-
-    with st.expander("📮 ZIP-Dateien per Email versenden", expanded=False):
-        st.info("📝 Wählen Sie für jeden Sachbearbeiter die RENOs aus, die die Dokumente per Email erhalten sollen.")
-
-        # SMTP-Konfiguration
-        col_smtp1, col_smtp2 = st.columns(2)
-        with col_smtp1:
-            smtp_server = st.text_input(
-                "SMTP Server",
-                value="smtp.office365.com",
-                help="z.B. smtp.gmail.com, smtp.office365.com, smtp.ionos.de"
-            )
-            smtp_user = st.text_input(
-                "Email-Adresse (Absender)",
-                help="Ihre Email-Adresse für den Versand"
-            )
-        with col_smtp2:
-            smtp_port = st.number_input(
-                "SMTP Port",
-                value=587,
-                min_value=1,
-                max_value=65535,
-                help="Standard: 587 (TLS)"
-            )
-            smtp_password = st.text_input(
-                "SMTP Passwort",
-                type="password",
-                help="Passwort für Email-Account"
-            )
-
+    # Validiere dass alle erforderlichen Daten vorhanden sind
+    if not all(key in ergebnisse for key in ['zip_dateien', 'gesamt_excel', 'sachbearbeiter_stats']):
+        st.error("⚠️ Fehler: Verarbeitungsergebnisse unvollständig. Bitte erneut verarbeiten.")
+        if st.button("Ergebnisse zurücksetzen"):
+            if 'verarbeitung_ergebnisse' in st.session_state:
+                del st.session_state.verarbeitung_ergebnisse
+            if 'verarbeitung_abgeschlossen' in st.session_state:
+                del st.session_state.verarbeitung_abgeschlossen
+            st.rerun()
+    else:
+        # Ergebnisse sind vollständig - zeige Downloads
         st.markdown("---")
+        st.success("🎉 Verarbeitung erfolgreich abgeschlossen!")
 
-        # RENO-Auswahl für jeden Sachbearbeiter
-        reno_auswahl = {}
-        for sb, zip_bytes in ergebnisse['zip_dateien'].items():
-            anzahl = ergebnisse['sachbearbeiter_stats'][sb]
-            st.markdown(f"**{sb}** ({anzahl} Dokumente)")
+        # Statistik
+        st.subheader("📊 Verteilung")
+        cols = st.columns(6)
+        for i, (sb, count) in enumerate(ergebnisse['sachbearbeiter_stats'].items()):
+            if count > 0:
+                cols[i].metric(sb, count)
 
-            # Hole verfügbare RENOs für diesen Sachbearbeiter
-            verfuegbare_renos = EmailSender.get_renos_fuer_sachbearbeiter(sb)
+        # Downloads
+        st.subheader("📥 Downloads")
 
-            if verfuegbare_renos:
-                # Multiselect für RENO-Auswahl
-                ausgewaehlte_renos = st.multiselect(
-                    f"RENOs für {sb} auswählen:",
-                    options=[f"{reno['name']} ({reno['email']})" for reno in verfuegbare_renos],
-                    key=f"reno_select_{sb}"
+        # ZIP-Dateien - Alle Buttons auf einmal rendern (kein col_idx tracking)
+        # Erstelle Liste aller ZIP-Dateien
+        zip_liste = list(ergebnisse['zip_dateien'].items())
+
+        # Zeige alle Download-Buttons in 3 Spalten
+        num_cols = 3
+        cols = st.columns(num_cols)
+
+        for idx, (sb, zip_bytes) in enumerate(zip_liste):
+            col_index = idx % num_cols
+            with cols[col_index]:
+                # Verwende usecontainer_width für bessere Darstellung
+                st.download_button(
+                    label=f"📦 {sb}.zip",
+                    data=zip_bytes,
+                    file_name=f"{sb}.zip",
+                    mime="application/zip",
+                    key=f"download_zip_{sb}",
+                    use_container_width=True,
+                    help=f"{ergebnisse['sachbearbeiter_stats'][sb]} Dokumente"
                 )
 
-                # Extrahiere Email-Adressen
-                if ausgewaehlte_renos:
-                    emails = []
-                    for auswahl in ausgewaehlte_renos:
-                        # Extrahiere Email aus "Name (email@domain.de)"
-                        email = auswahl.split('(')[1].split(')')[0]
-                        emails.append(email)
-                    reno_auswahl[sb] = emails
-            else:
-                st.warning(f"Keine RENOs für {sb} verfügbar")
+        # Gesamt-Excel - mit eigenem Container
+        st.markdown("")  # Abstand
+        st.download_button(
+            label="📊 Gesamt-Excel: Fristen & Akten",
+            data=ergebnisse['gesamt_excel'],
+            file_name="Fristen_und_Akten_Gesamt.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_gesamt_excel",
+            use_container_width=False
+        )
 
-            st.markdown("")  # Abstand
+        # Email-Versand an RENOs
+        st.markdown("---")
+        st.subheader("📧 Email-Versand an RENOs")
 
-        # Versand-Button
-        if st.button("📧 Emails versenden", type="primary"):
-            if not smtp_server or not smtp_user or not smtp_password:
-                st.error("❌ Bitte SMTP-Konfiguration vollständig ausfüllen!")
-            elif not reno_auswahl:
-                st.error("❌ Bitte mindestens einen RENO auswählen!")
-            else:
-                # Email-Sender initialisieren
-                try:
-                    sender = EmailSender(
-                        smtp_server=smtp_server,
-                        smtp_port=int(smtp_port),
-                        smtp_user=smtp_user,
-                        smtp_password=smtp_password
+        with st.expander("📮 ZIP-Dateien per Email versenden", expanded=False):
+            st.info("📝 Wählen Sie für jeden Sachbearbeiter die RENOs aus, die die Dokumente per Email erhalten sollen.")
+
+            # SMTP-Konfiguration
+            col_smtp1, col_smtp2 = st.columns(2)
+            with col_smtp1:
+                smtp_server = st.text_input(
+                    "SMTP Server",
+                    value="smtp.office365.com",
+                    help="z.B. smtp.gmail.com, smtp.office365.com, smtp.ionos.de"
+                )
+                smtp_user = st.text_input(
+                    "Email-Adresse (Absender)",
+                    help="Ihre Email-Adresse für den Versand"
+                )
+            with col_smtp2:
+                smtp_port = st.number_input(
+                    "SMTP Port",
+                    value=587,
+                    min_value=1,
+                    max_value=65535,
+                    help="Standard: 587 (TLS)"
+                )
+                smtp_password = st.text_input(
+                    "SMTP Passwort",
+                    type="password",
+                    help="Passwort für Email-Account"
+                )
+
+            st.markdown("---")
+
+            # RENO-Auswahl für jeden Sachbearbeiter
+            reno_auswahl = {}
+            for sb, zip_bytes in ergebnisse['zip_dateien'].items():
+                anzahl = ergebnisse['sachbearbeiter_stats'][sb]
+                st.markdown(f"**{sb}** ({anzahl} Dokumente)")
+
+                # Hole verfügbare RENOs für diesen Sachbearbeiter
+                verfuegbare_renos = EmailSender.get_renos_fuer_sachbearbeiter(sb)
+
+                if verfuegbare_renos:
+                    # Multiselect für RENO-Auswahl
+                    ausgewaehlte_renos = st.multiselect(
+                        f"RENOs für {sb} auswählen:",
+                        options=[f"{reno['name']} ({reno['email']})" for reno in verfuegbare_renos],
+                        key=f"reno_select_{sb}"
                     )
 
-                    # Emails versenden
-                    with st.spinner("📤 Sende Emails..."):
-                        results = sender.sende_mehrere_zips(
-                            reno_auswahl=reno_auswahl,
-                            zip_dateien=ergebnisse['zip_dateien'],
-                            sachbearbeiter_stats=ergebnisse['sachbearbeiter_stats'],
-                            datum=datetime.now().strftime('%d.%m.%Y')
+                    # Extrahiere Email-Adressen
+                    if ausgewaehlte_renos:
+                        emails = []
+                        for auswahl in ausgewaehlte_renos:
+                            # Extrahiere Email aus "Name (email@domain.de)"
+                            email = auswahl.split('(')[1].split(')')[0]
+                            emails.append(email)
+                        reno_auswahl[sb] = emails
+                else:
+                    st.warning(f"Keine RENOs für {sb} verfügbar")
+
+                st.markdown("")  # Abstand
+
+            # Versand-Button
+            if st.button("📧 Emails versenden", type="primary"):
+                if not smtp_server or not smtp_user or not smtp_password:
+                    st.error("❌ Bitte SMTP-Konfiguration vollständig ausfüllen!")
+                elif not reno_auswahl:
+                    st.error("❌ Bitte mindestens einen RENO auswählen!")
+                else:
+                    # Email-Sender initialisieren
+                    try:
+                        sender = EmailSender(
+                            smtp_server=smtp_server,
+                            smtp_port=int(smtp_port),
+                            smtp_user=smtp_user,
+                            smtp_password=smtp_password
                         )
 
-                    # Ergebnisse anzeigen
-                    erfolge = sum(1 for success in results.values() if success)
-                    gesamt = len(results)
+                        # Emails versenden
+                        with st.spinner("📤 Sende Emails..."):
+                            results = sender.sende_mehrere_zips(
+                                reno_auswahl=reno_auswahl,
+                                zip_dateien=ergebnisse['zip_dateien'],
+                                sachbearbeiter_stats=ergebnisse['sachbearbeiter_stats'],
+                                datum=datetime.now().strftime('%d.%m.%Y')
+                            )
 
-                    if erfolge == gesamt:
-                        st.success(f"✅ Alle {gesamt} Emails erfolgreich versendet!")
-                    elif erfolge > 0:
-                        st.warning(f"⚠️ {erfolge}/{gesamt} Emails erfolgreich versendet")
-                    else:
-                        st.error(f"❌ Keine Emails erfolgreich versendet")
+                        # Ergebnisse anzeigen
+                        erfolge = sum(1 for success in results.values() if success)
+                        gesamt = len(results)
 
-                    # Details anzeigen
-                    with st.expander("📊 Versand-Details"):
-                        for versand, success in results.items():
-                            status = "✅" if success else "❌"
-                            st.text(f"{status} {versand}")
+                        if erfolge == gesamt:
+                            st.success(f"✅ Alle {gesamt} Emails erfolgreich versendet!")
+                        elif erfolge > 0:
+                            st.warning(f"⚠️ {erfolge}/{gesamt} Emails erfolgreich versendet")
+                        else:
+                            st.error(f"❌ Keine Emails erfolgreich versendet")
 
-                except Exception as e:
-                    st.error(f"❌ Fehler beim Email-Versand: {str(e)}")
+                        # Details anzeigen
+                        with st.expander("📊 Versand-Details"):
+                            for versand, success in results.items():
+                                status = "✅" if success else "❌"
+                                st.text(f"{status} {versand}")
 
-    # Button zum Löschen der Ergebnisse
-    if st.button("🗑️ Ergebnisse löschen und neu verarbeiten"):
-        del st.session_state.verarbeitung_ergebnisse
-        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Fehler beim Email-Versand: {str(e)}")
+
+        # Button zum Löschen der Ergebnisse
+        if st.button("🗑️ Ergebnisse löschen und neu verarbeiten"):
+            if 'verarbeitung_ergebnisse' in st.session_state:
+                del st.session_state.verarbeitung_ergebnisse
+            if 'verarbeitung_abgeschlossen' in st.session_state:
+                del st.session_state.verarbeitung_abgeschlossen
+            st.rerun()
 
 # Info-Box
 st.markdown("---")
