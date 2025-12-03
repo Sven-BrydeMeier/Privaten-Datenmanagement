@@ -349,46 +349,62 @@ if st.button("🚀 Verarbeitung starten", type="primary", disabled=not can_proce
                     progress_bar.progress(100)
                     status_text.text("✅ Verarbeitung abgeschlossen!")
 
-                    # Ergebnisse anzeigen
-                    st.markdown("---")
-                    st.success("🎉 Verarbeitung erfolgreich abgeschlossen!")
-
-                    # Statistik
-                    st.subheader("📊 Verteilung")
-                    cols = st.columns(6)
-                    for i, (sb, count) in enumerate(sachbearbeiter_stats.items()):
-                        if count > 0:
-                            cols[i].metric(sb, count)
-
-                    # Downloads
-                    st.subheader("📥 Downloads")
-
-                    # ZIP-Dateien
-                    col_downloads = st.columns(3)
-                    col_idx = 0
-                    for sb, zip_bytes in zip_dateien.items():
-                        with col_downloads[col_idx % 3]:
-                            st.download_button(
-                                label=f"📦 {sb}.zip ({sachbearbeiter_stats[sb]} Dokumente)",
-                                data=zip_bytes,
-                                file_name=f"{sb}.zip",
-                                mime="application/zip",
-                                key=f"download_zip_{sb}"  # Eindeutiger Key
-                            )
-                            col_idx += 1
-
-                    # Gesamt-Excel
-                    st.download_button(
-                        label="📊 Gesamt-Excel: Fristen & Akten",
-                        data=gesamt_excel,
-                        file_name="Fristen_und_Akten_Gesamt.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="download_gesamt_excel"  # Eindeutiger Key
-                    )
+                    # Speichere Ergebnisse in Session State für persistente Download-Buttons
+                    st.session_state.verarbeitung_ergebnisse = {
+                        'zip_dateien': zip_dateien,
+                        'gesamt_excel': gesamt_excel,
+                        'sachbearbeiter_stats': sachbearbeiter_stats
+                    }
 
                 except Exception as e:
                     st.error(f"❌ Fehler bei der Verarbeitung: {str(e)}")
                     st.exception(e)
+
+# Zeige Download-Buttons außerhalb des Processing-Blocks (persistent)
+if 'verarbeitung_ergebnisse' in st.session_state:
+    ergebnisse = st.session_state.verarbeitung_ergebnisse
+
+    # Ergebnisse anzeigen
+    st.markdown("---")
+    st.success("🎉 Verarbeitung erfolgreich abgeschlossen!")
+
+    # Statistik
+    st.subheader("📊 Verteilung")
+    cols = st.columns(6)
+    for i, (sb, count) in enumerate(ergebnisse['sachbearbeiter_stats'].items()):
+        if count > 0:
+            cols[i].metric(sb, count)
+
+    # Downloads
+    st.subheader("📥 Downloads")
+
+    # ZIP-Dateien
+    col_downloads = st.columns(3)
+    col_idx = 0
+    for sb, zip_bytes in ergebnisse['zip_dateien'].items():
+        with col_downloads[col_idx % 3]:
+            st.download_button(
+                label=f"📦 {sb}.zip ({ergebnisse['sachbearbeiter_stats'][sb]} Dokumente)",
+                data=zip_bytes,
+                file_name=f"{sb}.zip",
+                mime="application/zip",
+                key=f"download_zip_{sb}"  # Eindeutiger Key
+            )
+            col_idx += 1
+
+    # Gesamt-Excel
+    st.download_button(
+        label="📊 Gesamt-Excel: Fristen & Akten",
+        data=ergebnisse['gesamt_excel'],
+        file_name="Fristen_und_Akten_Gesamt.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_gesamt_excel"  # Eindeutiger Key
+    )
+
+    # Button zum Löschen der Ergebnisse
+    if st.button("🗑️ Ergebnisse löschen und neu verarbeiten"):
+        del st.session_state.verarbeitung_ergebnisse
+        st.rerun()
 
 # Info-Box
 st.markdown("---")
