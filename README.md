@@ -1,162 +1,126 @@
-# 📄 RHM Posteingangsverarbeitung
+# 📄 RHM | Automatisierter Posteingang
 
-Automatisierte Verarbeitung von Tagespost für Anwaltskanzleien mit intelligenter Dokumentenerkennung und -zuordnung.
+Eine Streamlit-Anwendung zur automatischen Verarbeitung, Sortierung und Verteilung des täglichen Posteingangs für die Kanzlei Radtke, Heigener & Meier.
 
-## 🚀 Features
+## ✨ Features
 
-- **Automatische Dokumententrennung**: Erkennt Trennblätter (T-Seiten) und segmentiert PDFs
-- **Intelligente Aktenzeichen-Erkennung**:
-  - Interne Kanzlei-Aktenzeichen (z.B. 151/25M, 1179/24TS)
-  - Priorisierung von "Ihr Zeichen" / "Unser Zeichen" Feldern
-  - Externe Aktenzeichen (Gerichte, Versicherungen)
-  - Automatischer Abgleich mit Aktenregister
-- **KI-gestützte Dokumentenanalyse**: Extraktion von Mandant, Gegner, Fristen, Stichworte
-- **Sachbearbeiter-Zuordnung**: Automatische Zuordnung zu SQ, TS, M, FÜ, CV
-- **Excel-Reports**: Fristenverwaltung mit farblicher Markierung
-- **ZIP-Archivierung**: Separate ZIP-Dateien pro Sachbearbeiter
+### 🤖 KI-gestützte Dokumentenanalyse
+- **Multi-API-Support**: OpenAI (GPT-4o-mini), Claude (claude-3-5-haiku), Gemini (gemini-1.5-flash)
+- Automatische Aktenzeichen-Erkennung (intern & extern)
+- Intelligente Fristenerkennung
+- Mandanten- und Gegner-Extraktion
+- Absendertyp-Klassifizierung (Gericht, Versicherung, etc.)
 
-## 📋 Voraussetzungen
+### 📑 Dokumententrennung
+- Automatische Trennung durch "Trennseite"-Marker
+- OCR-robuste Namens-Erkennung mit Variationen
+- Intelligente Sachbearbeiter-Zuordnung aus Anrede/Anschrift
 
-- Python 3.8+
-- OpenAI API Key
-- Aktenregister-Datei (`aktenregister.xlsx`)
-- OCR-fähige PDFs (Tagespost)
+### 👥 Sachbearbeiter-Management
+- **SQ** - RA und Notar Sven-Bryde Meier
+- **TS** - RAin Tamara Meyer
+- **M** - RAin Ann-Kathrin Marquardsen
+- **CV** - RA Christian Ostertun
+- **FÜ** - RA Dr. Ernst Joachim Fürsen
 
-## 🛠️ Installation
+### 📊 Excel-Export
+- Professional formatierte Fristenlisten pro Sachbearbeiter
+- Deutsche Datumsformate (DD.MM.YYYY)
+- Farbliche Frist-Hervorhebung (Rot ≤3 Tage, Orange ≤7 Tage, Gelb ≤14 Tage)
+- Gesamt-Excel mit allen Dokumenten
 
-1. **Repository klonen**
-   ```bash
-   git clone <repository-url>
-   cd blank-app
-   ```
+### 📦 Ausgabe-Optionen
+- **ZIP-Download**: Einzelne ZIP-Dateien pro Sachbearbeiter
+- **Email-Versand**: Direkte Verteilung an RENOs per SMTP
+- Persistente Download-Buttons (bleiben nach Rerun sichtbar)
 
-2. **Abhängigkeiten installieren**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 💾 Datenpersistenz
+- Verschlüsselte Speicherung von API-Keys (Fernet)
+- Aktenregister mit intelligenter Merge-Funktion
+- Automatische Timestamps für Updates
+- Sicheres Session-State-Management
 
-3. **App starten**
-   ```bash
-   streamlit run streamlit_app.py
-   ```
+## 🚀 Deployment auf Streamlit Cloud
 
-## 📖 Verwendung
+### Voraussetzungen
+- GitHub Account
+- Streamlit Cloud Account (kostenlos bei [share.streamlit.io](https://share.streamlit.io))
 
-### 1. Vorbereitung
+### Schritte
 
-**Aktenregister (aktenregister.xlsx):**
-- Blatt "akten" mit folgenden Spalten:
-  - `Akte`: Aktenzeichen-Stamm (z.B. "151/25")
-  - `SB`: Sachbearbeiter-Kürzel (SQ, TS, M, FÜ, CV)
-  - `Kurzbez.`: Kurzbezeichnung ("Mandant ./. Gegner")
-  - `Gegner`: Gegenseite
-  - `Art`: RA/Notar
+1. **Repository auf GitHub**
+   - Stellen Sie sicher, dass dieser Code in einem GitHub Repository liegt
 
-**Tagespost-PDF:**
-- OCR-verarbeitet
-- Dokumente durch T-Seiten (Trennblätter) getrennt
+2. **Streamlit Cloud verbinden**
+   - Gehen Sie zu [share.streamlit.io](https://share.streamlit.io)
+   - Klicken Sie auf "New app"
+   - Wählen Sie Ihr Repository aus
+   - Branch: `claude/streamlit-pdf-processor-01QbAfkkBgaJveWzVsNzM7jh` (oder Ihr Main-Branch)
+   - Main file: `streamlit_app.py`
 
-### 2. App bedienen
+3. **Deploy!**
+   - Klicken Sie auf "Deploy"
+   - Die App wird automatisch gebaut und deployed
 
-1. **OpenAI API Key eingeben** (in der Sidebar)
-2. **Tagespost-PDF hochladen**
-3. **Aktenregister-Excel hochladen**
-4. **"Verarbeitung starten" klicken**
-5. **ZIP-Dateien herunterladen**
+### Konfiguration
 
-### 3. Ausgabe
+**API-Keys**: Keine Streamlit Secrets erforderlich! Die App speichert API-Keys verschlüsselt im User-Verzeichnis.
 
-Die App erstellt:
+**Aktenregister**: Beim ersten Start hochladen, danach persistent gespeichert und automatisch gemergt.
 
-- **ZIP-Dateien pro Sachbearbeiter** (`SQ.zip`, `TS.zip`, `M.zip`, `FÜ.zip`, `CV.zip`, `nicht-zugeordnet.zip`)
-  - Einzelne PDFs mit Dateinamen: `[AZ]_[Mandant]_[Gegner]_[Datum]_[Stichworte].pdf`
-  - Excel-Datei mit Fristen und Metadaten
+## 📝 Verwendung
 
-- **Gesamt-Excel**: `Fristen_und_Akten_Gesamt.xlsx`
-  - Alle Dokumente in einer Übersicht
-  - Farbmarkierung: Rot (≤ 3 Tage), Orange (≤ 7 Tage)
+### 1. API-Key konfigurieren
+- Wählen Sie KI-Anbieter (OpenAI/Claude/Gemini)
+- Geben Sie API-Key ein
+- Key wird verschlüsselt gespeichert
 
-## 🎯 Aktenzeichen-Erkennung
+### 2. Aktenregister hochladen
+- Excel-Datei mit Spalten: `Akte`, `SB`, `Kurzbez.`, `Gegner`
+- Header in Zeile 2 (Zeile 1 = Titel)
+- Wird automatisch gemergt bei erneutem Upload
 
-### Muster
+### 3. Tagespost verarbeiten
+- OCR-PDF hochladen (mit "Trennseite"-Markern)
+- "Verarbeitung starten" klicken
+- Automatische Sortierung nach Sachbearbeiter
 
-- **Stamm**: `\d{1,5}/\d{2}` (z.B. "151/25")
-- **Vollform**: `\d{1,5}/\d{2}(SQ|M|MQ|TS|FÜ|CV)` (z.B. "151/25M")
+### 4. Ausgabe nutzen
+- **Option A**: ZIP-Dateien downloaden
+- **Option B**: Per Email an RENOs versenden (SMTP konfigurieren)
 
-### Prioritäten
+## 🔧 Technischer Stack
 
-1. **"Ihr Zeichen" / "Unser Zeichen" Felder** (höchste Priorität)
-2. **Vollmuster im Text**
-3. **Stämme mit Registertreffer**
-4. **Fallback**: "nicht-zugeordnet"
+- **Frontend**: Streamlit
+- **PDF-Verarbeitung**: PyMuPDF (fitz)
+- **KI-APIs**: OpenAI, Anthropic Claude, Google Gemini
+- **Excel**: pandas + openpyxl
+- **Verschlüsselung**: cryptography (Fernet)
+- **Email**: smtplib + email.mime
 
-### Kürzel-Normalisierung
+## 📧 RENO-Zuordnungen
 
-- `MQ` → `M` (RAin Marquardsen)
-- `FU` → `FÜ` (Dr. Fürsen)
+| Sachbearbeiter | Verfügbare RENOs |
+|---------------|------------------|
+| SQ (Meier) | Timo Litzenroth, Korinna Rückborn, Marlena Tönnjes, Ulrike Göser, Nadine Pleißner |
+| TS (Meyer) | Mandy Herberg, Korinna Rückborn |
+| M (Marquardsen) | Timo Litzenroth, Korinna Rückborn |
+| CV (Ostertun) | Bettina Akkoc, Korinna Rückborn |
+| FÜ (Fürsen) | Korinna Rückborn |
+| nicht-zugeordnet | Alle RENOs |
 
-## 👥 Sachbearbeiter
+## 🔒 Sicherheit
 
-- **SQ**: Rechtsanwalt und Notar Sven-Bryde Meier
-- **TS**: Rechtsanwältin Tamara Meyer
-- **M**: Rechtsanwältin Ann-Kathrin Marquardsen
-- **FÜ**: Rechtsanwalt Dr. Fürsen
-- **CV**: Rechtsanwalt Christian Ostertun
-
-## 📊 Excel-Struktur
-
-| Spalte | Inhalt |
-|--------|--------|
-| A | Eingangsdatum |
-| B | Internes Aktenzeichen |
-| C | Externes Aktenzeichen |
-| D | Mandant |
-| E | Gegner / Absender |
-| F | Absendertyp |
-| G | Sachbearbeiter |
-| H | Fristdatum |
-| I | Fristtyp |
-| J | Fristquelle |
-| K | Textauszug |
-| L | PDF-Datei |
-| M | Status |
-
-## 🔧 Technische Details
-
-### Module
-
-- `streamlit_app.py`: Haupt-UI
-- `pdf_processor.py`: PDF-Segmentierung und Trennblatt-Erkennung
-- `aktenzeichen_erkennung.py`: Aktenzeichen-Extraktion mit Regex
-- `document_analyzer.py`: OpenAI-Integration für Dokumentenanalyse
-- `excel_generator.py`: Excel-Erstellung mit Formatierung
-
-### Dependencies
-
-- `streamlit`: Web-Interface
-- `PyMuPDF`: PDF-Verarbeitung
-- `pandas`: Datenverarbeitung
-- `openpyxl`: Excel-Erstellung
-- `openai`: KI-Dokumentenanalyse
-
-## 🐛 Troubleshooting
-
-**Fehler beim PDF-Upload:**
-- Stellen Sie sicher, dass das PDF OCR-verarbeitet ist
-- Prüfen Sie, ob T-Seiten korrekt eingefügt wurden
-
-**Keine Aktenzeichen erkannt:**
-- Überprüfen Sie das Aktenregister-Format
-- Prüfen Sie, ob Aktenzeichen im erwarteten Format vorliegen
-
-**OpenAI-Fehler:**
-- Validieren Sie Ihren API Key
-- Prüfen Sie Ihr OpenAI-Guthaben
+- ✅ TLS-verschlüsselte Email-Übertragung
+- ✅ Fernet-Verschlüsselung für API-Keys
+- ✅ Sichere Dateiberechtigungen (chmod 0o600)
+- ✅ Session-basierte Zustandsverwaltung
+- ✅ Input-Validierung und Error-Handling
 
 ## 📄 Lizenz
 
-MIT License - siehe [LICENSE](LICENSE)
+Proprietäre Software für Radtke, Heigener & Meier Rechtsanwälte
 
-## 🤝 Support
+---
 
-Bei Fragen oder Problemen öffnen Sie bitte ein Issue im Repository.
+**Entwickelt mit Claude Code** | © 2024 RHM Rechtsanwälte

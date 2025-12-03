@@ -1,8 +1,8 @@
-streamlit
-PyMuPDF
-pandas
-openpyxl
-openai
-anthropic
-google-generativeai
-cryptography
+streamlit>=1.28.0
+PyMuPDF>=1.23.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+openai>=1.0.0
+anthropic>=0.7.0
+google-generativeai>=0.3.0
+cryptography>=41.0.0
