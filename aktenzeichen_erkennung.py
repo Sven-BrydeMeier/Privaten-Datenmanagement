@@ -23,39 +23,64 @@ class AktenzeichenErkenner:
         'M': 'M'
     }
 
-    # Sachbearbeiter-Namen zu Kürzel Mapping (alle Variationen)
+    # Sachbearbeiter-Namen zu Kürzel Mapping (alle Variationen inkl. OCR-Fehler)
     SACHBEARBEITER_NAMEN = {
         # SQ = Sven-Bryde Meier (Rechtsanwalt und Notar)
+        # Alle OCR-Variationen: Bindestriche, Unterstriche, Leerzeichen
         'meier': 'SQ',
         'sven-bryde': 'SQ',
+        'sven_bryde': 'SQ',  # OCR: Unterstrich statt Bindestrich
+        'sven bryde': 'SQ',  # OCR: Leerzeichen statt Bindestrich
         'sven': 'SQ',
         'sven-bryde meier': 'SQ',
+        'sven-bryde_meier': 'SQ',  # OCR: Unterstrich statt Leerzeichen
+        'sven_bryde meier': 'SQ',  # OCR: Unterstrich im Namen
+        'sven_bryde_meier': 'SQ',  # OCR: Nur Unterstriche
+        'sven bryde-meier': 'SQ',  # OCR: Andere Bindestrich-Position
+        'sven bryde meier': 'SQ',  # OCR: Nur Leerzeichen
         'sven meier': 'SQ',
 
         # TS = Tamara Meyer (Rechtsanwältin)
         'meyer': 'TS',
         'tamara': 'TS',
         'tamara meyer': 'TS',
+        'tamara_meyer': 'TS',  # OCR: Unterstrich
 
         # M/MQ = Ann-Kathrin Marquardsen (Rechtsanwältin)
         'marquardsen': 'M',
         'ann-kathrin': 'M',
+        'ann_kathrin': 'M',  # OCR: Unterstrich statt Bindestrich
+        'ann kathrin': 'M',  # OCR: Leerzeichen statt Bindestrich
         'ann-kathrin marquardsen': 'M',
+        'ann-kathrin_marquardsen': 'M',  # OCR: Unterstrich
+        'ann_kathrin marquardsen': 'M',  # OCR: Unterstrich im Namen
+        'ann_kathrin_marquardsen': 'M',  # OCR: Nur Unterstriche
+        'ann kathrin marquardsen': 'M',  # OCR: Nur Leerzeichen
 
         # FÜ = Dr. Ernst Joachim Fürsen (Rechtsanwalt, Notar a.D.)
         'fürsen': 'FÜ',
         'fuersen': 'FÜ',
         'ernst joachim': 'FÜ',
         'ernst-joachim': 'FÜ',
+        'ernst_joachim': 'FÜ',  # OCR: Unterstrich
         'ernst joachim fürsen': 'FÜ',
         'ernst-joachim fürsen': 'FÜ',
+        'ernst_joachim fürsen': 'FÜ',  # OCR: Unterstrich
+        'ernst joachim_fürsen': 'FÜ',  # OCR: Unterstrich
+        'ernst-joachim_fürsen': 'FÜ',  # OCR: Unterstrich
+        'ernst_joachim_fürsen': 'FÜ',  # OCR: Nur Unterstriche
         'ernst joachim fuersen': 'FÜ',
         'ernst-joachim fuersen': 'FÜ',
+        'ernst_joachim fuersen': 'FÜ',  # OCR: Unterstrich
+        'ernst joachim_fuersen': 'FÜ',  # OCR: Unterstrich
+        'ernst-joachim_fuersen': 'FÜ',  # OCR: Unterstrich
+        'ernst_joachim_fuersen': 'FÜ',  # OCR: Nur Unterstriche
 
         # CV = Christian Ostertun (Rechtsanwalt)
         'ostertun': 'CV',
         'christian': 'CV',
         'christian ostertun': 'CV',
+        'christian_ostertun': 'CV',  # OCR: Unterstrich
         'vollbrecht': 'CV'  # Alternative Name
     }
 
