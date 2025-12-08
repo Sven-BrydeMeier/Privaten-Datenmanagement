@@ -17,8 +17,138 @@ from email_sender import EmailSender
 st.set_page_config(
     page_title="RHM Posteingangsverarbeitung",
     page_icon="📄",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="auto"  # Auto-collapse auf Mobile
 )
+
+# Responsive CSS für Mobile, Tablet, Desktop
+st.markdown("""
+<style>
+    /* Mobile-First: Basis-Styles */
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    /* Buttons mobil-freundlich */
+    .stDownloadButton button {
+        width: 100%;
+        padding: 0.5rem 1rem;
+        font-size: 0.95rem;
+    }
+
+    /* Upload-Bereiche optimiert */
+    .uploadedFile {
+        font-size: 0.9rem;
+    }
+
+    /* Metriken responsive */
+    [data-testid="stMetricValue"] {
+        font-size: 1.2rem;
+    }
+
+    /* Mobile: Spalten stacken */
+    @media (max-width: 640px) {
+        .row-widget.stHorizontalBlock {
+            flex-direction: column !important;
+        }
+
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+
+        /* Title auf Mobile kleiner */
+        h1 {
+            font-size: 1.5rem !important;
+        }
+
+        h2 {
+            font-size: 1.3rem !important;
+        }
+
+        h3 {
+            font-size: 1.1rem !important;
+        }
+    }
+
+    /* Tablet: ab 641px */
+    @media (min-width: 641px) and (max-width: 1023px) {
+        .main .block-container {
+            padding-left: 1.5rem;
+            padding-right: 1.5rem;
+        }
+    }
+
+    /* Tablet: ab 768px */
+    @media (min-width: 768px) {
+        .main .block-container {
+            padding-left: 2rem;
+            padding-right: 2rem;
+        }
+
+        .stDownloadButton button {
+            font-size: 1rem;
+        }
+    }
+
+    /* Desktop: ab 1024px */
+    @media (min-width: 1024px) {
+        .main .block-container {
+            padding-left: 3rem;
+            padding-right: 3rem;
+            max-width: 1400px;
+        }
+    }
+
+    /* Sidebar mobile optimiert */
+    @media (max-width: 768px) {
+        [data-testid="stSidebar"] {
+            min-width: 100%;
+        }
+
+        /* Sidebar-Button größer auf Mobile */
+        [data-testid="collapsedControl"] {
+            width: 50px !important;
+            height: 50px !important;
+        }
+    }
+
+    /* Touch-friendly spacing */
+    @media (pointer: coarse) {
+        button {
+            min-height: 44px;
+            padding: 0.75rem 1rem;
+        }
+
+        input, select, textarea {
+            min-height: 44px;
+            font-size: 16px; /* Verhindert Auto-Zoom auf iOS */
+        }
+
+        /* Expander touch-friendly */
+        .streamlit-expanderHeader {
+            min-height: 44px;
+            padding: 0.75rem !important;
+        }
+    }
+
+    /* Optimierte Scroll-Bereiche */
+    @media (max-width: 640px) {
+        .stExpander {
+            margin-bottom: 1rem;
+        }
+
+        /* File uploader mobil optimiert */
+        [data-testid="stFileUploader"] {
+            margin-bottom: 1rem;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 st.title("📄 RHM | Automatisierter Posteingang")
 st.markdown("---")
@@ -149,8 +279,8 @@ st.sidebar.info("""
 - CV: Rechtsanwalt Christian Ostertun
 """)
 
-# Haupt-Upload-Bereich
-col1, col2 = st.columns(2)
+# Haupt-Upload-Bereich (responsive: 1 Spalte auf Mobile, 2 auf Desktop)
+col1, col2 = st.columns([1, 1], gap="medium")
 
 with col1:
     st.subheader("📄 Tagespost-PDF hochladen")
@@ -384,28 +514,33 @@ if (st.session_state.get('verarbeitung_abgeschlossen', False) and
         st.markdown("---")
         st.success("🎉 Verarbeitung erfolgreich abgeschlossen!")
 
-        # Statistik
+        # Statistik (responsive: max 3 Spalten für bessere Mobile-Darstellung)
         st.subheader("📊 Verteilung")
-        cols = st.columns(6)
-        for i, (sb, count) in enumerate(ergebnisse['sachbearbeiter_stats'].items()):
-            if count > 0:
-                cols[i].metric(sb, count)
+        stats_items = [(sb, count) for sb, count in ergebnisse['sachbearbeiter_stats'].items() if count > 0]
+
+        # Dynamische Spaltenanzahl: max 3 Spalten für Mobile-Kompatibilität
+        num_stats = len(stats_items)
+        num_cols = min(3, num_stats)
+
+        if num_stats > 0:
+            cols = st.columns(num_cols)
+            for i, (sb, count) in enumerate(stats_items):
+                with cols[i % num_cols]:
+                    st.metric(sb, count)
 
         # Downloads
         st.subheader("📥 Downloads")
 
-        # ZIP-Dateien - Alle Buttons auf einmal rendern (kein col_idx tracking)
-        # Erstelle Liste aller ZIP-Dateien
+        # ZIP-Dateien - Responsive Layout (2 Spalten für bessere Mobile-UX)
         zip_liste = list(ergebnisse['zip_dateien'].items())
 
-        # Zeige alle Download-Buttons in 3 Spalten
-        num_cols = 3
-        cols = st.columns(num_cols)
+        # 2 Spalten statt 3 für bessere Mobile-Darstellung
+        num_cols = 2
+        cols = st.columns(num_cols, gap="small")
 
         for idx, (sb, zip_bytes) in enumerate(zip_liste):
             col_index = idx % num_cols
             with cols[col_index]:
-                # Verwende usecontainer_width für bessere Darstellung
                 st.download_button(
                     label=f"📦 {sb}.zip",
                     data=zip_bytes,
@@ -434,8 +569,8 @@ if (st.session_state.get('verarbeitung_abgeschlossen', False) and
         with st.expander("📮 ZIP-Dateien per Email versenden", expanded=False):
             st.info("📝 Wählen Sie für jeden Sachbearbeiter die RENOs aus, die die Dokumente per Email erhalten sollen.")
 
-            # SMTP-Konfiguration
-            col_smtp1, col_smtp2 = st.columns(2)
+            # SMTP-Konfiguration (responsive: stacked auf Mobile)
+            col_smtp1, col_smtp2 = st.columns([1, 1], gap="medium")
             with col_smtp1:
                 smtp_server = st.text_input(
                     "SMTP Server",
