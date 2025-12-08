@@ -14,6 +14,9 @@ from excel_generator import ExcelGenerator
 from storage import PersistentStorage
 from email_sender import EmailSender
 
+# Versionsnummer: Zähler.JJ.MM.TT
+VERSION = "1.24.12.08"  # Version 1, 08. Dezember 2024
+
 st.set_page_config(
     page_title="RHM Posteingangsverarbeitung",
     page_icon="📄",
@@ -106,14 +109,46 @@ st.markdown("""
 
     /* Sidebar mobile optimiert */
     @media (max-width: 768px) {
-        [data-testid="stSidebar"] {
-            min-width: 100%;
+        /* Sidebar komplett ausblenden wenn collapsed */
+        [data-testid="stSidebar"][aria-expanded="false"] {
+            margin-left: -100%;
+            transform: translateX(-100%);
+            transition: transform 0.3s ease-in-out;
         }
 
-        /* Sidebar-Button größer auf Mobile */
+        [data-testid="stSidebar"][aria-expanded="true"] {
+            margin-left: 0;
+            transform: translateX(0);
+            transition: transform 0.3s ease-in-out;
+        }
+
+        [data-testid="stSidebar"] {
+            min-width: 100%;
+            max-width: 100%;
+            width: 100%;
+            z-index: 999999;
+        }
+
+        /* Sidebar-Button größer und besser sichtbar auf Mobile */
         [data-testid="collapsedControl"] {
             width: 50px !important;
             height: 50px !important;
+            z-index: 999999;
+            position: fixed !important;
+            top: 10px !important;
+            left: 10px !important;
+        }
+
+        /* Overlay wenn Sidebar offen */
+        [data-testid="stSidebar"][aria-expanded="true"]::before {
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: -1;
         }
     }
 
@@ -151,6 +186,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📄 RHM | Automatisierter Posteingang")
+st.caption(f"Version {VERSION}")
 st.markdown("---")
 
 # Initialisiere Persistent Storage
