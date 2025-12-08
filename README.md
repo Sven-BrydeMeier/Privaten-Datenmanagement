@@ -64,7 +64,36 @@ Eine Streamlit-Anwendung zur automatischen Verarbeitung, Sortierung und Verteilu
 
 ### Konfiguration
 
-**API-Keys**: Keine Streamlit Secrets erforderlich! Die App speichert API-Keys verschlüsselt im User-Verzeichnis.
+#### **API-Keys** (3 Optionen):
+
+1. **Streamlit Secrets** (empfohlen für Streamlit Cloud):
+   - In Streamlit Cloud: Settings → Secrets → Add Secret
+   - Unterstützte Formate:
+     ```toml
+     # Option 1: Verschachtelt
+     [openai]
+     api_key = "sk-..."
+
+     [claude]
+     api_key = "sk-ant-..."
+
+     [gemini]
+     api_key = "AIza..."
+
+     # Option 2: Flach
+     OPENAI_API_KEY = "sk-..."
+     ANTHROPIC_API_KEY = "sk-ant-..."
+     GOOGLE_API_KEY = "AIza..."
+     ```
+
+2. **Persistente Speicherung** (automatisch):
+   - Keys werden verschlüsselt im User-Verzeichnis gespeichert
+   - Überleben App-Neustarts
+
+3. **Manuelle Eingabe** (Session-basiert):
+   - Keys nur für aktuelle Session gültig
+
+**Priorität**: Streamlit Secrets → Persistente Speicherung → Manuelle Eingabe
 
 **Aktenregister**: Beim ersten Start hochladen, danach persistent gespeichert und automatisch gemergt.
 

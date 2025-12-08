@@ -198,11 +198,42 @@ storage = st.session_state.storage
 # Lade gespeicherte API Keys beim ersten Laden
 if 'api_keys' not in st.session_state:
     saved_keys = storage.load_api_keys()
+
+    # Initialisiere mit gespeicherten Keys oder leeren Strings
     st.session_state.api_keys = {
         'openai': saved_keys.get('openai', ''),
         'claude': saved_keys.get('claude', ''),
         'gemini': saved_keys.get('gemini', '')
     }
+
+    # Versuche API-Keys aus Streamlit Secrets zu laden (für Streamlit Cloud)
+    try:
+        if 'openai' in st.secrets:
+            # Secrets vorhanden - verwende als Fallback
+            if not st.session_state.api_keys['openai']:
+                st.session_state.api_keys['openai'] = st.secrets['openai'].get('api_key', '')
+
+        if 'claude' in st.secrets:
+            if not st.session_state.api_keys['claude']:
+                st.session_state.api_keys['claude'] = st.secrets['claude'].get('api_key', '')
+
+        if 'gemini' in st.secrets:
+            if not st.session_state.api_keys['gemini']:
+                st.session_state.api_keys['gemini'] = st.secrets['gemini'].get('api_key', '')
+
+        # Alternative: Flache Secrets-Struktur
+        if 'OPENAI_API_KEY' in st.secrets and not st.session_state.api_keys['openai']:
+            st.session_state.api_keys['openai'] = st.secrets['OPENAI_API_KEY']
+
+        if 'ANTHROPIC_API_KEY' in st.secrets and not st.session_state.api_keys['claude']:
+            st.session_state.api_keys['claude'] = st.secrets['ANTHROPIC_API_KEY']
+
+        if 'GOOGLE_API_KEY' in st.secrets and not st.session_state.api_keys['gemini']:
+            st.session_state.api_keys['gemini'] = st.secrets['GOOGLE_API_KEY']
+
+    except Exception as e:
+        # Secrets nicht verfügbar (z.B. lokale Entwicklung)
+        pass
 if 'api_provider' not in st.session_state:
     st.session_state.api_provider = 'OpenAI (ChatGPT)'
 
@@ -227,9 +258,35 @@ provider_key_map = {
 }
 current_provider_key = provider_key_map[api_provider]
 
-# Zeige Status: Gespeicherter Key vorhanden?
+# Zeige Status: Key-Quelle anzeigen
 has_saved_key = storage.has_api_key(current_provider_key)
-if has_saved_key:
+stored_key = st.session_state.api_keys.get(current_provider_key, '')
+
+# Prüfe ob Key aus Streamlit Secrets kommt
+key_from_secrets = False
+try:
+    secret_key_names = {
+        'openai': ['openai', 'OPENAI_API_KEY'],
+        'claude': ['claude', 'ANTHROPIC_API_KEY'],
+        'gemini': ['gemini', 'GOOGLE_API_KEY']
+    }
+
+    for secret_name in secret_key_names.get(current_provider_key, []):
+        if secret_name in st.secrets:
+            if isinstance(st.secrets[secret_name], dict):
+                if stored_key == st.secrets[secret_name].get('api_key', ''):
+                    key_from_secrets = True
+                    break
+            elif stored_key == st.secrets[secret_name]:
+                key_from_secrets = True
+                break
+except:
+    pass
+
+# Zeige Status-Meldung
+if key_from_secrets:
+    st.sidebar.info(f"🔐 {api_provider} Key aus Streamlit Secrets geladen")
+elif has_saved_key:
     timestamp = storage.get_api_key_timestamp(current_provider_key)
     if timestamp:
         # Convert ISO to German format
