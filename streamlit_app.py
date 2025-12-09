@@ -14,8 +14,8 @@ from excel_generator import ExcelGenerator
 from storage import PersistentStorage
 from email_sender import EmailSender
 
-# Versionsnummer: Zähler.JJ.MM.TT
-VERSION = "1.24.12.08"  # Version 1, 08. Dezember 2024
+# Versionsnummer: Zähler.JJ.MM.TT.HH.MM
+VERSION = "2.25.12.09.17.00"  # Version 2, 09. Dezember 2025, 17:00 Uhr
 
 st.set_page_config(
     page_title="RHM Posteingangsverarbeitung",
