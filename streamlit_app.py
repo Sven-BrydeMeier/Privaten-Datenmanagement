@@ -284,6 +284,73 @@ try:
 except:
     pass
 
+# 🟢 GRÜNES LÄMPCHEN: Zeige prominente API-Key-Status-Anzeige ganz oben
+st.sidebar.markdown("---")
+if key_from_secrets and stored_key:
+    # GRÜNES LÄMPCHEN: Key aus Streamlit Secrets
+    st.sidebar.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #00c853 0%, #00e676 100%);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,200,83,0.4);
+            margin-bottom: 20px;
+        ">
+            <div style="font-size: 48px; margin-bottom: 10px;">🟢</div>
+            <div style="color: white; font-weight: bold; font-size: 18px; margin-bottom: 5px;">
+                API KEY AKTIV
+            </div>
+            <div style="color: #e8f5e9; font-size: 14px; margin-bottom: 10px;">
+                🔐 Streamlit Cloud Secrets
+            </div>
+            <div style="background: rgba(255,255,255,0.2); padding: 8px; border-radius: 8px; font-family: monospace; font-size: 12px; color: white;">
+                """ + (stored_key[:7] + "..." + stored_key[-4:] if len(stored_key) > 15 else "***") + """
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+elif stored_key:
+    # GELBES LÄMPCHEN: Key gespeichert
+    st.sidebar.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #ffa726 0%, #ffb74d 100%);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(255,167,38,0.4);
+            margin-bottom: 20px;
+        ">
+            <div style="font-size: 48px; margin-bottom: 10px;">🟡</div>
+            <div style="color: white; font-weight: bold; font-size: 18px; margin-bottom: 5px;">
+                API KEY GESPEICHERT
+            </div>
+            <div style="color: #fff3e0; font-size: 14px;">
+                💾 Lokal gespeichert
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+else:
+    # ROTES LÄMPCHEN: Kein Key
+    st.sidebar.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #ef5350 0%, #e57373 100%);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(239,83,80,0.4);
+            margin-bottom: 20px;
+        ">
+            <div style="font-size: 48px; margin-bottom: 10px;">🔴</div>
+            <div style="color: white; font-weight: bold; font-size: 18px; margin-bottom: 5px;">
+                KEIN API KEY
+            </div>
+            <div style="color: #ffebee; font-size: 14px;">
+                ⚠️ Bitte Key eingeben
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+st.sidebar.markdown("---")
+
 # Zeige Status-Meldung und API-Key Eingabefeld
 if key_from_secrets:
     # Key aus Streamlit Secrets - Zeige prominente Meldung
