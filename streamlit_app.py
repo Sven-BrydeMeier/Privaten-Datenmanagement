@@ -197,43 +197,44 @@ storage = st.session_state.storage
 
 # Lade gespeicherte API Keys beim ersten Laden
 if 'api_keys' not in st.session_state:
-    saved_keys = storage.load_api_keys()
-
-    # Initialisiere mit gespeicherten Keys oder leeren Strings
+    # Initialisiere mit leeren Strings
     st.session_state.api_keys = {
-        'openai': saved_keys.get('openai', ''),
-        'claude': saved_keys.get('claude', ''),
-        'gemini': saved_keys.get('gemini', '')
+        'openai': '',
+        'claude': '',
+        'gemini': ''
     }
 
-    # Versuche API-Keys aus Streamlit Secrets zu laden (für Streamlit Cloud)
+    # PRIORITÄT 1: Streamlit Secrets (höchste Priorität für Streamlit Cloud)
     try:
+        # Option 1: Verschachtelte Struktur
         if 'openai' in st.secrets:
-            # Secrets vorhanden - verwende als Fallback
-            if not st.session_state.api_keys['openai']:
-                st.session_state.api_keys['openai'] = st.secrets['openai'].get('api_key', '')
+            st.session_state.api_keys['openai'] = st.secrets['openai'].get('api_key', '')
 
         if 'claude' in st.secrets:
-            if not st.session_state.api_keys['claude']:
-                st.session_state.api_keys['claude'] = st.secrets['claude'].get('api_key', '')
+            st.session_state.api_keys['claude'] = st.secrets['claude'].get('api_key', '')
 
         if 'gemini' in st.secrets:
-            if not st.session_state.api_keys['gemini']:
-                st.session_state.api_keys['gemini'] = st.secrets['gemini'].get('api_key', '')
+            st.session_state.api_keys['gemini'] = st.secrets['gemini'].get('api_key', '')
 
-        # Alternative: Flache Secrets-Struktur
-        if 'OPENAI_API_KEY' in st.secrets and not st.session_state.api_keys['openai']:
+        # Option 2: Flache Struktur
+        if 'OPENAI_API_KEY' in st.secrets:
             st.session_state.api_keys['openai'] = st.secrets['OPENAI_API_KEY']
 
-        if 'ANTHROPIC_API_KEY' in st.secrets and not st.session_state.api_keys['claude']:
+        if 'ANTHROPIC_API_KEY' in st.secrets:
             st.session_state.api_keys['claude'] = st.secrets['ANTHROPIC_API_KEY']
 
-        if 'GOOGLE_API_KEY' in st.secrets and not st.session_state.api_keys['gemini']:
+        if 'GOOGLE_API_KEY' in st.secrets:
             st.session_state.api_keys['gemini'] = st.secrets['GOOGLE_API_KEY']
 
     except Exception as e:
         # Secrets nicht verfügbar (z.B. lokale Entwicklung)
         pass
+
+    # PRIORITÄT 2: Persistente Speicherung (nur als Fallback wenn keine Secrets)
+    saved_keys = storage.load_api_keys()
+    for provider in ['openai', 'claude', 'gemini']:
+        if not st.session_state.api_keys[provider] and saved_keys.get(provider):
+            st.session_state.api_keys[provider] = saved_keys[provider]
 if 'api_provider' not in st.session_state:
     st.session_state.api_provider = 'OpenAI (ChatGPT)'
 
@@ -283,13 +284,30 @@ try:
 except:
     pass
 
-# Zeige Status-Meldung
+# Zeige Status-Meldung und API-Key Eingabefeld
 if key_from_secrets:
-    st.sidebar.info(f"🔐 {api_provider} Key aus Streamlit Secrets geladen")
+    # Key aus Streamlit Secrets - Zeige prominente Meldung
+    st.sidebar.success(f"✅ **{api_provider} Key aktiv**")
+    st.sidebar.info(f"🔐 **Quelle:** Streamlit Secrets (streamlit.io)")
+
+    # Zeige maskierten Key (nur zur Bestätigung)
+    masked_key = stored_key[:7] + "..." + stored_key[-4:] if len(stored_key) > 15 else "***"
+    st.sidebar.code(masked_key)
+
+    # Eingabefeld deaktiviert mit Hinweis
+    st.sidebar.text_input(
+        f"{api_provider} API Key (schreibgeschützt)",
+        value="Verwendet Key aus Streamlit Secrets",
+        type="default",
+        disabled=True,
+        help="Key wird aus Streamlit Cloud Secrets geladen und kann hier nicht geändert werden",
+        key=f"api_key_input_{current_provider_key}_disabled"
+    )
+
 elif has_saved_key:
+    # Key aus persistenter Speicherung
     timestamp = storage.get_api_key_timestamp(current_provider_key)
     if timestamp:
-        # Convert ISO to German format
         from datetime import datetime
         dt = datetime.fromisoformat(timestamp)
         formatted = dt.strftime('%d.%m.%Y %H:%M')
@@ -297,15 +315,28 @@ elif has_saved_key:
     else:
         st.sidebar.success(f"💾 Gespeicherter {api_provider} Key gefunden")
 
-# Zeige gespeicherten Key als Placeholder
-stored_key = st.session_state.api_keys.get(current_provider_key, '')
-api_key_input = st.sidebar.text_input(
-    f"{api_provider} API Key" + (" (neu eingeben zum Ändern)" if has_saved_key else ""),
-    value=stored_key,
-    type="password",
-    help=f"Neuer Key überschreibt gespeicherten Key",
-    key=f"api_key_input_{current_provider_key}"
-)
+    # Normales Eingabefeld
+    stored_key = st.session_state.api_keys.get(current_provider_key, '')
+    api_key_input = st.sidebar.text_input(
+        f"{api_provider} API Key (neu eingeben zum Ändern)",
+        value=stored_key,
+        type="password",
+        help=f"Neuer Key überschreibt gespeicherten Key",
+        key=f"api_key_input_{current_provider_key}"
+    )
+else:
+    # Kein Key vorhanden - Bitte um Eingabe
+    st.sidebar.warning(f"⚠️ Bitte {api_provider} API Key eingeben")
+
+    # Normales Eingabefeld
+    stored_key = st.session_state.api_keys.get(current_provider_key, '')
+    api_key_input = st.sidebar.text_input(
+        f"{api_provider} API Key",
+        value=stored_key,
+        type="password",
+        help=f"Geben Sie Ihren {api_provider} API Key ein",
+        key=f"api_key_input_{current_provider_key}"
+    )
 
 # Speichere Key in Session State und persistentem Storage
 if api_key_input and api_key_input != stored_key:
