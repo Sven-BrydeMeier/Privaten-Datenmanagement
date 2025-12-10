@@ -12,9 +12,13 @@ from database.models import User
 from config.settings import get_settings, save_settings, Settings
 from services.ai_service import get_ai_service
 from services.encryption import EncryptionService
+from utils.components import render_sidebar_cart
 
 st.set_page_config(page_title="Einstellungen", page_icon="⚙️", layout="wide")
 init_db()
+
+# Sidebar mit Aktentasche
+render_sidebar_cart()
 
 user_id = get_current_user_id()
 settings = get_settings()

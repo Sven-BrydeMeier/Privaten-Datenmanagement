@@ -12,9 +12,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database.db import init_db, get_db, get_current_user_id
 from database.models import CalendarEvent, EventType, Contact, Document
 from utils.helpers import format_date, calculate_days_until, is_deadline_urgent
+from utils.components import render_sidebar_cart
 
 st.set_page_config(page_title="Kalender", page_icon="📅", layout="wide")
 init_db()
+
+# Sidebar mit Aktentasche
+render_sidebar_cart()
 
 user_id = get_current_user_id()
 

@@ -16,9 +16,13 @@ from services.encryption import get_encryption_service
 from services.document_classifier import get_classifier
 from services.search_service import get_search_service
 from utils.helpers import format_currency, format_date, generate_share_link, truncate_text
+from utils.components import render_sidebar_cart, add_to_cart
 
 st.set_page_config(page_title="Dokumente", page_icon="📁", layout="wide")
 init_db()
+
+# Sidebar mit Aktentasche
+render_sidebar_cart()
 
 user_id = get_current_user_id()
 

@@ -5,29 +5,34 @@ import streamlit as st
 from pathlib import Path
 import sys
 import io
+import json
 from datetime import datetime, timedelta
 import uuid
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.db import init_db, get_db, get_current_user_id
-from database.models import Receipt, ReceiptGroup, ReceiptGroupMember, Document
+from database.models import Receipt, ReceiptGroup, ReceiptGroupMember, Document, InvoiceStatus
 from config.settings import RECEIPT_CATEGORIES
 from services.ocr import get_ocr_service
 from utils.helpers import format_currency, format_date, send_email_notification
+from utils.components import render_sidebar_cart, apply_custom_css
 
 st.set_page_config(page_title="Finanzen", page_icon="💰", layout="wide")
 init_db()
+apply_custom_css()
+render_sidebar_cart()
 
 user_id = get_current_user_id()
 
-st.title("💰 Finanzen & Bon-Teilen")
+st.title("💰 Finanzen & Ausgaben")
 
 # Tabs
-tab_receipts, tab_groups, tab_overview = st.tabs([
+tab_receipts, tab_groups, tab_overview, tab_invoices = st.tabs([
     "🧾 Bons erfassen",
     "👥 Gruppen & Teilen",
-    "📊 Übersicht"
+    "📊 Ausgaben-Übersicht",
+    "📄 Rechnungen"
 ])
 
 
@@ -40,11 +45,13 @@ with tab_receipts:
         # Bon hochladen oder manuell eingeben
         input_method = st.radio("Eingabemethode", ["📷 Foto/Scan", "✏️ Manuell"], horizontal=True)
 
+        receipt_data = None
+        detected_items = []
+
         if input_method == "📷 Foto/Scan":
             bon_file = st.file_uploader("Bon-Foto", type=['jpg', 'jpeg', 'png', 'pdf'])
 
             if bon_file:
-                # OCR
                 ocr = get_ocr_service()
                 file_data = bon_file.read()
 
@@ -58,25 +65,90 @@ with tab_receipts:
                         st.image(image, width=300)
                         text, _ = ocr.extract_text_from_image(image)
 
-                    # Metadaten extrahieren
-                    metadata = ocr.extract_metadata(text)
+                    # Erweiterte Bon-Analyse
+                    receipt_data = ocr.extract_receipt_data(text)
 
-                # Vorausgefüllte Felder
-                st.text_area("Erkannter Text", text, height=100, disabled=True)
+                # OCR-Text anzeigen
+                with st.expander("Erkannter Text"):
+                    st.text(text)
 
-                merchant = st.text_input("Händler", value="")
-                bon_date = st.date_input("Datum", value=datetime.now())
+                # Erkannte Daten anzeigen
+                st.markdown("### Erkannte Daten")
 
-                # Betrag aus OCR oder manuell
-                detected_amount = metadata.get('amounts', [0])[0] if metadata.get('amounts') else 0
-                amount = st.number_input("Betrag (€)", value=float(detected_amount), min_value=0.0, step=0.01)
+                merchant = st.text_input("Händler", value=receipt_data.get('merchant') or "")
+                bon_date = st.date_input(
+                    "Datum",
+                    value=receipt_data.get('date') or datetime.now()
+                )
+                amount = st.number_input(
+                    "Gesamtbetrag (€)",
+                    value=float(receipt_data.get('total') or 0.0),
+                    min_value=0.0,
+                    step=0.01
+                )
+
+                # Vorgeschlagene Kategorie
+                suggested_cat = receipt_data.get('suggested_category', 'Sonstiges')
+                cat_index = RECEIPT_CATEGORIES.index(suggested_cat) if suggested_cat in RECEIPT_CATEGORIES else 0
+                category = st.selectbox("Kategorie", RECEIPT_CATEGORIES, index=cat_index)
+
+                # Erkannte Positionen
+                if receipt_data.get('items'):
+                    st.markdown("### 📋 Erkannte Positionen")
+                    detected_items = receipt_data['items']
+
+                    for i, item in enumerate(detected_items):
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        with col1:
+                            detected_items[i]['name'] = st.text_input(
+                                f"Artikel {i+1}",
+                                value=item['name'],
+                                key=f"item_name_{i}"
+                            )
+                        with col2:
+                            detected_items[i]['price'] = st.number_input(
+                                "Preis",
+                                value=float(item['price']),
+                                key=f"item_price_{i}",
+                                min_value=0.0
+                            )
+                        with col3:
+                            detected_items[i]['quantity'] = st.number_input(
+                                "Menge",
+                                value=int(item.get('quantity', 1)),
+                                key=f"item_qty_{i}",
+                                min_value=1
+                            )
+
+                    # Summe der Positionen
+                    items_total = sum(item['price'] * item.get('quantity', 1) for item in detected_items)
+                    st.caption(f"Summe Positionen: {format_currency(items_total)}")
+
+                # Zahlungsmethode
+                payment = receipt_data.get('payment_method')
+                if payment:
+                    st.caption(f"💳 Zahlungsmethode: {payment}")
 
         else:
+            # Manuelle Eingabe
             merchant = st.text_input("Händler")
             bon_date = st.date_input("Datum")
             amount = st.number_input("Betrag (€)", min_value=0.0, step=0.01)
+            category = st.selectbox("Kategorie", RECEIPT_CATEGORIES)
 
-        category = st.selectbox("Kategorie", RECEIPT_CATEGORIES)
+            # Manuelle Positionen
+            st.markdown("### Positionen hinzufügen (optional)")
+            num_items = st.number_input("Anzahl Positionen", min_value=0, max_value=20, value=0)
+
+            for i in range(num_items):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    name = st.text_input(f"Artikel {i+1}", key=f"man_item_{i}")
+                with col2:
+                    price = st.number_input("Preis", key=f"man_price_{i}", min_value=0.0)
+                if name and price > 0:
+                    detected_items.append({'name': name, 'price': price, 'quantity': 1})
+
         notes = st.text_input("Notizen (optional)")
 
         # Gruppe zuweisen
@@ -93,10 +165,8 @@ with tab_receipts:
                 format_func=lambda x: group_options[x]
             )
 
-            # Zahler (wenn Gruppe)
             paid_by = None
             if selected_group:
-                group = session.query(ReceiptGroup).get(selected_group)
                 members = session.query(ReceiptGroupMember).filter(
                     ReceiptGroupMember.group_id == selected_group
                 ).all()
@@ -109,6 +179,9 @@ with tab_receipts:
 
         if st.button("💾 Bon speichern", type="primary") and amount > 0:
             with get_db() as session:
+                # Items als JSON speichern
+                items_json = json.dumps(detected_items) if detected_items else None
+
                 receipt = Receipt(
                     user_id=user_id,
                     group_id=selected_group,
@@ -117,7 +190,8 @@ with tab_receipts:
                     total_amount=amount,
                     category=category,
                     notes=notes,
-                    paid_by_member_id=paid_by
+                    paid_by_member_id=paid_by,
+                    items=detected_items if detected_items else None
                 )
                 session.add(receipt)
                 session.commit()
@@ -128,7 +202,6 @@ with tab_receipts:
     with col_list:
         st.subheader("📋 Letzte Bons")
 
-        # Filter
         filter_cat = st.selectbox("Kategorie filtern", ["Alle"] + RECEIPT_CATEGORIES, key="filter_bon_cat")
 
         with get_db() as session:
@@ -141,23 +214,28 @@ with tab_receipts:
 
             if receipts:
                 for receipt in receipts:
-                    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                    with st.container():
+                        col1, col2, col3 = st.columns([2, 1, 1])
 
-                    with col1:
-                        st.write(f"🧾 {receipt.merchant or 'Unbekannt'}")
-                        st.caption(receipt.category)
+                        with col1:
+                            st.markdown(f"**🧾 {receipt.merchant or 'Unbekannt'}**")
+                            st.caption(f"{receipt.category} | {format_date(receipt.date)}")
 
-                    with col2:
-                        st.write(format_currency(receipt.total_amount))
+                        with col2:
+                            st.markdown(f"**{format_currency(receipt.total_amount)}**")
 
-                    with col3:
-                        st.caption(format_date(receipt.date))
+                        with col3:
+                            if receipt.group_id:
+                                st.caption("👥")
+                            with st.popover("📋"):
+                                # Positionen anzeigen
+                                if receipt.items:
+                                    st.markdown("**Positionen:**")
+                                    items = receipt.items if isinstance(receipt.items, list) else json.loads(receipt.items)
+                                    for item in items:
+                                        st.write(f"• {item['name']}: {format_currency(item['price'])}")
 
-                    with col4:
-                        if receipt.group_id:
-                            st.caption("👥 Gruppe")
-
-                    st.divider()
+                        st.divider()
             else:
                 st.info("Keine Bons erfasst")
 
@@ -168,7 +246,6 @@ with tab_groups:
     with col_groups:
         st.subheader("👥 Gruppen verwalten")
 
-        # Neue Gruppe erstellen
         with st.expander("➕ Neue Gruppe erstellen"):
             group_name = st.text_input("Gruppenname", placeholder="z.B. WG September, Urlaub 2024")
             group_desc = st.text_input("Beschreibung (optional)")
@@ -218,15 +295,12 @@ with tab_groups:
                                 access_token=uuid.uuid4().hex
                             )
                             session.add(m)
-
                     session.commit()
 
                 st.success("Gruppe erstellt!")
                 st.rerun()
 
         st.divider()
-
-        # Gruppenliste
         st.markdown("**Aktive Gruppen**")
 
         with get_db() as session:
@@ -257,14 +331,12 @@ with tab_groups:
 
                 st.markdown("---")
 
-                # Mitgliederliste
                 st.markdown("**Mitglieder:**")
                 for member in members:
                     st.write(f"👤 {member.name}")
 
                 st.markdown("---")
 
-                # Bons in dieser Gruppe
                 st.markdown(f"**Bons ({len(receipts)}):**")
                 total = 0
                 for receipt in receipts:
@@ -274,7 +346,6 @@ with tab_groups:
                     with col2:
                         st.write(format_currency(receipt.total_amount))
                     with col3:
-                        # Wer hat bezahlt
                         if receipt.paid_by_member_id:
                             payer = session.query(ReceiptGroupMember).get(receipt.paid_by_member_id)
                             st.caption(f"von {payer.name}" if payer else "")
@@ -283,7 +354,7 @@ with tab_groups:
                 st.markdown("---")
                 st.markdown(f"**Gesamt: {format_currency(total)}**")
 
-                # Bilanz berechnen
+                # Bilanz
                 st.markdown("---")
                 st.subheader("💰 Bilanz")
 
@@ -291,26 +362,22 @@ with tab_groups:
                     n_members = len(members)
                     per_person = total / n_members
 
-                    # Wer hat wie viel bezahlt
                     paid = {m.id: 0 for m in members}
                     for receipt in receipts:
                         if receipt.paid_by_member_id:
                             paid[receipt.paid_by_member_id] += receipt.total_amount
 
-                    # Bilanz
                     balance = {}
                     for member in members:
                         member_paid = paid.get(member.id, 0)
-                        member_share = per_person
-                        diff = member_paid - member_share
+                        diff = member_paid - per_person
                         balance[member.id] = {
                             'name': member.name,
                             'paid': member_paid,
-                            'share': member_share,
+                            'share': per_person,
                             'balance': diff
                         }
 
-                    # Anzeige
                     st.write(f"Pro Person: {format_currency(per_person)}")
                     st.markdown("")
 
@@ -322,62 +389,6 @@ with tab_groups:
                         else:
                             st.info(f"= {data['name']} ist ausgeglichen")
 
-                    # Ausgleichszahlungen berechnen
-                    st.markdown("---")
-                    st.markdown("**Ausgleichszahlungen:**")
-
-                    debtors = [(m_id, d) for m_id, d in balance.items() if d['balance'] < 0]
-                    creditors = [(m_id, d) for m_id, d in balance.items() if d['balance'] > 0]
-
-                    debtors.sort(key=lambda x: x[1]['balance'])
-                    creditors.sort(key=lambda x: x[1]['balance'], reverse=True)
-
-                    transactions = []
-                    for d_id, debtor in debtors:
-                        debt = abs(debtor['balance'])
-                        for c_id, creditor in creditors:
-                            if debt <= 0:
-                                break
-                            credit = creditor['balance']
-                            if credit <= 0:
-                                continue
-
-                            amount = min(debt, credit)
-                            if amount > 0.01:  # Nur wenn > 1 Cent
-                                transactions.append({
-                                    'from': debtor['name'],
-                                    'to': creditor['name'],
-                                    'amount': amount
-                                })
-                                debt -= amount
-                                creditor['balance'] -= amount
-
-                    for t in transactions:
-                        st.write(f"💸 {t['from']} → {t['to']}: {format_currency(t['amount'])}")
-
-                    # Einladungen senden
-                    st.markdown("---")
-                    if st.button("📧 Einladungen senden"):
-                        for member in members:
-                            if member.email and not member.invitation_sent:
-                                send_email_notification(
-                                    member.email,
-                                    f"Einladung zur Gruppe: {group.name}",
-                                    f"""Hallo {member.name},
-
-Sie wurden zur Bon-Teilungsgruppe "{group.name}" eingeladWen.
-
-Ihr Zugangscode: {member.access_token}
-
-Mit freundlichen Grüßen
-""",
-                                    None
-                                )
-                                member.invitation_sent = True
-                        session.commit()
-                        st.success("Einladungen gesendet!")
-
-                # Gruppe abschließen
                 if group.is_active:
                     if st.button("🏁 Gruppe abschließen"):
                         group.is_active = False
@@ -389,21 +400,22 @@ Mit freundlichen Grüßen
 
 
 with tab_overview:
-    st.subheader("📊 Finanzübersicht")
+    st.subheader("📊 Ausgaben-Übersicht")
 
-    # Zeitraum
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         period = st.selectbox("Zeitraum", ["Dieser Monat", "Letzter Monat", "Dieses Jahr", "Alle"])
     with col2:
         group_by = st.selectbox("Gruppieren nach", ["Kategorie", "Händler", "Monat"])
+    with col3:
+        include_invoices = st.checkbox("Rechnungen einbeziehen", value=True)
 
-    # Daten laden
     with get_db() as session:
+        now = datetime.now()
+
+        # Bons laden
         query = session.query(Receipt).filter(Receipt.user_id == user_id)
 
-        # Zeitfilter
-        now = datetime.now()
         if period == "Dieser Monat":
             query = query.filter(Receipt.date >= datetime(now.year, now.month, 1))
         elif period == "Letzter Monat":
@@ -420,22 +432,74 @@ with tab_overview:
 
         receipts = query.all()
 
-        if receipts:
-            import pandas as pd
+        # Rechnungen laden (wenn aktiviert)
+        invoices = []
+        if include_invoices:
+            inv_query = session.query(Document).filter(
+                Document.user_id == user_id,
+                Document.invoice_amount.isnot(None),
+                Document.invoice_amount > 0
+            )
 
-            data = [{
+            if period == "Dieser Monat":
+                inv_query = inv_query.filter(Document.document_date >= datetime(now.year, now.month, 1))
+            elif period == "Letzter Monat":
+                if now.month == 1:
+                    last_month = datetime(now.year - 1, 12, 1)
+                else:
+                    last_month = datetime(now.year, now.month - 1, 1)
+                inv_query = inv_query.filter(
+                    Document.document_date >= last_month,
+                    Document.document_date < datetime(now.year, now.month, 1)
+                )
+            elif period == "Dieses Jahr":
+                inv_query = inv_query.filter(Document.document_date >= datetime(now.year, 1, 1))
+
+            invoices = inv_query.all()
+
+        # Daten zusammenführen
+        import pandas as pd
+
+        data = []
+
+        # Bons
+        for r in receipts:
+            data.append({
+                'Typ': 'Bon',
                 'Datum': r.date,
-                'Händler': r.merchant or 'Unbekannt',
+                'Beschreibung': r.merchant or 'Unbekannt',
                 'Kategorie': r.category or 'Sonstiges',
                 'Betrag': r.total_amount,
                 'Monat': r.date.strftime('%Y-%m') if r.date else ''
-            } for r in receipts]
+            })
 
+        # Rechnungen
+        for inv in invoices:
+            data.append({
+                'Typ': 'Rechnung',
+                'Datum': inv.document_date or inv.created_at,
+                'Beschreibung': inv.sender or inv.title or 'Unbekannt',
+                'Kategorie': inv.category or 'Rechnung',
+                'Betrag': inv.invoice_amount,
+                'Monat': (inv.document_date or inv.created_at).strftime('%Y-%m') if (inv.document_date or inv.created_at) else ''
+            })
+
+        if data:
             df = pd.DataFrame(data)
 
-            # Gesamtsumme
-            total = df['Betrag'].sum()
-            st.metric("Gesamtausgaben", format_currency(total))
+            # Kennzahlen
+            col_m1, col_m2, col_m3 = st.columns(3)
+
+            total_receipts = df[df['Typ'] == 'Bon']['Betrag'].sum()
+            total_invoices = df[df['Typ'] == 'Rechnung']['Betrag'].sum()
+            total_all = df['Betrag'].sum()
+
+            with col_m1:
+                st.metric("🧾 Bons", format_currency(total_receipts))
+            with col_m2:
+                st.metric("📄 Rechnungen", format_currency(total_invoices))
+            with col_m3:
+                st.metric("📊 Gesamt", format_currency(total_all))
 
             st.markdown("---")
 
@@ -443,30 +507,123 @@ with tab_overview:
             if group_by == "Kategorie":
                 grouped = df.groupby('Kategorie')['Betrag'].sum().sort_values(ascending=False)
             elif group_by == "Händler":
-                grouped = df.groupby('Händler')['Betrag'].sum().sort_values(ascending=False)
+                grouped = df.groupby('Beschreibung')['Betrag'].sum().sort_values(ascending=False)
             else:
                 grouped = df.groupby('Monat')['Betrag'].sum().sort_values()
 
-            # Balkendiagramm
+            # Chart
             import plotly.express as px
 
             fig = px.bar(
                 x=grouped.index,
                 y=grouped.values,
                 labels={'x': group_by, 'y': 'Betrag (€)'},
-                title=f"Ausgaben nach {group_by}"
+                title=f"Ausgaben nach {group_by}",
+                color_discrete_sequence=['#1E88E5']
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Detailtabelle
-            st.markdown("---")
-            st.markdown("**Details:**")
+            # Typ-Aufteilung
+            if include_invoices:
+                col_pie, col_detail = st.columns([1, 1])
 
-            for name, amount in grouped.items():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(name)
-                with col2:
-                    st.write(format_currency(amount))
+                with col_pie:
+                    type_grouped = df.groupby('Typ')['Betrag'].sum()
+                    fig_pie = px.pie(
+                        values=type_grouped.values,
+                        names=type_grouped.index,
+                        title="Aufteilung nach Typ"
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+                with col_detail:
+                    st.markdown("**Top 10 Ausgaben:**")
+                    top_10 = df.nlargest(10, 'Betrag')[['Typ', 'Beschreibung', 'Betrag', 'Datum']]
+                    for _, row in top_10.iterrows():
+                        icon = "🧾" if row['Typ'] == 'Bon' else "📄"
+                        st.write(f"{icon} {row['Beschreibung']}: **{format_currency(row['Betrag'])}**")
         else:
             st.info("Keine Daten für den gewählten Zeitraum")
+
+
+with tab_invoices:
+    st.subheader("📄 Rechnungen aus Dokumenten")
+
+    col_filter, col_status = st.columns([2, 1])
+
+    with col_filter:
+        inv_period = st.selectbox("Zeitraum", ["Alle", "Dieser Monat", "Dieses Jahr"], key="inv_period")
+
+    with col_status:
+        inv_status_filter = st.selectbox("Status", ["Alle", "Offen", "Bezahlt"], key="inv_status")
+
+    with get_db() as session:
+        query = session.query(Document).filter(
+            Document.user_id == user_id,
+            Document.invoice_amount.isnot(None),
+            Document.invoice_amount > 0
+        )
+
+        now = datetime.now()
+        if inv_period == "Dieser Monat":
+            query = query.filter(Document.document_date >= datetime(now.year, now.month, 1))
+        elif inv_period == "Dieses Jahr":
+            query = query.filter(Document.document_date >= datetime(now.year, 1, 1))
+
+        if inv_status_filter == "Offen":
+            query = query.filter(Document.invoice_status == InvoiceStatus.OPEN)
+        elif inv_status_filter == "Bezahlt":
+            query = query.filter(Document.invoice_status == InvoiceStatus.PAID)
+
+        invoices = query.order_by(Document.document_date.desc()).all()
+
+        # Zusammenfassung
+        total_open = sum(inv.invoice_amount for inv in invoices if inv.invoice_status == InvoiceStatus.OPEN)
+        total_paid = sum(inv.invoice_amount for inv in invoices if inv.invoice_status == InvoiceStatus.PAID)
+        total_all = sum(inv.invoice_amount for inv in invoices)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("🔴 Offen", format_currency(total_open))
+        with col2:
+            st.metric("✅ Bezahlt", format_currency(total_paid))
+        with col3:
+            st.metric("📊 Gesamt", format_currency(total_all))
+
+        st.markdown("---")
+
+        if invoices:
+            for inv in invoices:
+                with st.container():
+                    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+
+                    with col1:
+                        st.markdown(f"**{inv.title or inv.filename}**")
+                        st.caption(f"{inv.sender or 'Unbekannt'} | {format_date(inv.document_date)}")
+
+                    with col2:
+                        st.markdown(f"**{format_currency(inv.invoice_amount)}**")
+
+                    with col3:
+                        if inv.invoice_status == InvoiceStatus.OPEN:
+                            st.markdown("🔴 Offen")
+                        elif inv.invoice_status == InvoiceStatus.PAID:
+                            st.markdown("✅ Bezahlt")
+                        else:
+                            st.markdown("⚪ -")
+
+                    with col4:
+                        if inv.invoice_status == InvoiceStatus.OPEN:
+                            if st.button("✓", key=f"pay_{inv.id}", help="Als bezahlt markieren"):
+                                inv.invoice_status = InvoiceStatus.PAID
+                                inv.invoice_paid_date = datetime.now()
+                                session.commit()
+                                st.rerun()
+                        if st.button("💼", key=f"cart_inv_{inv.id}", help="In Aktentasche"):
+                            from utils.components import add_to_cart
+                            add_to_cart(inv.id)
+                            st.success("Hinzugefügt!")
+
+                    st.divider()
+        else:
+            st.info("Keine Rechnungen gefunden")

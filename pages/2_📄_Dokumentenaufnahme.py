@@ -19,9 +19,13 @@ from services.document_classifier import get_classifier
 from services.search_service import get_search_service
 from utils.pdf_utils import get_pdf_processor
 from utils.helpers import format_currency, format_date, sanitize_filename
+from utils.components import render_sidebar_cart
 
 st.set_page_config(page_title="Dokumentenaufnahme", page_icon="📄", layout="wide")
 init_db()
+
+# Sidebar mit Aktentasche
+render_sidebar_cart()
 
 st.title("📄 Dokumentenaufnahme")
 st.markdown("Laden Sie Dokumente hoch oder scannen Sie sie ein")

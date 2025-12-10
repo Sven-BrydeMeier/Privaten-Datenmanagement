@@ -272,6 +272,141 @@ class OCRService:
 
         return (white_pixels / len(pixels)) > threshold
 
+    def extract_receipt_data(self, text: str) -> Dict:
+        """
+        Extrahiert strukturierte Daten aus einem Kassenbon.
+
+        Args:
+            text: OCR-Text des Bons
+
+        Returns:
+            Dictionary mit Bon-Daten und Positionen
+        """
+        receipt_data = {
+            'merchant': None,
+            'date': None,
+            'total': None,
+            'items': [],
+            'payment_method': None,
+            'tax_info': [],
+            'suggested_category': None
+        }
+
+        lines = text.split('\n')
+        text_lower = text.lower()
+
+        # Händler erkennen (meist in den ersten Zeilen)
+        merchant_indicators = ['gmbh', 'ag', 'kg', 'ohg', 'e.k.', 'gbr', 'markt', 'laden', 'shop', 'filiale']
+        for line in lines[:5]:
+            line_lower = line.lower().strip()
+            if any(ind in line_lower for ind in merchant_indicators) or (len(line.strip()) > 3 and line.strip().isupper()):
+                receipt_data['merchant'] = line.strip()
+                break
+
+        # Datum extrahieren
+        date_patterns = [
+            r'(\d{2})[./](\d{2})[./](\d{4})',
+            r'(\d{2})[./](\d{2})[./](\d{2})',
+        ]
+        for pattern in date_patterns:
+            match = re.search(pattern, text)
+            if match:
+                try:
+                    day, month, year = match.groups()
+                    if len(year) == 2:
+                        year = '20' + year
+                    receipt_data['date'] = datetime(int(year), int(month), int(day))
+                    break
+                except:
+                    pass
+
+        # Gesamtbetrag finden (typischerweise mit SUMME, TOTAL, GESAMT, etc.)
+        total_patterns = [
+            r'(?:summe|total|gesamt|zu zahlen|betrag)[:\s]*(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})',
+            r'(?:bar|ec|karte)[:\s]*(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})',
+            r'(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*(?:eur|€)',
+        ]
+        for pattern in total_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount_str = match.group(1).replace('.', '').replace(',', '.')
+                try:
+                    receipt_data['total'] = float(amount_str)
+                    break
+                except:
+                    pass
+
+        # Einzelne Positionen extrahieren
+        # Typisches Format: Artikelname ... Preis
+        item_pattern = r'([A-Za-zäöüÄÖÜß\s\-\.]+?)\s+(\d{1,2}[,\.]\d{2})\s*[AaBb]?'
+
+        for line in lines:
+            # Überspringe Zeilen mit Gesamtsumme, MwSt etc.
+            line_lower = line.lower()
+            if any(skip in line_lower for skip in ['summe', 'total', 'gesamt', 'mwst', 'steuer', 'zwischensumme']):
+                continue
+
+            match = re.search(item_pattern, line)
+            if match:
+                name = match.group(1).strip()
+                price_str = match.group(2).replace(',', '.')
+
+                # Filter: Name sollte mindestens 2 Zeichen haben
+                if len(name) >= 2 and name not in ['', ' ']:
+                    try:
+                        price = float(price_str)
+                        if 0.01 <= price <= 10000:  # Plausibilitätsprüfung
+                            receipt_data['items'].append({
+                                'name': name,
+                                'price': price,
+                                'quantity': 1
+                            })
+                    except:
+                        pass
+
+        # Zahlungsmethode erkennen
+        payment_keywords = {
+            'bar': ['bar', 'bargeld', 'cash'],
+            'ec': ['ec', 'girocard', 'maestro', 'debit'],
+            'kreditkarte': ['visa', 'mastercard', 'amex', 'kredit'],
+            'kontaktlos': ['kontaktlos', 'nfc', 'apple pay', 'google pay']
+        }
+        for method, keywords in payment_keywords.items():
+            if any(kw in text_lower for kw in keywords):
+                receipt_data['payment_method'] = method
+                break
+
+        # MwSt-Informationen
+        tax_pattern = r'(?:mwst|ust|steuer)[:\s]*(\d+(?:[.,]\d+)?)\s*%?\s*[:\s]*(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})?'
+        tax_matches = re.findall(tax_pattern, text_lower)
+        for match in tax_matches:
+            tax_rate = match[0].replace(',', '.')
+            tax_amount = match[1].replace('.', '').replace(',', '.') if match[1] else None
+            receipt_data['tax_info'].append({
+                'rate': float(tax_rate) if tax_rate else None,
+                'amount': float(tax_amount) if tax_amount else None
+            })
+
+        # Kategorie basierend auf Inhalt vorschlagen
+        category_hints = {
+            'Lebensmittel': ['milch', 'brot', 'obst', 'gemüse', 'fleisch', 'käse', 'joghurt', 'reis', 'nudeln', 'butter', 'eier', 'wurst', 'bio'],
+            'Restaurant': ['speise', 'gericht', 'menü', 'getränk', 'bier', 'wein', 'kaffee', 'trinkgeld', 'bedienung'],
+            'Transport': ['benzin', 'diesel', 'tanken', 'parkhaus', 'ticket', 'fahrkarte', 'bahn', 'bus'],
+            'Einkauf': ['kleidung', 'schuhe', 'hose', 'hemd', 'jacke', 'möbel', 'elektronik'],
+            'Gesundheit': ['apotheke', 'medikament', 'arzt', 'rezept', 'pflaster'],
+            'Unterkunft': ['hotel', 'pension', 'übernachtung', 'zimmer'],
+        }
+
+        for category, keywords in category_hints.items():
+            if any(kw in text_lower for kw in keywords):
+                receipt_data['suggested_category'] = category
+                break
+
+        if not receipt_data['suggested_category']:
+            receipt_data['suggested_category'] = 'Sonstiges'
+
+        return receipt_data
+
 
 def get_ocr_service() -> OCRService:
     """Singleton für den OCR-Service"""

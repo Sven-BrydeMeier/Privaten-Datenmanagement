@@ -14,9 +14,13 @@ from database.models import Email, Document
 from config.settings import get_settings
 from services.ai_service import get_ai_service
 from utils.helpers import format_date, send_email_notification
+from utils.components import render_sidebar_cart
 
 st.set_page_config(page_title="E-Mail", page_icon="📧", layout="wide")
 init_db()
+
+# Sidebar mit Aktentasche
+render_sidebar_cart()
 
 user_id = get_current_user_id()
 settings = get_settings()

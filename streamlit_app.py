@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from database.db import init_db, get_current_user_id
 from config.settings import get_settings
+from utils.components import render_sidebar_cart, apply_custom_css
 
 # Seitenkonfiguration
 st.set_page_config(
@@ -23,15 +24,12 @@ st.set_page_config(
 # Datenbank initialisieren
 init_db()
 
-# Custom CSS für besseres UI
+# Custom CSS aus gemeinsamer Komponente
+apply_custom_css()
+
+# Zusätzliches CSS für Dashboard
 st.markdown("""
 <style>
-    /* Allgemeine Styles */
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-
     /* Status-Indikatoren */
     .status-green {
         display: inline-block;
@@ -60,32 +58,6 @@ st.markdown("""
         margin-right: 8px;
     }
 
-    /* Frist-Warnung */
-    .deadline-warning {
-        background-color: #fff3cd;
-        border-left: 4px solid #ffc107;
-        padding: 10px 15px;
-        margin: 10px 0;
-        border-radius: 4px;
-    }
-
-    .deadline-urgent {
-        background-color: #f8d7da;
-        border-left: 4px solid #dc3545;
-        padding: 10px 15px;
-        margin: 10px 0;
-        border-radius: 4px;
-    }
-
-    /* Karten-Style */
-    .info-card {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
-        border: 1px solid #e9ecef;
-    }
-
     /* Aktentasche-Badge */
     .cart-badge {
         background-color: #007bff;
@@ -99,11 +71,6 @@ st.markdown("""
     /* Sidebar Navigation */
     .sidebar .sidebar-content {
         background-color: #f8f9fa;
-    }
-
-    /* Buttons */
-    .stButton>button {
-        border-radius: 6px;
     }
 
     /* Tabellen */
@@ -121,70 +88,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def render_sidebar():
-    """Rendert die Sidebar mit Navigation und Aktentasche"""
-    with st.sidebar:
-        st.title("📁 Dokumentenmanagement")
-
-        # API-Status anzeigen
-        settings = get_settings()
-        from services.ai_service import get_ai_service
-        ai_service = get_ai_service()
-
-        # Status-Check (gecached)
-        if 'api_status' not in st.session_state:
-            st.session_state.api_status = ai_service.test_connection()
-
-        status = st.session_state.api_status
-
-        # Status-Anzeige
-        st.markdown("### API-Status")
-        col1, col2 = st.columns(2)
-        with col1:
-            if status.get('openai'):
-                st.markdown('<span class="status-green"></span> OpenAI', unsafe_allow_html=True)
-            elif settings.openai_api_key:
-                st.markdown('<span class="status-red"></span> OpenAI', unsafe_allow_html=True)
-            else:
-                st.markdown('<span class="status-gray"></span> OpenAI', unsafe_allow_html=True)
-
-        with col2:
-            if status.get('anthropic'):
-                st.markdown('<span class="status-green"></span> Claude', unsafe_allow_html=True)
-            elif settings.anthropic_api_key:
-                st.markdown('<span class="status-red"></span> Claude', unsafe_allow_html=True)
-            else:
-                st.markdown('<span class="status-gray"></span> Claude', unsafe_allow_html=True)
-
-        st.divider()
-
-        # Aktentasche-Anzeige
-        st.markdown("### 💼 Aktentasche")
-        cart_items = st.session_state.get('active_cart_items', [])
-        cart_name = st.session_state.get('active_cart_name', 'Aktuelle Aktentasche')
-
-        st.caption(f"**{cart_name}**")
-        if cart_items:
-            st.info(f"{len(cart_items)} Dokument(e)")
-            if st.button("Aktentasche anzeigen", key="show_cart"):
-                st.switch_page("pages/4_🔍_Intelligente_Ordner.py")
-        else:
-            st.caption("Leer")
-
-        st.divider()
-
-        # Schnellzugriff
-        st.markdown("### Schnellzugriff")
-        if st.button("📄 Neues Dokument", use_container_width=True):
-            st.switch_page("pages/2_📄_Dokumentenaufnahme.py")
-
-        if st.button("🔍 Suche", use_container_width=True):
-            st.switch_page("pages/3_📁_Dokumente.py")
-
-        st.divider()
-
-        # Footer
-        st.caption("v1.0.0 | Privat & Sicher")
 
 
 def render_dashboard():
@@ -437,7 +340,8 @@ def get_upcoming_birthdays(user_id: int, limit: int = 5) -> list:
 
 # Hauptanwendung
 def main():
-    render_sidebar()
+    # Gemeinsame Sidebar-Komponente mit Aktentasche
+    render_sidebar_cart()
     render_dashboard()
 
 
