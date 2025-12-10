@@ -1,5 +1,5 @@
 """
-Intelligente Ordner und Warenkörbe
+Intelligente Ordner und Aktentaschen
 """
 import streamlit as st
 from pathlib import Path
@@ -22,11 +22,11 @@ init_db()
 
 user_id = get_current_user_id()
 
-st.title("🔍 Intelligente Ordner & Warenkörbe")
+st.title("🔍 Intelligente Ordner & Aktentaschen")
 
 tab_smart, tab_cart, tab_request = st.tabs([
     "📁 Intelligente Ordner",
-    "🛒 Warenkörbe",
+    "💼 Aktentaschen",
     "📋 Dokumentenanforderung"
 ])
 
@@ -160,7 +160,7 @@ with tab_smart:
                         with col3:
                             if "iban" in highlight_fields and doc.iban:
                                 st.code(doc.iban)
-                            if st.button("📋", key=f"add_cart_{doc.id}", help="In Warenkorb"):
+                            if st.button("📋", key=f"add_cart_{doc.id}", help="In Aktentasche"):
                                 if 'active_cart_items' not in st.session_state:
                                     st.session_state.active_cart_items = []
                                 if doc.id not in st.session_state.active_cart_items:
@@ -172,50 +172,50 @@ with tab_smart:
 
 
 with tab_cart:
-    st.subheader("🛒 Warenkörbe")
+    st.subheader("💼 Aktentaschen")
 
     col_carts, col_items = st.columns([1, 2])
 
     with col_carts:
-        # Aktiver Warenkorb
-        st.markdown("**Aktueller Warenkorb**")
+        # Aktive Aktentasche
+        st.markdown("**Aktuelle Aktentasche**")
         cart_items = st.session_state.get('active_cart_items', [])
-        cart_name = st.session_state.get('active_cart_name', 'Aktueller Warenkorb')
+        cart_name = st.session_state.get('active_cart_name', 'Aktuelle Aktentasche')
 
-        st.info(f"📦 {cart_name}: {len(cart_items)} Dokumente")
+        st.info(f"💼 {cart_name}: {len(cart_items)} Dokumente")
 
-        # Warenkorb-Aktionen
-        new_cart_name = st.text_input("Warenkorb umbenennen", value=cart_name)
+        # Aktentasche-Aktionen
+        new_cart_name = st.text_input("Aktentasche umbenennen", value=cart_name)
         if new_cart_name != cart_name:
             st.session_state.active_cart_name = new_cart_name
 
-        if st.button("🗑️ Warenkorb leeren"):
+        if st.button("🗑️ Aktentasche leeren"):
             st.session_state.active_cart_items = []
             st.rerun()
 
         st.divider()
 
-        # Gespeicherte Warenkörbe
-        st.markdown("**Gespeicherte Warenkörbe**")
+        # Gespeicherte Aktentaschen
+        st.markdown("**Gespeicherte Aktentaschen**")
 
         with get_db() as session:
             saved_carts = session.query(Cart).filter(Cart.user_id == user_id).all()
 
             for cart in saved_carts:
                 item_count = session.query(CartItem).filter(CartItem.cart_id == cart.id).count()
-                if st.button(f"📦 {cart.name} ({item_count})", key=f"load_cart_{cart.id}"):
-                    # Warenkorb laden
+                if st.button(f"💼 {cart.name} ({item_count})", key=f"load_cart_{cart.id}"):
+                    # Aktentasche laden
                     items = session.query(CartItem).filter(CartItem.cart_id == cart.id).all()
                     st.session_state.active_cart_items = [item.document_id for item in items]
                     st.session_state.active_cart_name = cart.name
                     st.rerun()
 
-        # Aktuellen Warenkorb speichern
-        if st.button("💾 Warenkorb speichern") and cart_items:
+        # Aktuelle Aktentasche speichern
+        if st.button("💾 Aktentasche speichern") and cart_items:
             with get_db() as session:
                 new_cart = Cart(
                     user_id=user_id,
-                    name=st.session_state.get('active_cart_name', 'Warenkorb')
+                    name=st.session_state.get('active_cart_name', 'Aktentasche')
                 )
                 session.add(new_cart)
                 session.flush()
@@ -227,7 +227,7 @@ with tab_cart:
             st.success("Gespeichert!")
 
     with col_items:
-        st.markdown("**Dokumente im Warenkorb**")
+        st.markdown("**Dokumente in der Aktentasche**")
 
         if cart_items:
             with get_db() as session:
@@ -262,12 +262,12 @@ with tab_cart:
                             links.append(link)
                         st.session_state.share_links = links
 
-                # Warenkorb teilen
-                if st.button("✂️ Warenkorb aufteilen", use_container_width=True):
+                # Aktentasche teilen
+                if st.button("✂️ Aktentasche aufteilen", use_container_width=True):
                     st.session_state.split_cart = True
 
         else:
-            st.info("Der Warenkorb ist leer. Fügen Sie Dokumente aus der Dokumentenansicht hinzu.")
+            st.info("Die Aktentasche ist leer. Fügen Sie Dokumente aus der Dokumentenansicht hinzu.")
 
         # Freigabelinks anzeigen
         if 'share_links' in st.session_state:
@@ -356,14 +356,14 @@ with tab_request:
                         found_docs.append(item['id'])
                         st.write(f"  ✓ {item.get('title', 'Unbenannt')}")
 
-            # In Warenkorb legen
+            # In Aktentasche legen
             st.divider()
-            cart_name = st.text_input("Warenkorb-Name", value="Dokumentenanforderung")
+            cart_name = st.text_input("Aktentasche-Name", value="Dokumentenanforderung")
 
-            if st.button("📦 Alle in Warenkorb legen"):
+            if st.button("💼 Alle in Aktentasche legen"):
                 st.session_state.active_cart_items = list(set(found_docs))
                 st.session_state.active_cart_name = cart_name
-                st.success(f"{len(found_docs)} Dokumente in Warenkorb gelegt!")
+                st.success(f"{len(found_docs)} Dokumente in Aktentasche gelegt!")
 
             # Begleitschreiben generieren
             if ai.any_ai_available and st.button("📝 Begleitschreiben generieren"):

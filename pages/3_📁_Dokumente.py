@@ -204,7 +204,7 @@ with col_docs:
                             if st.button("👁️ Anzeigen", key=f"view_{doc.id}"):
                                 st.session_state.view_document_id = doc.id
 
-                            if st.button("📋 In Warenkorb", key=f"cart_{doc.id}"):
+                            if st.button("📋 In Aktentasche", key=f"cart_{doc.id}"):
                                 if 'active_cart_items' not in st.session_state:
                                     st.session_state.active_cart_items = []
                                 if doc.id not in st.session_state.active_cart_items:

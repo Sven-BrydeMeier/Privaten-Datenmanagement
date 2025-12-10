@@ -3,7 +3,8 @@ from .models import (
     User, Document, Folder, Tag, DocumentTag,
     CalendarEvent, Contact, Email, SmartFolder,
     Cart, CartItem, Receipt, ReceiptGroup,
-    ReceiptGroupMember, ClassificationRule, SearchIndex
+    ReceiptGroupMember, ClassificationRule, SearchIndex,
+    DocumentStatus, InvoiceStatus, EventType
 )
 
 __all__ = [
@@ -11,5 +12,6 @@ __all__ = [
     'User', 'Document', 'Folder', 'Tag', 'DocumentTag',
     'CalendarEvent', 'Contact', 'Email', 'SmartFolder',
     'Cart', 'CartItem', 'Receipt', 'ReceiptGroup',
-    'ReceiptGroupMember', 'ClassificationRule', 'SearchIndex'
+    'ReceiptGroupMember', 'ClassificationRule', 'SearchIndex',
+    'DocumentStatus', 'InvoiceStatus', 'EventType'
 ]

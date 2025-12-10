@@ -168,11 +168,11 @@ else:
             key="email_attachments"
         )
 
-        # Dokumente aus Warenkorb anhängen
+        # Dokumente aus Aktentasche anhängen
         cart_items = st.session_state.get('active_cart_items', [])
         if cart_items:
-            st.info(f"📎 {len(cart_items)} Dokumente aus Warenkorb können angehängt werden")
-            attach_cart = st.checkbox("Warenkorb-Dokumente anhängen")
+            st.info(f"📎 {len(cart_items)} Dokumente aus Aktentasche können angehängt werden")
+            attach_cart = st.checkbox("Aktentasche-Dokumente anhängen")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -183,7 +183,7 @@ else:
                 for att in attachments:
                     attachment_data.append((att.name, att.read()))
 
-                # Warenkorb-Dokumente
+                # Aktentasche-Dokumente
                 if cart_items and 'attach_cart' in dir() and attach_cart:
                     from services.encryption import get_encryption_service
                     encryption = get_encryption_service()

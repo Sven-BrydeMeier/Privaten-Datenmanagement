@@ -86,7 +86,7 @@ st.markdown("""
         border: 1px solid #e9ecef;
     }
 
-    /* Warenkorb-Badge */
+    /* Aktentasche-Badge */
     .cart-badge {
         background-color: #007bff;
         color: white;
@@ -122,7 +122,7 @@ st.markdown("""
 
 
 def render_sidebar():
-    """Rendert die Sidebar mit Navigation und Warenkorb"""
+    """Rendert die Sidebar mit Navigation und Aktentasche"""
     with st.sidebar:
         st.title("📁 Dokumentenmanagement")
 
@@ -158,15 +158,15 @@ def render_sidebar():
 
         st.divider()
 
-        # Warenkorb-Anzeige
-        st.markdown("### 🛒 Warenkorb")
+        # Aktentasche-Anzeige
+        st.markdown("### 💼 Aktentasche")
         cart_items = st.session_state.get('active_cart_items', [])
-        cart_name = st.session_state.get('active_cart_name', 'Aktueller Warenkorb')
+        cart_name = st.session_state.get('active_cart_name', 'Aktuelle Aktentasche')
 
         st.caption(f"**{cart_name}**")
         if cart_items:
             st.info(f"{len(cart_items)} Dokument(e)")
-            if st.button("Warenkorb anzeigen", key="show_cart"):
+            if st.button("Aktentasche anzeigen", key="show_cart"):
                 st.switch_page("pages/4_🔍_Intelligente_Ordner.py")
         else:
             st.caption("Leer")

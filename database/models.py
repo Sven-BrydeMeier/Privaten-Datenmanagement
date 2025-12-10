@@ -291,7 +291,7 @@ class SmartFolder(Base):
 
 
 class Cart(Base):
-    """Warenkorb für Dokumentensammlungen"""
+    """Aktentasche für Dokumentensammlungen"""
     __tablename__ = 'carts'
 
     id = Column(Integer, primary_key=True)
@@ -299,7 +299,7 @@ class Cart(Base):
 
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    is_active = Column(Boolean, default=True)  # Aktueller Warenkorb
+    is_active = Column(Boolean, default=True)  # Aktuelle Aktentasche
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -310,7 +310,7 @@ class Cart(Base):
 
 
 class CartItem(Base):
-    """Dokumente in einem Warenkorb"""
+    """Dokumente in einer Aktentasche"""
     __tablename__ = 'cart_items'
 
     id = Column(Integer, primary_key=True)
