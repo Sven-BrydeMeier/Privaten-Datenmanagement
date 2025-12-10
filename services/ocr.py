@@ -3,6 +3,7 @@ OCR-Service für Texterkennung aus Dokumenten und Bildern
 """
 import io
 import re
+import base64
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from PIL import Image
@@ -30,29 +31,93 @@ class OCRService:
                 self._tesseract_available = False
         return self._tesseract_available
 
-    def extract_text_from_image(self, image: Image.Image, lang: str = 'deu+eng') -> Tuple[str, float]:
+    def preprocess_image(self, image: Image.Image, is_receipt: bool = False) -> Image.Image:
+        """
+        Bildvorverarbeitung für bessere OCR-Ergebnisse.
+
+        Args:
+            image: Eingabebild
+            is_receipt: True wenn es ein Kassenbon ist
+
+        Returns:
+            Vorverarbeitetes Bild
+        """
+        from services.image_processor import get_image_processor
+
+        processor = get_image_processor()
+
+        if is_receipt:
+            # Spezielle Bon-Verarbeitung
+            return processor.enhance_for_receipt(image)
+        else:
+            # Standard-Dokumentenverarbeitung
+            return processor.preprocess_for_ocr(image)
+
+    def detect_and_crop_document(self, image: Image.Image, is_receipt: bool = False) -> Tuple[Image.Image, dict]:
+        """
+        Erkennt Dokumentenränder und schneidet das Dokument aus.
+
+        Args:
+            image: Foto eines Dokuments
+            is_receipt: True wenn es ein Kassenbon ist
+
+        Returns:
+            Tuple aus (ausgeschnittenes Dokument, Metadaten)
+        """
+        from services.image_processor import get_image_processor
+
+        processor = get_image_processor()
+
+        if is_receipt:
+            return processor.detect_receipt(image)
+        else:
+            cropped = processor.detect_document_edges(image)
+            metadata = {
+                'original_size': image.size,
+                'detected': cropped is not None,
+                'cropped_size': cropped.size if cropped else None
+            }
+            return cropped or image, metadata
+
+    def extract_text_from_image(self, image: Image.Image, lang: str = 'deu+eng',
+                                  preprocess: bool = True, is_receipt: bool = False) -> Tuple[str, float]:
         """
         Extrahiert Text aus einem Bild.
 
         Args:
             image: PIL Image
             lang: Sprache(n) für OCR
+            preprocess: Ob Vorverarbeitung angewendet werden soll
+            is_receipt: True wenn es ein Kassenbon ist
 
         Returns:
             Tuple aus (extrahierter Text, Konfidenz)
         """
-        if self.tesseract_available:
-            return self._extract_with_tesseract(image, lang)
+        # Vorverarbeitung wenn gewünscht
+        if preprocess:
+            processed_image = self.preprocess_image(image, is_receipt)
         else:
-            # Fallback: KI-basierte OCR (wenn API verfügbar)
-            return self._extract_with_ai(image)
+            processed_image = image
+
+        # Tesseract versuchen
+        if self.tesseract_available:
+            text, confidence = self._extract_with_tesseract(processed_image, lang)
+            if text.strip() and confidence > 0.3:
+                return text, confidence
+
+        # Fallback: KI-basierte OCR
+        return self._extract_with_ai(image)  # Original-Bild für bessere KI-Erkennung
 
     def _extract_with_tesseract(self, image: Image.Image, lang: str) -> Tuple[str, float]:
         """Tesseract-basierte Texterkennung"""
         import pytesseract
 
         # OCR mit Detailinformationen
-        data = pytesseract.image_to_data(image, lang=lang, output_type=pytesseract.Output.DICT)
+        try:
+            data = pytesseract.image_to_data(image, lang=lang, output_type=pytesseract.Output.DICT)
+        except Exception as e:
+            st.warning(f"Tesseract-Fehler: {e}")
+            return "", 0.0
 
         # Text zusammenbauen und Konfidenz berechnen
         text_parts = []
@@ -69,9 +134,113 @@ class OCRService:
         return text, avg_confidence / 100.0
 
     def _extract_with_ai(self, image: Image.Image) -> Tuple[str, float]:
-        """KI-basierte Texterkennung (GPT-4 Vision oder Claude)"""
-        # Wird später implementiert wenn API-Keys vorhanden
+        """
+        KI-basierte Texterkennung (GPT-4 Vision oder Claude).
+
+        Fallback wenn Tesseract nicht verfügbar oder schlecht erkennt.
+        """
+        settings = get_settings()
+
+        # Bild zu Base64 konvertieren
+        buffered = io.BytesIO()
+        # Zu RGB konvertieren falls nötig
+        if image.mode in ('RGBA', 'LA', 'P'):
+            image = image.convert('RGB')
+        image.save(buffered, format="JPEG", quality=85)
+        img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+        # OpenAI GPT-4 Vision versuchen
+        if settings.openai_api_key:
+            try:
+                text = self._ocr_with_openai(img_base64)
+                if text:
+                    return text, 0.85  # Angenommene hohe Konfidenz
+            except Exception as e:
+                st.warning(f"OpenAI Vision OCR fehlgeschlagen: {e}")
+
+        # Anthropic Claude Vision versuchen
+        if settings.anthropic_api_key:
+            try:
+                text = self._ocr_with_claude(img_base64)
+                if text:
+                    return text, 0.85
+            except Exception as e:
+                st.warning(f"Claude Vision OCR fehlgeschlagen: {e}")
+
         return "", 0.0
+
+    def _ocr_with_openai(self, img_base64: str) -> str:
+        """OCR mit OpenAI GPT-4 Vision"""
+        from openai import OpenAI
+
+        settings = get_settings()
+        client = OpenAI(api_key=settings.openai_api_key)
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """Extrahiere den gesamten Text aus diesem Dokument/Kassenbon.
+Gib NUR den extrahierten Text zurück, ohne Erklärungen oder Formatierung.
+Behalte die Zeilenstruktur bei.
+Wenn es ein Kassenbon ist, erfasse alle Artikel, Preise und den Gesamtbetrag.
+Der Text ist auf Deutsch."""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_base64}",
+                                "detail": "high"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=2000
+        )
+
+        return response.choices[0].message.content
+
+    def _ocr_with_claude(self, img_base64: str) -> str:
+        """OCR mit Anthropic Claude Vision"""
+        import anthropic
+
+        settings = get_settings()
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": img_base64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": """Extrahiere den gesamten Text aus diesem Dokument/Kassenbon.
+Gib NUR den extrahierten Text zurück, ohne Erklärungen oder Formatierung.
+Behalte die Zeilenstruktur bei.
+Wenn es ein Kassenbon ist, erfasse alle Artikel, Preise und den Gesamtbetrag.
+Der Text ist auf Deutsch."""
+                        }
+                    ]
+                }
+            ]
+        )
+
+        return response.content[0].text
 
     def extract_text_from_pdf(self, pdf_bytes: bytes) -> List[Tuple[str, float]]:
         """

@@ -51,6 +51,10 @@ with tab_receipts:
         if input_method == "📷 Foto/Scan":
             bon_file = st.file_uploader("Bon-Foto", type=['jpg', 'jpeg', 'png', 'pdf'])
 
+            # Optionen für Bildverarbeitung
+            auto_crop = st.checkbox("🔲 Automatische Randerkennung", value=True,
+                                   help="Erkennt die Bon-Ränder und schneidet automatisch zu")
+
             if bon_file:
                 ocr = get_ocr_service()
                 file_data = bon_file.read()
@@ -59,11 +63,46 @@ with tab_receipts:
                     if bon_file.type == "application/pdf":
                         results = ocr.extract_text_from_pdf(file_data)
                         text = "\n".join(t for t, _ in results)
+                        processed_image = None
                     else:
                         from PIL import Image
-                        image = Image.open(io.BytesIO(file_data))
-                        st.image(image, width=300)
-                        text, _ = ocr.extract_text_from_image(image)
+                        original_image = Image.open(io.BytesIO(file_data))
+
+                        # Automatische Randerkennung wenn aktiviert
+                        if auto_crop:
+                            cropped_image, crop_metadata = ocr.detect_and_crop_document(
+                                original_image, is_receipt=True
+                            )
+
+                            col_orig, col_crop = st.columns(2)
+                            with col_orig:
+                                st.caption("📷 Original")
+                                st.image(original_image, width=200)
+                            with col_crop:
+                                st.caption("✂️ Erkannt & zugeschnitten")
+                                st.image(cropped_image, width=200)
+
+                            if crop_metadata.get('detected'):
+                                st.success(f"✓ Bon erkannt! Größe: {crop_metadata.get('cropped_size')}")
+                            else:
+                                st.info("Randerkennung nicht möglich - verwende Originalsbild")
+
+                            processed_image = cropped_image
+                        else:
+                            st.image(original_image, width=300)
+                            processed_image = original_image
+
+                        # OCR auf dem verarbeiteten Bild
+                        text, confidence = ocr.extract_text_from_image(
+                            processed_image,
+                            preprocess=True,
+                            is_receipt=True
+                        )
+
+                        # Konfidenz anzeigen
+                        if confidence > 0:
+                            conf_color = "green" if confidence > 0.7 else "orange" if confidence > 0.4 else "red"
+                            st.markdown(f"**OCR-Konfidenz:** :{conf_color}[{confidence:.0%}]")
 
                     # Erweiterte Bon-Analyse
                     receipt_data = ocr.extract_receipt_data(text)
