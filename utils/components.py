@@ -18,6 +18,31 @@ def get_version_string():
     return f"Version {APP_VERSION}"
 
 
+def _render_compact_share_buttons(title: str, text: str, key_prefix: str = "share"):
+    """
+    Kompakte Teilen-Buttons für die Sidebar.
+    """
+    import urllib.parse
+
+    share_text = f"{title}\n\n{text}"
+    encoded_text = urllib.parse.quote(share_text)
+
+    whatsapp_url = f"https://wa.me/?text={encoded_text}"
+    telegram_url = f"https://t.me/share/url?text={encoded_text}"
+
+    st.markdown(
+        f'<a href="{whatsapp_url}" target="_blank">'
+        f'<button style="background: #25D366; color: white; border: none; '
+        f'padding: 5px 10px; border-radius: 5px; margin: 2px; font-size: 12px;">'
+        f'📱 WhatsApp</button></a>'
+        f'<a href="{telegram_url}" target="_blank">'
+        f'<button style="background: #0088cc; color: white; border: none; '
+        f'padding: 5px 10px; border-radius: 5px; margin: 2px; font-size: 12px;">'
+        f'✈️ Telegram</button></a>',
+        unsafe_allow_html=True
+    )
+
+
 def render_api_status():
     """
     Rendert die Ampel-Anzeige für API-Status.
@@ -136,7 +161,7 @@ def render_sidebar_cart():
                 st.divider()
 
                 # Aktionen
-                col_a, col_b = st.columns(2)
+                col_a, col_b, col_c = st.columns(3)
                 with col_a:
                     if st.button("🗑️", key="sb_clear_cart", help="Leeren"):
                         st.session_state.active_cart_items = []
@@ -144,6 +169,23 @@ def render_sidebar_cart():
                 with col_b:
                     if st.button("📂", key="sb_open_cart", help="Öffnen"):
                         st.switch_page("pages/4_🔍_Intelligente_Ordner.py")
+                with col_c:
+                    if st.button("📤", key="sb_share_cart", help="Teilen"):
+                        st.session_state.show_cart_share = True
+                        st.rerun()
+
+                # Teilen-Dialog
+                if st.session_state.get('show_cart_share'):
+                    from utils.helpers import create_share_text_for_documents
+                    share_text = create_share_text_for_documents(docs)
+                    _render_compact_share_buttons(
+                        f"💼 Aktentasche: {cart_name}",
+                        share_text,
+                        "cart"
+                    )
+                    if st.button("✕ Schließen", key="close_share"):
+                        st.session_state.show_cart_share = False
+                        st.rerun()
 
             else:
                 st.caption("Leer - Dokumente hier ablegen")

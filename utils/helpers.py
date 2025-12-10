@@ -251,3 +251,225 @@ def get_file_icon(mime_type: str) -> str:
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '📊',
     }
     return icons.get(mime_type, '📎')
+
+
+def render_share_buttons(title: str, text: str, url: str = None, key_prefix: str = "share"):
+    """
+    Rendert Teilen-Buttons für WhatsApp und andere Dienste.
+
+    Funktioniert besonders gut auf Mobilgeräten (Handy, iPad).
+
+    Args:
+        title: Titel zum Teilen
+        text: Text zum Teilen
+        url: Optionale URL
+        key_prefix: Prefix für Streamlit-Keys
+    """
+    import urllib.parse
+
+    # Text für WhatsApp vorbereiten
+    share_text = f"{title}\n\n{text}"
+    if url:
+        share_text += f"\n\n{url}"
+
+    encoded_text = urllib.parse.quote(share_text)
+
+    # WhatsApp Link
+    whatsapp_url = f"https://wa.me/?text={encoded_text}"
+
+    # Telegram Link
+    telegram_url = f"https://t.me/share/url?text={encoded_text}"
+
+    # E-Mail Link
+    email_subject = urllib.parse.quote(title)
+    email_body = urllib.parse.quote(text + (f"\n\n{url}" if url else ""))
+    email_url = f"mailto:?subject={email_subject}&body={email_body}"
+
+    st.markdown("#### 📤 Teilen")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown(
+            f'<a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">'
+            f'<button style="background-color: #25D366; color: white; border: none; '
+            f'padding: 10px 20px; border-radius: 8px; cursor: pointer; width: 100%;">'
+            f'📱 WhatsApp</button></a>',
+            unsafe_allow_html=True
+        )
+
+    with col2:
+        st.markdown(
+            f'<a href="{telegram_url}" target="_blank" style="text-decoration: none;">'
+            f'<button style="background-color: #0088cc; color: white; border: none; '
+            f'padding: 10px 20px; border-radius: 8px; cursor: pointer; width: 100%;">'
+            f'✈️ Telegram</button></a>',
+            unsafe_allow_html=True
+        )
+
+    with col3:
+        st.markdown(
+            f'<a href="{email_url}" style="text-decoration: none;">'
+            f'<button style="background-color: #666; color: white; border: none; '
+            f'padding: 10px 20px; border-radius: 8px; cursor: pointer; width: 100%;">'
+            f'📧 E-Mail</button></a>',
+            unsafe_allow_html=True
+        )
+
+    # Native Share API für Mobilgeräte (JavaScript)
+    share_js = f"""
+    <script>
+    function nativeShare_{key_prefix}() {{
+        if (navigator.share) {{
+            navigator.share({{
+                title: '{title.replace("'", "\\'")}',
+                text: '{text.replace("'", "\\'")}',
+                url: '{url or ""}'
+            }}).catch(console.error);
+        }} else {{
+            alert('Native Teilen wird auf diesem Gerät nicht unterstützt. Nutzen Sie die Buttons oben.');
+        }}
+    }}
+    </script>
+    <button onclick="nativeShare_{key_prefix}()" style="background-color: #007AFF; color: white;
+            border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer;
+            width: 100%; margin-top: 10px;">
+        📲 Natives Teilen (Mobil)
+    </button>
+    """
+    st.markdown(share_js, unsafe_allow_html=True)
+
+
+def create_share_text_for_documents(documents: list) -> str:
+    """
+    Erstellt einen Teilen-Text für eine Liste von Dokumenten.
+
+    Args:
+        documents: Liste von Document-Objekten oder Dicts
+
+    Returns:
+        Formatierter Text zum Teilen
+    """
+    lines = ["📁 Dokumentenübersicht", ""]
+
+    for i, doc in enumerate(documents, 1):
+        if hasattr(doc, 'title'):
+            # Document-Objekt
+            name = doc.title or doc.filename
+            category = doc.category or "Unkategorisiert"
+            date = format_date(doc.document_date or doc.created_at)
+            amount = format_currency(doc.invoice_amount) if doc.invoice_amount else None
+        else:
+            # Dict
+            name = doc.get('title') or doc.get('filename', 'Unbekannt')
+            category = doc.get('category', 'Unkategorisiert')
+            date = doc.get('date', '-')
+            amount = doc.get('amount')
+
+        line = f"{i}. {name}"
+        if category:
+            line += f" [{category}]"
+        if date:
+            line += f" - {date}"
+        if amount:
+            line += f" - {amount}"
+        lines.append(line)
+
+    lines.append("")
+    lines.append(f"Erstellt am: {format_date(datetime.now(), include_time=True)}")
+
+    return "\n".join(lines)
+
+
+def create_share_text_for_receipt(receipt_data: dict) -> str:
+    """
+    Erstellt einen Teilen-Text für einen Kassenbon.
+
+    Args:
+        receipt_data: Bon-Daten Dict
+
+    Returns:
+        Formatierter Text zum Teilen
+    """
+    lines = ["🧾 Kassenbon", ""]
+
+    if receipt_data.get('merchant'):
+        lines.append(f"📍 {receipt_data['merchant']}")
+
+    if receipt_data.get('date'):
+        date = receipt_data['date']
+        if isinstance(date, datetime):
+            date = format_date(date)
+        lines.append(f"📅 {date}")
+
+    lines.append("")
+
+    # Positionen
+    if receipt_data.get('items'):
+        lines.append("Positionen:")
+        for item in receipt_data['items']:
+            name = item.get('name', 'Artikel')
+            price = item.get('price', 0)
+            qty = item.get('quantity', 1)
+            if qty > 1:
+                lines.append(f"  • {name} x{qty}: {format_currency(price * qty)}")
+            else:
+                lines.append(f"  • {name}: {format_currency(price)}")
+        lines.append("")
+
+    if receipt_data.get('total'):
+        lines.append(f"💰 Gesamt: {format_currency(receipt_data['total'])}")
+
+    if receipt_data.get('category'):
+        lines.append(f"📂 Kategorie: {receipt_data['category']}")
+
+    return "\n".join(lines)
+
+
+def create_share_text_for_expense_split(group_name: str, members: list, expenses: list) -> str:
+    """
+    Erstellt einen Teilen-Text für eine Ausgabenaufteilung.
+
+    Args:
+        group_name: Name der Gruppe
+        members: Liste der Mitglieder
+        expenses: Liste der Ausgaben
+
+    Returns:
+        Formatierter Text zum Teilen
+    """
+    lines = [f"👥 Ausgabenaufteilung: {group_name}", ""]
+
+    total = sum(e.get('amount', 0) for e in expenses)
+    per_person = total / len(members) if members else 0
+
+    lines.append(f"💰 Gesamtausgaben: {format_currency(total)}")
+    lines.append(f"👤 Pro Person: {format_currency(per_person)}")
+    lines.append("")
+
+    lines.append("Ausgaben:")
+    for expense in expenses:
+        name = expense.get('description', 'Ausgabe')
+        amount = expense.get('amount', 0)
+        paid_by = expense.get('paid_by', 'Unbekannt')
+        lines.append(f"  • {name}: {format_currency(amount)} (bezahlt von {paid_by})")
+
+    lines.append("")
+    lines.append("Ausgleich nötig:")
+
+    # Einfache Berechnung wer wem schuldet
+    if members and expenses:
+        payments = {m: 0 for m in members}
+        for expense in expenses:
+            paid_by = expense.get('paid_by')
+            if paid_by in payments:
+                payments[paid_by] += expense.get('amount', 0)
+
+        for member in members:
+            diff = payments.get(member, 0) - per_person
+            if diff > 0.01:
+                lines.append(f"  ✅ {member} bekommt {format_currency(diff)} zurück")
+            elif diff < -0.01:
+                lines.append(f"  ❌ {member} schuldet {format_currency(abs(diff))}")
+
+    return "\n".join(lines)

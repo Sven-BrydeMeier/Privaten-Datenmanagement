@@ -15,7 +15,11 @@ from database.db import init_db, get_db, get_current_user_id
 from database.models import Receipt, ReceiptGroup, ReceiptGroupMember, Document, InvoiceStatus
 from config.settings import RECEIPT_CATEGORIES
 from services.ocr import get_ocr_service
-from utils.helpers import format_currency, format_date, send_email_notification
+from utils.helpers import (
+    format_currency, format_date, send_email_notification,
+    render_share_buttons, create_share_text_for_receipt,
+    create_share_text_for_expense_split
+)
 from utils.components import render_sidebar_cart, apply_custom_css
 
 st.set_page_config(page_title="Finanzen", page_icon="💰", layout="wide")
@@ -216,27 +220,53 @@ with tab_receipts:
                     format_func=lambda x: member_options[x]
                 )
 
-        if st.button("💾 Bon speichern", type="primary") and amount > 0:
-            with get_db() as session:
-                # Items als JSON speichern
-                items_json = json.dumps(detected_items) if detected_items else None
+        col_save, col_share = st.columns(2)
 
-                receipt = Receipt(
-                    user_id=user_id,
-                    group_id=selected_group,
-                    merchant=merchant,
-                    date=datetime.combine(bon_date, datetime.min.time()),
-                    total_amount=amount,
-                    category=category,
-                    notes=notes,
-                    paid_by_member_id=paid_by,
-                    items=detected_items if detected_items else None
-                )
-                session.add(receipt)
-                session.commit()
+        with col_save:
+            if st.button("💾 Bon speichern", type="primary") and amount > 0:
+                with get_db() as session:
+                    # Items als JSON speichern
+                    items_json = json.dumps(detected_items) if detected_items else None
 
-            st.success("Bon gespeichert!")
-            st.rerun()
+                    receipt = Receipt(
+                        user_id=user_id,
+                        group_id=selected_group,
+                        merchant=merchant,
+                        date=datetime.combine(bon_date, datetime.min.time()),
+                        total_amount=amount,
+                        category=category,
+                        notes=notes,
+                        paid_by_member_id=paid_by,
+                        items=detected_items if detected_items else None
+                    )
+                    session.add(receipt)
+                    session.commit()
+
+                st.success("Bon gespeichert!")
+                st.rerun()
+
+        with col_share:
+            if st.button("📤 Bon teilen", type="secondary") and amount > 0:
+                st.session_state.share_receipt_data = {
+                    'merchant': merchant,
+                    'date': bon_date,
+                    'total': amount,
+                    'items': detected_items,
+                    'category': category
+                }
+
+        # Teilen-Dialog anzeigen
+        if st.session_state.get('share_receipt_data'):
+            share_data = st.session_state.share_receipt_data
+            share_text = create_share_text_for_receipt(share_data)
+            render_share_buttons(
+                "🧾 Kassenbon",
+                share_text,
+                key_prefix="receipt_share"
+            )
+            if st.button("✕ Schließen", key="close_receipt_share"):
+                st.session_state.share_receipt_data = None
+                st.rerun()
 
     with col_list:
         st.subheader("📋 Letzte Bons")
