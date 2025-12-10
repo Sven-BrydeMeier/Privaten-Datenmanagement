@@ -37,6 +37,8 @@ with col_folders:
     # Aktuellen Ordner aus Session
     current_folder_id = st.session_state.get('current_folder_id')
 
+    # Ordnerdaten laden (als einfache Dicts, um DetachedInstanceError zu vermeiden)
+    folder_data = []
     with get_db() as session:
         # Alle Ordner laden
         folders = session.query(Folder).filter(
@@ -44,36 +46,14 @@ with col_folders:
             Folder.parent_id.is_(None)  # Nur Root-Ordner
         ).order_by(Folder.name).all()
 
-        # "Alle Dokumente" Option
-        if st.button("📄 Alle Dokumente", use_container_width=True,
-                     type="primary" if current_folder_id is None else "secondary"):
-            st.session_state.current_folder_id = None
-            st.rerun()
-
-        st.divider()
-
-        # Ordner anzeigen
+        # Ordnerdaten extrahieren während Session aktiv ist
         for folder in folders:
-            icon = "📥" if folder.name == "Posteingang" else "📂"
-            if folder.name == "Papierkorb":
-                icon = "🗑️"
-            elif folder.name == "Archiv":
-                icon = "📦"
-
-            # Dokumentenanzahl
             doc_count = session.query(Document).filter(
                 Document.folder_id == folder.id
             ).count()
 
-            is_selected = current_folder_id == folder.id
-            if st.button(f"{icon} {folder.name} ({doc_count})",
-                        use_container_width=True,
-                        type="primary" if is_selected else "secondary",
-                        key=f"folder_{folder.id}"):
-                st.session_state.current_folder_id = folder.id
-                st.rerun()
-
-            # Unterordner
+            # Unterordner laden
+            subfolders_data = []
             subfolders = session.query(Folder).filter(
                 Folder.parent_id == folder.id
             ).all()
@@ -81,11 +61,50 @@ with col_folders:
                 sub_count = session.query(Document).filter(
                     Document.folder_id == sub.id
                 ).count()
-                if st.button(f"  └ {sub.name} ({sub_count})",
-                            use_container_width=True,
-                            key=f"folder_{sub.id}"):
-                    st.session_state.current_folder_id = sub.id
-                    st.rerun()
+                subfolders_data.append({
+                    'id': sub.id,
+                    'name': sub.name,
+                    'count': sub_count
+                })
+
+            folder_data.append({
+                'id': folder.id,
+                'name': folder.name,
+                'count': doc_count,
+                'subfolders': subfolders_data
+            })
+
+    # "Alle Dokumente" Option
+    if st.button("📄 Alle Dokumente", use_container_width=True,
+                 type="primary" if current_folder_id is None else "secondary"):
+        st.session_state.current_folder_id = None
+        st.rerun()
+
+    st.divider()
+
+    # Ordner anzeigen
+    for folder in folder_data:
+        icon = "📥" if folder['name'] == "Posteingang" else "📂"
+        if folder['name'] == "Papierkorb":
+            icon = "🗑️"
+        elif folder['name'] == "Archiv":
+            icon = "📦"
+
+        is_selected = current_folder_id == folder['id']
+        if st.button(f"{icon} {folder['name']} ({folder['count']})",
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary",
+                    key=f"folder_{folder['id']}"):
+            st.session_state.current_folder_id = folder['id']
+            st.rerun()
+
+        # Unterordner
+        for sub in folder['subfolders']:
+            if st.button(f"  └ {sub['name']} ({sub['count']})",
+                        use_container_width=True,
+                        key=f"folder_{sub['id']}"):
+                st.session_state.current_folder_id = sub['id']
+                st.rerun()
 
     st.divider()
 
@@ -94,8 +113,8 @@ with col_folders:
         new_folder_name = st.text_input("Ordnername", key="new_folder_name")
         parent_folder = st.selectbox(
             "Übergeordneter Ordner",
-            options=[None] + [f.id for f in folders],
-            format_func=lambda x: "Kein (Root)" if x is None else next((f.name for f in folders if f.id == x), ""),
+            options=[None] + [f['id'] for f in folder_data],
+            format_func=lambda x: "Kein (Root)" if x is None else next((f['name'] for f in folder_data if f['id'] == x), ""),
             key="parent_folder"
         )
         if st.button("Erstellen") and new_folder_name:
