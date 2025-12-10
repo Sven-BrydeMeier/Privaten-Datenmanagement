@@ -4,8 +4,18 @@ Gemeinsame UI-Komponenten für alle Seiten
 import streamlit as st
 from pathlib import Path
 import sys
+from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# App-Version im Format JJ.MM.TT.HHMM
+APP_VERSION = "25.12.10.1430"
+APP_NAME = "Privates Dokumentenmanagement"
+
+
+def get_version_string():
+    """Gibt den formatierten Versionsstring zurück"""
+    return f"Version {APP_VERSION}"
 
 
 def render_api_status():
@@ -175,7 +185,8 @@ def render_sidebar_cart():
                 st.switch_page(page)
 
         st.divider()
-        st.caption("v1.0.0 | Privat & Sicher")
+        st.caption(f"📌 {get_version_string()}")
+        st.caption("Privat & Sicher 🔒")
 
 
 def add_to_cart(document_id: int):

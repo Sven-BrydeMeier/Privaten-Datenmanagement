@@ -12,7 +12,7 @@ from database.models import User
 from config.settings import get_settings, save_settings, Settings
 from services.ai_service import get_ai_service
 from services.encryption import EncryptionService
-from utils.components import render_sidebar_cart
+from utils.components import render_sidebar_cart, APP_VERSION, APP_NAME, get_version_string
 
 st.set_page_config(page_title="Einstellungen", page_icon="⚙️", layout="wide")
 init_db()
@@ -330,9 +330,9 @@ with tab_ui:
 
     st.markdown("### Über diese App")
 
-    st.info("""
-    **Privates Dokumentenmanagement**
-    Version 1.0.0
+    st.info(f"""
+    **{APP_NAME}**
+    {get_version_string()}
 
     Eine sichere und intelligente Dokumentenverwaltung mit:
     - 🔒 AES-256 Verschlüsselung

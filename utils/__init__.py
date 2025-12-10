@@ -3,11 +3,11 @@ from .helpers import format_currency, format_date, generate_share_link, send_ema
 from .components import (
     render_sidebar_cart, render_api_status,
     add_to_cart, remove_from_cart, get_cart_items, clear_cart,
-    apply_custom_css
+    apply_custom_css, APP_VERSION, APP_NAME, get_version_string
 )
 
 __all__ = [
     'PDFProcessor', 'format_currency', 'format_date', 'generate_share_link', 'send_email_notification',
     'render_sidebar_cart', 'render_api_status', 'add_to_cart', 'remove_from_cart', 'get_cart_items',
-    'clear_cart', 'apply_custom_css'
+    'clear_cart', 'apply_custom_css', 'APP_VERSION', 'APP_NAME', 'get_version_string'
 ]
