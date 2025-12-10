@@ -8,6 +8,80 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
+def render_api_status():
+    """
+    Rendert die Ampel-Anzeige für API-Status.
+    🟢 = Verbunden und funktioniert
+    🟡 = Konfiguriert, aber nicht verbunden/Fehler
+    🔴 = Nicht konfiguriert
+    """
+    from config.settings import get_settings
+    from services.ai_service import get_ai_service
+
+    settings = get_settings()
+    ai_service = get_ai_service()
+
+    # Status-Check (gecached)
+    if 'api_status' not in st.session_state:
+        st.session_state.api_status = ai_service.test_connection()
+
+    status = st.session_state.api_status
+
+    st.markdown("### 🚦 API-Status")
+
+    # OpenAI Status
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if status.get('openai'):
+            st.markdown("🟢")
+        elif settings.openai_api_key:
+            st.markdown("🟡")
+        else:
+            st.markdown("🔴")
+    with col2:
+        st.markdown("**OpenAI**")
+        if status.get('openai'):
+            st.caption("✓ Verbunden")
+        elif settings.openai_api_key:
+            error = status.get('openai_error', 'Verbindungsfehler')
+            # Fehler kürzen
+            if len(str(error)) > 50:
+                error = str(error)[:50] + "..."
+            st.caption(f"⚠ {error}")
+        else:
+            st.caption("Nicht konfiguriert")
+
+    # Anthropic/Claude Status
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if status.get('anthropic'):
+            st.markdown("🟢")
+        elif settings.anthropic_api_key:
+            st.markdown("🟡")
+        else:
+            st.markdown("🔴")
+    with col2:
+        st.markdown("**Claude**")
+        if status.get('anthropic'):
+            st.caption("✓ Verbunden")
+        elif settings.anthropic_api_key:
+            error = status.get('anthropic_error', 'Verbindungsfehler')
+            if len(str(error)) > 50:
+                error = str(error)[:50] + "..."
+            st.caption(f"⚠ {error}")
+        else:
+            st.caption("Nicht konfiguriert")
+
+    # Button zum erneuten Testen
+    if st.button("🔄 Verbindung testen", key="sb_test_api", use_container_width=True):
+        # Cache löschen und neu testen
+        if 'api_status' in st.session_state:
+            del st.session_state.api_status
+        if 'ai_service' in st.session_state:
+            del st.session_state.ai_service
+        st.rerun()
+
+
 def render_sidebar_cart():
     """
     Rendert die Aktentasche in der Sidebar.
@@ -15,38 +89,12 @@ def render_sidebar_cart():
     """
     from database.db import get_db, get_current_user_id
     from database.models import Document
-    from config.settings import get_settings
 
     with st.sidebar:
         st.title("📁 Dokumentenmanagement")
 
-        # API-Status
-        settings = get_settings()
-        from services.ai_service import get_ai_service
-        ai_service = get_ai_service()
-
-        if 'api_status' not in st.session_state:
-            st.session_state.api_status = ai_service.test_connection()
-
-        status = st.session_state.api_status
-
-        # Kompakte Status-Anzeige
-        col1, col2 = st.columns(2)
-        with col1:
-            if status.get('openai'):
-                st.markdown('<span style="color: #28a745;">●</span> OpenAI', unsafe_allow_html=True)
-            elif settings.openai_api_key:
-                st.markdown('<span style="color: #dc3545;">●</span> OpenAI', unsafe_allow_html=True)
-            else:
-                st.markdown('<span style="color: #6c757d;">●</span> OpenAI', unsafe_allow_html=True)
-
-        with col2:
-            if status.get('anthropic'):
-                st.markdown('<span style="color: #28a745;">●</span> Claude', unsafe_allow_html=True)
-            elif settings.anthropic_api_key:
-                st.markdown('<span style="color: #dc3545;">●</span> Claude', unsafe_allow_html=True)
-            else:
-                st.markdown('<span style="color: #6c757d;">●</span> Claude', unsafe_allow_html=True)
+        # API-Status mit Ampel
+        render_api_status()
 
         st.divider()
 
