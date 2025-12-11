@@ -486,7 +486,7 @@ Der Text ist auf Deutsch."""
                         year = '20' + year
                     receipt_data['date'] = datetime(int(year), int(month), int(day))
                     break
-                except:
+                except (ValueError, TypeError):
                     pass
 
         # Gesamtbetrag finden (typischerweise mit SUMME, TOTAL, GESAMT, etc.)
@@ -502,7 +502,7 @@ Der Text ist auf Deutsch."""
                 try:
                     receipt_data['total'] = float(amount_str)
                     break
-                except:
+                except (ValueError, TypeError):
                     pass
 
         # Einzelne Positionen extrahieren
@@ -530,7 +530,7 @@ Der Text ist auf Deutsch."""
                                 'price': price,
                                 'quantity': 1
                             })
-                    except:
+                    except (ValueError, TypeError):
                         pass
 
         # Zahlungsmethode erkennen

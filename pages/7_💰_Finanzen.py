@@ -20,7 +20,7 @@ from utils.helpers import (
     render_share_buttons, create_share_text_for_receipt,
     create_share_text_for_expense_split
 )
-from utils.components import render_sidebar_cart, apply_custom_css
+from utils.components import render_sidebar_cart, apply_custom_css, add_to_cart
 
 st.set_page_config(page_title="Finanzen", page_icon="💰", layout="wide")
 init_db()
@@ -689,7 +689,6 @@ with tab_invoices:
                                 session.commit()
                                 st.rerun()
                         if st.button("💼", key=f"cart_inv_{inv.id}", help="In Aktentasche"):
-                            from utils.components import add_to_cart
                             add_to_cart(inv.id)
                             st.success("Hinzugefügt!")
 

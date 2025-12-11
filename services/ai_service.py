@@ -287,7 +287,7 @@ Antworte im JSON-Format:
                 result = self._call_ai(prompt)
                 data = json.loads(result)
                 return data.get('requires_response', False), data.get('reason', '')
-            except:
+            except (json.JSONDecodeError, Exception):
                 pass
 
         return False, ""
