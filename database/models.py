@@ -122,9 +122,17 @@ class Document(Base):
 
     # Extrahierte Metadaten
     sender = Column(String(500))          # Absender
+    sender_address = Column(Text)          # Absender-Adresse
     document_date = Column(DateTime)       # Dokumentendatum
     subject = Column(String(1000))         # Betreff
     category = Column(String(100))         # Kategorie
+    ai_summary = Column(Text)              # KI-generierte Zusammenfassung
+
+    # Referenznummern
+    reference_number = Column(String(100))  # Aktenzeichen
+    customer_number = Column(String(100))   # Kundennummer
+    insurance_number = Column(String(100))  # Versicherungsnummer
+    processing_number = Column(String(100)) # Bearbeitungsnummer
 
     # Rechnungsspezifisch
     invoice_amount = Column(Float)

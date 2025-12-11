@@ -47,6 +47,73 @@ def parse_german_date(date_str: str) -> Optional[datetime]:
     return None
 
 
+def parse_date_string(date_str: str) -> Optional[datetime]:
+    """
+    Parst verschiedene Datumsformate aus KI-Antworten.
+
+    Args:
+        date_str: Datumsstring in verschiedenen Formaten
+
+    Returns:
+        datetime oder None
+    """
+    if not date_str:
+        return None
+
+    # String bereinigen
+    date_str = date_str.strip()
+
+    # Versuche zuerst parse_german_date
+    result = parse_german_date(date_str)
+    if result:
+        return result
+
+    # Zusätzliche Formate für KI-Antworten
+    formats = [
+        "%Y-%m-%d",           # ISO Format
+        "%d.%m.%Y",           # Deutsches Format
+        "%d.%m.%y",           # Kurzes deutsches Format
+        "%Y/%m/%d",           # Alternativ
+        "%d-%m-%Y",           # Mit Bindestrichen
+        "%B %d, %Y",          # Englisches Format
+        "%d. %B %Y",          # Deutsches ausgeschrieben
+        "%d %B %Y",           # Ohne Punkt
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+
+    # Versuche Regex für YYYY-MM-DD irgendwo im String
+    iso_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', date_str)
+    if iso_match:
+        try:
+            return datetime(
+                int(iso_match.group(1)),
+                int(iso_match.group(2)),
+                int(iso_match.group(3))
+            )
+        except ValueError:
+            pass
+
+    # Versuche Regex für DD.MM.YYYY
+    german_match = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{2,4})', date_str)
+    if german_match:
+        try:
+            day = int(german_match.group(1))
+            month = int(german_match.group(2))
+            year = int(german_match.group(3))
+            if year < 100:
+                year += 2000 if year < 50 else 1900
+            return datetime(year, month, day)
+        except ValueError:
+            pass
+
+    return None
+
+
 def generate_share_link(document_id: int, expires_hours: int = 168) -> str:
     """
     Generiert einen Freigabelink für ein Dokument.

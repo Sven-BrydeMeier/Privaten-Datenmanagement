@@ -127,29 +127,49 @@ Antworte im JSON-Format:
             Dictionary mit extrahierten Daten
         """
         prompt = f"""Extrahiere strukturierte Informationen aus diesem deutschen Dokument.
+Analysiere den Text sorgfältig und identifiziere alle relevanten Informationen.
 
 Dokumenttext:
-{text[:4000]}
+{text[:5000]}
 
-Antworte im JSON-Format mit diesen Feldern (nur vorhandene Informationen):
+Antworte im JSON-Format mit diesen Feldern (nur vorhandene Informationen, leere Felder weglassen):
 {{
-    "sender": "Name/Firma des Absenders",
-    "sender_address": "Vollständige Adresse",
+    "sender": "Name/Firma des Absenders (vollständiger Name)",
+    "sender_address": "Vollständige Adresse mit Straße, PLZ, Ort",
     "document_date": "YYYY-MM-DD",
-    "subject": "Betreff/Titel",
-    "category": "Rechnung|Vertrag|Versicherung|...",
+    "subject": "Betreff/Titel des Schreibens",
+    "category": "Rechnung|Vertrag|Versicherung|Mahnung|Kontoauszug|Lohnabrechnung|Steuerbescheid|Kündigung|Angebot|Sonstiges",
+    "summary": "Kurze Zusammenfassung des Dokumentinhalts in 1-2 Sätzen",
+    "reference_number": "Aktenzeichen/Geschäftszeichen/Az.",
+    "customer_number": "Kundennummer/Kd-Nr.",
+    "insurance_number": "Versicherungsnummer/Policennummer",
+    "processing_number": "Bearbeitungsnummer/Vorgangsnummer",
+    "contract_number": "Vertragsnummer",
     "invoice_amount": 123.45,
+    "invoice_currency": "EUR",
+    "invoice_due_date": "YYYY-MM-DD (Zahlungsfrist/Fällig bis)",
     "iban": "DEXX...",
     "bic": "XXXXX",
-    "contract_number": "...",
-    "deadline": "YYYY-MM-DD",
-    "deadline_type": "payment|response|cancellation",
+    "bank_name": "Name der Bank",
+    "deadline": "YYYY-MM-DD (andere wichtige Frist)",
+    "deadline_type": "payment|response|cancellation|contract_end",
     "key_points": ["Wichtiger Punkt 1", "Wichtiger Punkt 2"]
 }}
+
+Wichtig:
+- Suche nach allen Nummern wie "Aktenzeichen:", "Kd-Nr:", "Vers.-Nr:", "Bearbeitungsnr:", etc.
+- Extrahiere den vollständigen Absendernamen inkl. Rechtsform (GmbH, AG, etc.)
+- Bei Rechnungen: Betrag, IBAN, Fälligkeit extrahieren
+- Erstelle eine prägnante Zusammenfassung
 """
 
         try:
             result = self._call_ai(prompt)
+            # JSON aus der Antwort extrahieren (falls zusätzlicher Text vorhanden)
+            json_start = result.find('{')
+            json_end = result.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                result = result[json_start:json_end]
             return json.loads(result)
         except Exception as e:
             st.warning(f"KI-Extraktion fehlgeschlagen: {e}")

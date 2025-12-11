@@ -135,13 +135,49 @@ def process_document(document_id: int, file_data: bytes, user_id: int):
             if ai.any_ai_available:
                 try:
                     structured_data = ai.extract_structured_data(full_text)
+
+                    # Absender-Informationen
                     if structured_data.get('sender'):
                         document.sender = structured_data['sender']
+                    if structured_data.get('sender_address'):
+                        document.sender_address = structured_data['sender_address']
+
+                    # Betreff und Kategorie
                     if structured_data.get('subject'):
                         document.subject = structured_data['subject']
                         document.title = structured_data['subject']
                     if structured_data.get('category'):
                         document.category = structured_data['category']
+
+                    # Zusammenfassung
+                    if structured_data.get('summary'):
+                        document.ai_summary = structured_data['summary']
+
+                    # Referenznummern
+                    if structured_data.get('reference_number'):
+                        document.reference_number = structured_data['reference_number']
+                    if structured_data.get('customer_number'):
+                        document.customer_number = structured_data['customer_number']
+                    if structured_data.get('insurance_number'):
+                        document.insurance_number = structured_data['insurance_number']
+                    if structured_data.get('processing_number'):
+                        document.processing_number = structured_data['processing_number']
+                    if structured_data.get('contract_number') and not document.contract_number:
+                        document.contract_number = structured_data['contract_number']
+
+                    # Finanzinformationen
+                    if structured_data.get('invoice_amount'):
+                        document.invoice_amount = float(structured_data['invoice_amount'])
+                    if structured_data.get('invoice_due_date'):
+                        from utils.helpers import parse_date_string
+                        due_date = parse_date_string(structured_data['invoice_due_date'])
+                        if due_date:
+                            document.invoice_due_date = due_date
+                    if structured_data.get('iban') and not document.iban:
+                        document.iban = structured_data['iban']
+                    if structured_data.get('bic'):
+                        document.bic = structured_data['bic']
+
                 except Exception as e:
                     st.warning(f"KI-Analyse teilweise fehlgeschlagen: {e}")
 
@@ -235,17 +271,59 @@ with tab_upload:
                             with get_db() as session:
                                 doc = session.query(Document).get(doc_id)
                                 if doc:
-                                    st.markdown("### Extrahierte Informationen")
-                                    col_a, col_b = st.columns(2)
-                                    with col_a:
-                                        st.write(f"**Kategorie:** {doc.category or 'Nicht erkannt'}")
-                                        st.write(f"**Absender:** {doc.sender or 'Nicht erkannt'}")
+                                    st.markdown("---")
+                                    st.markdown("## 📋 Extrahierte Dokumentdaten")
+
+                                    # Zusammenfassung (wenn vorhanden)
+                                    if doc.ai_summary:
+                                        st.info(f"**Zusammenfassung:** {doc.ai_summary}")
+
+                                    # Drei-Spalten-Layout für Metadaten
+                                    col_sender, col_refs, col_finance = st.columns(3)
+
+                                    with col_sender:
+                                        st.markdown("### 📤 Absender")
+                                        st.write(f"**Name:** {doc.sender or '—'}")
+                                        if doc.sender_address:
+                                            st.write(f"**Adresse:** {doc.sender_address}")
+                                        st.write(f"**Kategorie:** {doc.category or '—'}")
                                         st.write(f"**Datum:** {format_date(doc.document_date)}")
-                                    with col_b:
+
+                                    with col_refs:
+                                        st.markdown("### 🔢 Referenznummern")
+                                        if doc.reference_number:
+                                            st.write(f"**Aktenzeichen:** {doc.reference_number}")
+                                        if doc.customer_number:
+                                            st.write(f"**Kundennummer:** {doc.customer_number}")
+                                        if doc.insurance_number:
+                                            st.write(f"**Vers.-Nr:** {doc.insurance_number}")
+                                        if doc.processing_number:
+                                            st.write(f"**Bearbeitungsnr:** {doc.processing_number}")
+                                        if doc.contract_number:
+                                            st.write(f"**Vertragsnr:** {doc.contract_number}")
+                                        if not any([doc.reference_number, doc.customer_number,
+                                                   doc.insurance_number, doc.processing_number,
+                                                   doc.contract_number]):
+                                            st.write("—")
+
+                                    with col_finance:
+                                        st.markdown("### 💰 Finanzdaten")
                                         if doc.invoice_amount:
                                             st.write(f"**Betrag:** {format_currency(doc.invoice_amount)}")
+                                        if doc.invoice_due_date:
+                                            st.write(f"**Fällig bis:** {format_date(doc.invoice_due_date)}")
                                         if doc.iban:
                                             st.write(f"**IBAN:** {doc.iban}")
+                                        if doc.bic:
+                                            st.write(f"**BIC:** {doc.bic}")
+                                        if not any([doc.invoice_amount, doc.iban]):
+                                            st.write("—")
+
+                                    # Link zum Dokument
+                                    st.markdown("---")
+                                    if st.button("📂 Dokument in Ordner öffnen"):
+                                        st.session_state.view_document_id = doc_id
+                                        st.switch_page("pages/3_📁_Dokumente.py")
                         except Exception as e:
                             st.error(f"Verarbeitungsfehler: {e}")
                 else:

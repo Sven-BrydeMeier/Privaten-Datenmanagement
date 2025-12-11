@@ -248,59 +248,263 @@ with col_docs:
         else:
             st.info("Keine Dokumente gefunden")
 
-# Dokument anzeigen Dialog
+# Dokument anzeigen Dialog - Erweitert
 if 'view_document_id' in st.session_state:
     doc_id = st.session_state.view_document_id
 
     with get_db() as session:
         doc = session.query(Document).get(doc_id)
         if doc:
-            st.divider()
-            st.subheader(f"📄 {doc.title or doc.filename}")
+            # Dokumentdaten in Dict extrahieren (für Verwendung außerhalb der Session)
+            doc_data = {
+                'id': doc.id,
+                'title': doc.title,
+                'filename': doc.filename,
+                'file_path': doc.file_path,
+                'mime_type': doc.mime_type,
+                'encryption_iv': doc.encryption_iv,
+                'category': doc.category,
+                'sender': doc.sender,
+                'sender_address': doc.sender_address,
+                'document_date': doc.document_date,
+                'subject': doc.subject,
+                'ai_summary': doc.ai_summary,
+                'reference_number': doc.reference_number,
+                'customer_number': doc.customer_number,
+                'insurance_number': doc.insurance_number,
+                'processing_number': doc.processing_number,
+                'contract_number': doc.contract_number,
+                'invoice_amount': doc.invoice_amount,
+                'invoice_due_date': doc.invoice_due_date,
+                'iban': doc.iban,
+                'bic': doc.bic,
+                'ocr_text': doc.ocr_text,
+                'created_at': doc.created_at,
+                'folder_id': doc.folder_id
+            }
 
-            col_meta, col_preview = st.columns([1, 2])
+    st.divider()
+    st.subheader(f"📄 {doc_data['title'] or doc_data['filename']}")
 
-            with col_meta:
-                st.markdown("### Metadaten")
-                st.write(f"**Dateiname:** {doc.filename}")
-                st.write(f"**Kategorie:** {doc.category or '-'}")
-                st.write(f"**Absender:** {doc.sender or '-'}")
-                st.write(f"**Datum:** {format_date(doc.document_date)}")
-                st.write(f"**Erstellt:** {format_date(doc.created_at, True)}")
+    # Zusammenfassung anzeigen
+    if doc_data['ai_summary']:
+        st.info(f"📝 **Zusammenfassung:** {doc_data['ai_summary']}")
 
-                if doc.invoice_amount:
-                    st.write(f"**Betrag:** {format_currency(doc.invoice_amount)}")
-                if doc.iban:
-                    st.write(f"**IBAN:** {doc.iban}")
-                if doc.contract_number:
-                    st.write(f"**Vertragsnr.:** {doc.contract_number}")
+    # Tabs für verschiedene Ansichten
+    tab_preview, tab_metadata, tab_edit, tab_actions = st.tabs([
+        "👁️ Vorschau", "📋 Metadaten", "✏️ Bearbeiten", "⚡ Aktionen"
+    ])
 
-            with col_preview:
-                st.markdown("### OCR-Text")
-                if doc.ocr_text:
-                    st.text_area("", doc.ocr_text, height=300, disabled=True)
-                else:
-                    st.info("Kein OCR-Text verfügbar")
+    with tab_preview:
+        col_doc, col_text = st.columns([1, 1])
 
-                # Download-Button
-                if doc.file_path and Path(doc.file_path).exists():
-                    encryption = get_encryption_service()
-                    with open(doc.file_path, 'rb') as f:
+        with col_doc:
+            st.markdown("### 📄 Dokument-Vorschau")
+            if doc_data['file_path'] and Path(doc_data['file_path']).exists():
+                encryption = get_encryption_service()
+                try:
+                    with open(doc_data['file_path'], 'rb') as f:
                         encrypted_data = f.read()
-                    try:
-                        decrypted = encryption.decrypt_file(encrypted_data, doc.encryption_iv, doc.filename)
-                        st.download_button(
-                            "⬇️ Herunterladen",
-                            data=decrypted,
-                            file_name=doc.filename,
-                            mime=doc.mime_type
-                        )
-                    except Exception as e:
-                        st.error(f"Entschlüsselung fehlgeschlagen: {e}")
+                    decrypted = encryption.decrypt_file(encrypted_data, doc_data['encryption_iv'], doc_data['filename'])
 
-            if st.button("Schließen"):
-                del st.session_state.view_document_id
-                st.rerun()
+                    # Bild-Vorschau
+                    if doc_data['mime_type'] and doc_data['mime_type'].startswith('image/'):
+                        from PIL import Image
+                        img = Image.open(io.BytesIO(decrypted))
+                        st.image(img, use_container_width=True)
+                    elif doc_data['mime_type'] == 'application/pdf':
+                        st.info("📄 PDF-Dokument - Vorschau unten")
+                        # PDF Info
+                        st.caption(f"Größe: {len(decrypted) / 1024:.1f} KB")
+
+                    # Download
+                    st.download_button(
+                        "⬇️ Herunterladen",
+                        data=decrypted,
+                        file_name=doc_data['filename'],
+                        mime=doc_data['mime_type'],
+                        key="download_preview"
+                    )
+                except Exception as e:
+                    st.error(f"Fehler beim Laden: {e}")
+            else:
+                st.warning("Dokument-Datei nicht gefunden")
+
+        with col_text:
+            st.markdown("### 📝 Erkannter Text")
+            if doc_data['ocr_text']:
+                st.text_area("OCR-Text", doc_data['ocr_text'], height=400, disabled=True, key="ocr_preview")
+            else:
+                st.info("Kein OCR-Text verfügbar")
+
+    with tab_metadata:
+        # Drei-Spalten-Layout für Metadaten
+        col_sender, col_refs, col_finance = st.columns(3)
+
+        with col_sender:
+            st.markdown("### 📤 Absender & Basis")
+            st.write(f"**Absender:** {doc_data['sender'] or '—'}")
+            if doc_data['sender_address']:
+                st.write(f"**Adresse:** {doc_data['sender_address']}")
+            st.write(f"**Betreff:** {doc_data['subject'] or '—'}")
+            st.write(f"**Kategorie:** {doc_data['category'] or '—'}")
+            st.write(f"**Dokumentdatum:** {format_date(doc_data['document_date'])}")
+            st.write(f"**Hochgeladen:** {format_date(doc_data['created_at'], True)}")
+
+        with col_refs:
+            st.markdown("### 🔢 Referenznummern")
+            refs = [
+                ("Aktenzeichen", doc_data['reference_number']),
+                ("Kundennummer", doc_data['customer_number']),
+                ("Vers.-Nummer", doc_data['insurance_number']),
+                ("Bearbeitungsnr.", doc_data['processing_number']),
+                ("Vertragsnummer", doc_data['contract_number']),
+            ]
+            has_refs = False
+            for label, value in refs:
+                if value:
+                    st.write(f"**{label}:** {value}")
+                    has_refs = True
+            if not has_refs:
+                st.caption("Keine Referenznummern erkannt")
+
+        with col_finance:
+            st.markdown("### 💰 Finanzdaten")
+            if doc_data['invoice_amount']:
+                st.write(f"**Betrag:** {format_currency(doc_data['invoice_amount'])}")
+            if doc_data['invoice_due_date']:
+                st.write(f"**Fällig bis:** {format_date(doc_data['invoice_due_date'])}")
+            if doc_data['iban']:
+                st.code(doc_data['iban'], language=None)
+                st.caption("IBAN")
+            if doc_data['bic']:
+                st.write(f"**BIC:** {doc_data['bic']}")
+            if not any([doc_data['invoice_amount'], doc_data['iban']]):
+                st.caption("Keine Finanzdaten erkannt")
+
+    with tab_edit:
+        st.markdown("### ✏️ Metadaten bearbeiten")
+
+        with st.form("edit_metadata"):
+            col_e1, col_e2 = st.columns(2)
+
+            with col_e1:
+                edit_sender = st.text_input("Absender", value=doc_data['sender'] or "")
+                edit_sender_address = st.text_area("Absender-Adresse", value=doc_data['sender_address'] or "", height=100)
+                edit_category = st.selectbox("Kategorie", DOCUMENT_CATEGORIES,
+                    index=DOCUMENT_CATEGORIES.index(doc_data['category']) if doc_data['category'] in DOCUMENT_CATEGORIES else 0)
+                edit_subject = st.text_input("Betreff", value=doc_data['subject'] or "")
+                edit_doc_date = st.date_input("Dokumentdatum",
+                    value=doc_data['document_date'].date() if doc_data['document_date'] else None)
+
+            with col_e2:
+                edit_ref = st.text_input("Aktenzeichen", value=doc_data['reference_number'] or "")
+                edit_customer = st.text_input("Kundennummer", value=doc_data['customer_number'] or "")
+                edit_insurance = st.text_input("Versicherungsnummer", value=doc_data['insurance_number'] or "")
+                edit_processing = st.text_input("Bearbeitungsnummer", value=doc_data['processing_number'] or "")
+                edit_contract = st.text_input("Vertragsnummer", value=doc_data['contract_number'] or "")
+
+            st.markdown("**Finanzdaten**")
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                edit_amount = st.number_input("Betrag (€)", value=doc_data['invoice_amount'] or 0.0, min_value=0.0, step=0.01)
+            with col_f2:
+                edit_due = st.date_input("Fällig bis",
+                    value=doc_data['invoice_due_date'].date() if doc_data['invoice_due_date'] else None)
+            with col_f3:
+                edit_iban = st.text_input("IBAN", value=doc_data['iban'] or "")
+
+            if st.form_submit_button("💾 Speichern", type="primary"):
+                with get_db() as session:
+                    doc = session.query(Document).get(doc_id)
+                    if doc:
+                        doc.sender = edit_sender or None
+                        doc.sender_address = edit_sender_address or None
+                        doc.category = edit_category
+                        doc.subject = edit_subject or None
+                        doc.title = edit_subject or doc.filename
+                        doc.document_date = datetime.combine(edit_doc_date, datetime.min.time()) if edit_doc_date else None
+                        doc.reference_number = edit_ref or None
+                        doc.customer_number = edit_customer or None
+                        doc.insurance_number = edit_insurance or None
+                        doc.processing_number = edit_processing or None
+                        doc.contract_number = edit_contract or None
+                        doc.invoice_amount = edit_amount if edit_amount > 0 else None
+                        doc.invoice_due_date = datetime.combine(edit_due, datetime.min.time()) if edit_due else None
+                        doc.iban = edit_iban or None
+                        session.commit()
+                        st.success("✅ Metadaten gespeichert!")
+                        st.rerun()
+
+    with tab_actions:
+        st.markdown("### ⚡ Aktionen")
+
+        col_act1, col_act2 = st.columns(2)
+
+        with col_act1:
+            # In Aktentasche
+            st.markdown("**📋 Aktentasche**")
+            if st.button("📋 In Aktentasche legen", use_container_width=True):
+                if 'active_cart_items' not in st.session_state:
+                    st.session_state.active_cart_items = []
+                if doc_id not in st.session_state.active_cart_items:
+                    st.session_state.active_cart_items.append(doc_id)
+                    st.success("✅ Zur Aktentasche hinzugefügt!")
+                else:
+                    st.info("Bereits in der Aktentasche")
+
+            # Verschieben
+            st.markdown("**📂 Ordner**")
+            with get_db() as session:
+                folders = session.query(Folder).filter(Folder.user_id == user_id).all()
+                folder_opts = {f.id: f.name for f in folders}
+
+            move_folder = st.selectbox("Zielordner", options=list(folder_opts.keys()),
+                format_func=lambda x: folder_opts[x], key="move_select")
+
+            col_mv, col_cp = st.columns(2)
+            with col_mv:
+                if st.button("📂 Verschieben", use_container_width=True):
+                    with get_db() as session:
+                        doc = session.query(Document).get(doc_id)
+                        if doc:
+                            doc.folder_id = move_folder
+                            session.commit()
+                            st.success("✅ Verschoben!")
+                            st.rerun()
+            with col_cp:
+                if st.button("📄 Kopieren", use_container_width=True):
+                    st.info("Dokument wird in Zielordner kopiert (Referenz)")
+
+        with col_act2:
+            # Teilen
+            st.markdown("**📤 Teilen**")
+
+            # Share-Text erstellen
+            share_title = doc_data['title'] or doc_data['filename']
+            share_lines = [f"📄 {share_title}"]
+            if doc_data['sender']:
+                share_lines.append(f"Von: {doc_data['sender']}")
+            if doc_data['category']:
+                share_lines.append(f"Kategorie: {doc_data['category']}")
+            if doc_data['document_date']:
+                share_lines.append(f"Datum: {format_date(doc_data['document_date'])}")
+            if doc_data['invoice_amount']:
+                share_lines.append(f"Betrag: {format_currency(doc_data['invoice_amount'])}")
+            if doc_data['iban']:
+                share_lines.append(f"IBAN: {doc_data['iban']}")
+            if doc_data['reference_number']:
+                share_lines.append(f"Aktenzeichen: {doc_data['reference_number']}")
+            share_text = "\n".join(share_lines)
+
+            from utils.helpers import render_share_buttons
+            render_share_buttons(share_title, share_text, key_prefix=f"doc_{doc_id}")
+
+    # Schließen-Button
+    st.markdown("---")
+    if st.button("✕ Schließen", type="secondary"):
+        del st.session_state.view_document_id
+        st.rerun()
 
 # Verschieben Dialog
 if 'move_document_id' in st.session_state:
