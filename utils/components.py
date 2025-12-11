@@ -207,26 +207,6 @@ def render_sidebar_cart():
                     pass
 
         st.divider()
-
-        # Navigation
-        st.markdown("### 📌 Navigation")
-
-        nav_items = [
-            ("📊 Dashboard", "streamlit_app.py"),
-            ("📄 Dokumentenaufnahme", "pages/2_📄_Dokumentenaufnahme.py"),
-            ("📁 Dokumente", "pages/3_📁_Dokumente.py"),
-            ("🔍 Intelligente Ordner", "pages/4_🔍_Intelligente_Ordner.py"),
-            ("📅 Kalender", "pages/5_📅_Kalender.py"),
-            ("📧 E-Mail", "pages/6_📧_E-Mail.py"),
-            ("💰 Finanzen", "pages/7_💰_Finanzen.py"),
-            ("⚙️ Einstellungen", "pages/8_⚙️_Einstellungen.py"),
-        ]
-
-        for label, page in nav_items:
-            if st.button(label, key=f"nav_{page}", use_container_width=True):
-                st.switch_page(page)
-
-        st.divider()
         st.caption(f"📌 {get_version_string()}")
         st.caption("Privat & Sicher 🔒")
 
