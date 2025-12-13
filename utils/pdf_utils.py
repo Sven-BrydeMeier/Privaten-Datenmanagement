@@ -105,7 +105,13 @@ class PDFProcessor:
                     boundaries.append(i)
 
         except Exception as e:
-            st.warning(f"Dokumenttrennung fehlgeschlagen: {e}")
+            error_msg = str(e)
+            if "poppler" in error_msg.lower():
+                st.warning("⚠️ Dokumenttrennung nicht verfügbar: Poppler ist nicht installiert. "
+                          "Für automatische Dokumenttrennung installieren Sie bitte 'poppler-utils' "
+                          "(Linux: apt install poppler-utils, Mac: brew install poppler)")
+            else:
+                st.warning(f"Dokumenttrennung fehlgeschlagen: {e}")
 
         return sorted(set(boundaries))
 

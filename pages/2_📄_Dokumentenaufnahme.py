@@ -10,7 +10,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.db import init_db, get_db, get_current_user_id
-from database.models import Document, Folder, DocumentStatus, CalendarEvent, EventType
+from database.models import Document, Folder, DocumentStatus, CalendarEvent, EventType, InvoiceStatus
 from config.settings import DOCUMENTS_DIR, DOCUMENT_CATEGORIES
 from services.encryption import get_encryption_service
 from services.ocr import get_ocr_service
