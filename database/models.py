@@ -112,6 +112,9 @@ class Document(Base):
     is_encrypted = Column(Boolean, default=True)
     encryption_iv = Column(LargeBinary)  # Initialisierungsvektor
 
+    # Duplikaterkennung
+    content_hash = Column(String(64), index=True)  # SHA-256 Hash des Inhalts
+
     # Status
     status = Column(SQLEnum(DocumentStatus), default=DocumentStatus.PENDING)
     processing_error = Column(Text)

@@ -3,6 +3,7 @@ Dokumentenaufnahme - Upload, Scan und Verarbeitung von Dokumenten
 """
 import streamlit as st
 import io
+import hashlib
 from pathlib import Path
 import sys
 from datetime import datetime
@@ -30,6 +31,151 @@ render_sidebar_cart()
 st.title("📄 Dokumentenaufnahme")
 st.markdown("Laden Sie Dokumente hoch oder scannen Sie sie ein")
 
+
+def calculate_content_hash(file_data: bytes) -> str:
+    """Berechnet SHA-256 Hash des Dateiinhalts"""
+    return hashlib.sha256(file_data).hexdigest()
+
+
+def check_for_duplicate(file_data: bytes, user_id: int) -> dict | None:
+    """
+    Prüft ob ein Dokument mit gleichem Inhalt bereits existiert.
+
+    Returns:
+        Dict mit Duplikat-Info oder None wenn kein Duplikat
+    """
+    content_hash = calculate_content_hash(file_data)
+
+    with get_db() as session:
+        existing = session.query(Document).filter(
+            Document.user_id == user_id,
+            Document.content_hash == content_hash
+        ).first()
+
+        if existing:
+            # Ordnerinfo laden
+            folder_name = "Kein Ordner"
+            folder_path = ""
+            if existing.folder_id:
+                folder = session.query(Folder).get(existing.folder_id)
+                if folder:
+                    folder_name = folder.name
+                    # Pfad aufbauen
+                    path_parts = [folder.name]
+                    parent = folder.parent_id
+                    while parent:
+                        parent_folder = session.query(Folder).get(parent)
+                        if parent_folder:
+                            path_parts.insert(0, parent_folder.name)
+                            parent = parent_folder.parent_id
+                        else:
+                            break
+                    folder_path = " / ".join(path_parts)
+
+            return {
+                'id': existing.id,
+                'filename': existing.filename,
+                'title': existing.title or existing.filename,
+                'sender': existing.sender,
+                'category': existing.category,
+                'document_date': existing.document_date,
+                'created_at': existing.created_at,
+                'folder_id': existing.folder_id,
+                'folder_name': folder_name,
+                'folder_path': folder_path,
+                'file_path': existing.file_path,
+                'content_hash': content_hash
+            }
+
+    return None
+
+
+def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existing_doc: dict, user_id: int):
+    """Zeigt Vergleichsansicht für Duplikate"""
+    st.warning("⚠️ **Mögliches Duplikat erkannt!**")
+    st.info(f"Ein Dokument mit identischem Inhalt existiert bereits in: **{existing_doc['folder_path']}**")
+
+    col_new, col_existing = st.columns(2)
+
+    with col_new:
+        st.markdown("### 📄 Neues Dokument")
+        st.write(f"**Dateiname:** {new_filename}")
+        st.write(f"**Größe:** {len(new_file_data) / 1024:.1f} KB")
+
+        # Vorschau für neues Dokument
+        if new_filename.lower().endswith('.pdf'):
+            try:
+                from pdf2image import convert_from_bytes
+                images = convert_from_bytes(new_file_data, first_page=1, last_page=1, dpi=100)
+                if images:
+                    st.image(images[0], caption="Vorschau (Seite 1)", use_container_width=True)
+            except Exception:
+                st.info("PDF-Vorschau nicht verfügbar")
+        else:
+            st.image(new_file_data, caption="Vorschau", use_container_width=True)
+
+    with col_existing:
+        st.markdown("### 📁 Bestehendes Dokument")
+        st.write(f"**Dateiname:** {existing_doc['filename']}")
+        st.write(f"**Titel:** {existing_doc['title'] or '—'}")
+        st.write(f"**Absender:** {existing_doc['sender'] or '—'}")
+        st.write(f"**Kategorie:** {existing_doc['category'] or '—'}")
+        st.write(f"**Datum:** {format_date(existing_doc['document_date'])}")
+        st.write(f"**Hochgeladen:** {format_date(existing_doc['created_at'])}")
+        st.write(f"**📁 Ordner:** {existing_doc['folder_path']}")
+
+        # Vorschau für bestehendes Dokument laden
+        if existing_doc['file_path']:
+            try:
+                encryption = get_encryption_service()
+                with open(existing_doc['file_path'], 'rb') as f:
+                    encrypted_data = f.read()
+
+                with get_db() as session:
+                    doc = session.query(Document).get(existing_doc['id'])
+                    if doc and doc.encryption_iv:
+                        decrypted_data = encryption.decrypt_file(encrypted_data, doc.encryption_iv)
+
+                        if existing_doc['filename'].lower().endswith('.pdf'):
+                            try:
+                                from pdf2image import convert_from_bytes
+                                images = convert_from_bytes(decrypted_data, first_page=1, last_page=1, dpi=100)
+                                if images:
+                                    st.image(images[0], caption="Vorschau (Seite 1)", use_container_width=True)
+                            except Exception:
+                                st.info("PDF-Vorschau nicht verfügbar")
+                        else:
+                            st.image(decrypted_data, caption="Vorschau", use_container_width=True)
+            except Exception as e:
+                st.info(f"Vorschau nicht verfügbar: {e}")
+
+    st.divider()
+
+    # Aktionen
+    st.markdown("### Was möchten Sie tun?")
+    col_action1, col_action2, col_action3 = st.columns(3)
+
+    with col_action1:
+        if st.button("🚫 Nicht hochladen", use_container_width=True, help="Abbrechen, bestehendes Dokument behalten"):
+            if 'duplicate_check' in st.session_state:
+                del st.session_state.duplicate_check
+            st.rerun()
+
+    with col_action2:
+        if st.button("📂 Zum bestehenden Dokument", use_container_width=True, help="Bestehendes Dokument öffnen"):
+            st.session_state.current_folder_id = existing_doc['folder_id']
+            if 'duplicate_check' in st.session_state:
+                del st.session_state.duplicate_check
+            st.switch_page("pages/3_📁_Dokumente.py")
+
+    with col_action3:
+        if st.button("✅ Trotzdem hochladen", type="primary", use_container_width=True, help="Als neues Dokument speichern"):
+            st.session_state.force_upload = True
+            if 'duplicate_check' in st.session_state:
+                del st.session_state.duplicate_check
+            st.rerun()
+
+
 # Tabs für verschiedene Upload-Optionen
 tab_upload, tab_multi, tab_process = st.tabs(["📤 Einzelupload", "📑 Mehrere Dokumente", "⚙️ Verarbeitung"])
 
@@ -37,6 +183,9 @@ tab_upload, tab_multi, tab_process = st.tabs(["📤 Einzelupload", "📑 Mehrere
 def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
     """Speichert ein Dokument verschlüsselt und erstellt DB-Eintrag"""
     encryption = get_encryption_service()
+
+    # Content-Hash berechnen
+    content_hash = calculate_content_hash(file_data)
 
     # Datei verschlüsseln
     encrypted_data, nonce = encryption.encrypt_file(file_data, filename)
@@ -73,6 +222,7 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
             mime_type=mime_type,
             is_encrypted=True,
             encryption_iv=nonce,
+            content_hash=content_hash,
             status=DocumentStatus.PENDING
         )
         session.add(document)
@@ -303,6 +453,24 @@ with tab_upload:
     )
 
     if uploaded_file:
+        file_data = uploaded_file.read()
+        uploaded_file.seek(0)  # Reset für spätere Verwendung
+
+        # Prüfe auf Duplikat (außer bei force_upload)
+        user_id = get_current_user_id()
+        force_upload = st.session_state.get('force_upload', False)
+
+        if not force_upload:
+            duplicate = check_for_duplicate(file_data, user_id)
+            if duplicate:
+                render_duplicate_comparison(file_data, uploaded_file.name, duplicate, user_id)
+                st.stop()  # Stoppe hier, zeige nur Duplikat-Vergleich
+
+        # Kein Duplikat oder force_upload - normale Ansicht
+        if force_upload:
+            st.info("📄 Dokument wird trotz Duplikat hochgeladen...")
+            st.session_state.force_upload = False  # Reset
+
         st.success(f"Datei: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
 
         # Vorschau
@@ -318,9 +486,6 @@ with tab_upload:
 
         with col2:
             if st.button("📥 Hochladen", type="primary"):
-                user_id = get_current_user_id()
-                file_data = uploaded_file.read()
-
                 with st.spinner("Speichere Dokument..."):
                     doc_id = save_document(file_data, uploaded_file.name, user_id)
 
