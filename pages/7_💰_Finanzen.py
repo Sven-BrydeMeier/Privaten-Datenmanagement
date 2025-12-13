@@ -12,7 +12,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.db import init_db, get_db, get_current_user_id
-from database.models import Receipt, ReceiptGroup, ReceiptGroupMember, Document, InvoiceStatus
+from database.models import Receipt, ReceiptGroup, ReceiptGroupMember, Document, InvoiceStatus, BankAccount
 from config.settings import RECEIPT_CATEGORIES
 from services.ocr import get_ocr_service
 from utils.helpers import (
@@ -661,13 +661,32 @@ with tab_invoices:
 
         st.markdown("---")
 
-        # Bankkonten für Bezahlauswahl (können in Einstellungen definiert werden)
-        bank_accounts = st.session_state.get('bank_accounts', [
-            "Girokonto Sparkasse",
-            "Girokonto Volksbank",
-            "Geschäftskonto",
-            "Sonstiges"
-        ])
+        # Bankkonten aus Datenbank laden
+        db_accounts = session.query(BankAccount).filter(
+            BankAccount.user_id == user_id,
+            BankAccount.is_active == True
+        ).order_by(BankAccount.is_default.desc(), BankAccount.bank_name).all()
+
+        # Dictionary für Anzeige: ID -> Anzeigename mit Icon und Farbe
+        bank_account_options = {}
+        bank_account_display = {}
+        default_account_id = None
+
+        for acc in db_accounts:
+            display_name = f"{acc.icon} {acc.bank_name} - {acc.account_name}"
+            bank_account_options[acc.id] = display_name
+            bank_account_display[acc.id] = {
+                'name': display_name,
+                'color': acc.color,
+                'icon': acc.icon
+            }
+            if acc.is_default:
+                default_account_id = acc.id
+
+        # Fallback falls keine Konten vorhanden
+        if not bank_account_options:
+            bank_account_options[0] = "⚠️ Kein Konto hinterlegt"
+            st.warning("💡 Tipp: Hinterlegen Sie Ihre Bankkonten in den Einstellungen (🏦 Bankkonten)")
 
         if invoices:
             for inv in invoices:
@@ -734,16 +753,23 @@ with tab_invoices:
                     with col_actions:
                         if inv_data['status'] == InvoiceStatus.OPEN:
                             st.markdown("**Als bezahlt markieren:**")
-                            pay_bank = st.selectbox(
+                            # Bankkonten-Auswahl mit Standard vorausgewählt
+                            account_ids = list(bank_account_options.keys())
+                            default_idx = account_ids.index(default_account_id) if default_account_id in account_ids else 0
+
+                            pay_bank_id = st.selectbox(
                                 "Bezahlt mit",
-                                options=bank_accounts,
+                                options=account_ids,
+                                format_func=lambda x: bank_account_options.get(x, "Unbekannt"),
+                                index=default_idx,
                                 key=f"bank_{inv_data['id']}",
                                 label_visibility="collapsed"
                             )
                             if st.button("✅ Bezahlt", key=f"pay_{inv_data['id']}", use_container_width=True):
                                 inv.invoice_status = InvoiceStatus.PAID
                                 inv.invoice_paid_date = datetime.now()
-                                inv.paid_with_bank_account = pay_bank
+                                # Speichere den Anzeigenamen des Kontos
+                                inv.paid_with_bank_account = bank_account_options.get(pay_bank_id, "Unbekannt")
                                 session.commit()
                                 st.rerun()
                         else:

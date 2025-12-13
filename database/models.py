@@ -67,6 +67,7 @@ class User(Base):
     folders = relationship("Folder", back_populates="user")
     contacts = relationship("Contact", back_populates="user")
     carts = relationship("Cart", back_populates="user")
+    bank_accounts = relationship("BankAccount", back_populates="user")
 
 
 class Folder(Base):
@@ -469,3 +470,42 @@ class SearchIndex(Base):
     indexed_at = Column(DateTime, default=func.now())
 
     document = relationship("Document")
+
+
+class BankAccount(Base):
+    """Bankkonten für Zahlungsverfolgung"""
+    __tablename__ = 'bank_accounts'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Bank-Informationen
+    bank_name = Column(String(255), nullable=False)  # z.B. "Sparkasse", "ING"
+    account_name = Column(String(255), nullable=False)  # z.B. "Girokonto", "Tagesgeld"
+    iban = Column(String(34))
+    bic = Column(String(11))
+
+    # Anzeige
+    color = Column(String(7), default="#1976D2")  # Hex-Farbe für UI
+    icon = Column(String(50), default="🏦")  # Emoji oder Icon
+
+    # Status
+    is_active = Column(Boolean, default=True)
+    is_default = Column(Boolean, default=False)  # Standard-Konto für Zahlungen
+
+    # Notizen
+    notes = Column(Text)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehung
+    user = relationship("User", back_populates="bank_accounts")
+
+    def display_name(self):
+        """Anzeigename: Bank - Kontoname"""
+        return f"{self.bank_name} - {self.account_name}"
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'bank_name', 'account_name', name='unique_bank_account'),
+    )

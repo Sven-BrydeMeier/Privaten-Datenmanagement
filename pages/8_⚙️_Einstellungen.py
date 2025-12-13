@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.db import init_db, get_db, get_current_user_id
-from database.models import User
+from database.models import User, BankAccount
 from config.settings import get_settings, save_settings, Settings
 from services.ai_service import get_ai_service
 from services.encryption import EncryptionService
@@ -26,10 +26,11 @@ settings = get_settings()
 st.title("⚙️ Einstellungen")
 
 # Tabs
-tab_api, tab_email, tab_security, tab_calendar, tab_ui = st.tabs([
+tab_api, tab_email, tab_security, tab_bank, tab_calendar, tab_ui = st.tabs([
     "🔑 API-Keys",
     "📧 E-Mail",
     "🔒 Sicherheit",
+    "🏦 Bankkonten",
     "📅 Kalender-Sync",
     "🎨 Oberfläche"
 ])
@@ -236,6 +237,313 @@ with tab_security:
         if st.button("📤 Daten importieren"):
             st.info("Import-Funktion wird vorbereitet...")
             # TODO: Implementiere Datenimport
+
+
+with tab_bank:
+    st.subheader("🏦 Bankkonten verwalten")
+    st.markdown("Verwalten Sie hier Ihre Bankkonten für die Zahlungsverfolgung bei Rechnungen.")
+
+    # Neues Konto hinzufügen
+    with st.expander("➕ Neues Bankkonto hinzufügen", expanded=False):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            new_bank_name = st.text_input(
+                "Bank",
+                placeholder="z.B. Sparkasse, ING, Volksbank",
+                key="new_bank_name"
+            )
+            new_account_name = st.text_input(
+                "Kontobezeichnung",
+                placeholder="z.B. Girokonto, Tagesgeld, Geschäftskonto",
+                key="new_account_name"
+            )
+
+        with col2:
+            new_iban = st.text_input(
+                "IBAN (optional)",
+                placeholder="DE89 3704 0044 0532 0130 00",
+                key="new_iban"
+            )
+            new_bic = st.text_input(
+                "BIC (optional)",
+                placeholder="COBADEFFXXX",
+                key="new_bic"
+            )
+
+        col3, col4, col5 = st.columns([1, 1, 2])
+
+        with col3:
+            # Farbauswahl
+            available_colors = [
+                "#1976D2",  # Blau
+                "#388E3C",  # Grün
+                "#F57C00",  # Orange
+                "#7B1FA2",  # Lila
+                "#C2185B",  # Pink
+                "#00796B",  # Teal
+                "#5D4037",  # Braun
+                "#455A64",  # Grau-Blau
+            ]
+            new_color = st.color_picker("Farbe", value="#1976D2", key="new_color")
+
+        with col4:
+            # Icon-Auswahl
+            icon_options = ["🏦", "💳", "🏧", "💰", "💵", "📊", "🏠", "🚗"]
+            new_icon = st.selectbox("Symbol", options=icon_options, key="new_icon")
+
+        with col5:
+            new_is_default = st.checkbox("Als Standard-Konto festlegen", key="new_is_default")
+
+        new_notes = st.text_area("Notizen (optional)", key="new_notes", height=68)
+
+        if st.button("💾 Konto hinzufügen", type="primary", key="add_bank_account"):
+            if new_bank_name and new_account_name:
+                with get_db() as session:
+                    # Prüfen ob Konto bereits existiert
+                    existing = session.query(BankAccount).filter(
+                        BankAccount.user_id == user_id,
+                        BankAccount.bank_name == new_bank_name,
+                        BankAccount.account_name == new_account_name
+                    ).first()
+
+                    if existing:
+                        st.error("Ein Konto mit diesem Namen existiert bereits!")
+                    else:
+                        # Falls neues Konto Standard sein soll, andere zurücksetzen
+                        if new_is_default:
+                            session.query(BankAccount).filter(
+                                BankAccount.user_id == user_id,
+                                BankAccount.is_default == True
+                            ).update({'is_default': False})
+
+                        new_account = BankAccount(
+                            user_id=user_id,
+                            bank_name=new_bank_name,
+                            account_name=new_account_name,
+                            iban=new_iban.replace(" ", "") if new_iban else None,
+                            bic=new_bic.replace(" ", "") if new_bic else None,
+                            color=new_color,
+                            icon=new_icon,
+                            is_default=new_is_default,
+                            notes=new_notes if new_notes else None
+                        )
+                        session.add(new_account)
+                        session.commit()
+                        st.success(f"✅ Konto '{new_bank_name} - {new_account_name}' hinzugefügt!")
+                        st.rerun()
+            else:
+                st.warning("Bitte Bank und Kontobezeichnung eingeben!")
+
+    st.markdown("---")
+
+    # Bestehende Konten anzeigen
+    st.markdown("### 📋 Ihre Bankkonten")
+
+    with get_db() as session:
+        accounts = session.query(BankAccount).filter(
+            BankAccount.user_id == user_id
+        ).order_by(BankAccount.is_default.desc(), BankAccount.bank_name).all()
+
+        if accounts:
+            for account in accounts:
+                with st.container():
+                    col_icon, col_info, col_actions = st.columns([0.5, 3, 1.5])
+
+                    with col_icon:
+                        st.markdown(
+                            f"<div style='font-size: 2rem; background-color: {account.color}20; "
+                            f"padding: 10px; border-radius: 10px; text-align: center; "
+                            f"border-left: 4px solid {account.color};'>{account.icon}</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    with col_info:
+                        default_badge = " ⭐ Standard" if account.is_default else ""
+                        inactive_badge = " 🚫 Inaktiv" if not account.is_active else ""
+                        st.markdown(f"**{account.bank_name} - {account.account_name}**{default_badge}{inactive_badge}")
+
+                        info_parts = []
+                        if account.iban:
+                            # IBAN formatiert anzeigen (gruppiert)
+                            formatted_iban = ' '.join([account.iban[i:i+4] for i in range(0, len(account.iban), 4)])
+                            info_parts.append(f"IBAN: {formatted_iban}")
+                        if account.bic:
+                            info_parts.append(f"BIC: {account.bic}")
+
+                        if info_parts:
+                            st.caption(" | ".join(info_parts))
+
+                        if account.notes:
+                            st.caption(f"📝 {account.notes}")
+
+                    with col_actions:
+                        action_cols = st.columns(3)
+
+                        with action_cols[0]:
+                            # Bearbeiten
+                            if st.button("✏️", key=f"edit_{account.id}", help="Bearbeiten"):
+                                st.session_state[f'editing_account_{account.id}'] = True
+
+                        with action_cols[1]:
+                            # Standard setzen/entfernen
+                            if account.is_default:
+                                if st.button("⭐", key=f"undefault_{account.id}", help="Standard entfernen"):
+                                    account.is_default = False
+                                    session.commit()
+                                    st.rerun()
+                            else:
+                                if st.button("☆", key=f"default_{account.id}", help="Als Standard"):
+                                    # Andere zurücksetzen
+                                    session.query(BankAccount).filter(
+                                        BankAccount.user_id == user_id,
+                                        BankAccount.is_default == True
+                                    ).update({'is_default': False})
+                                    account.is_default = True
+                                    session.commit()
+                                    st.rerun()
+
+                        with action_cols[2]:
+                            # Löschen
+                            if st.button("🗑️", key=f"delete_{account.id}", help="Löschen"):
+                                st.session_state[f'confirm_delete_{account.id}'] = True
+
+                    # Bearbeitungsformular
+                    if st.session_state.get(f'editing_account_{account.id}'):
+                        with st.container():
+                            st.markdown("---")
+                            edit_col1, edit_col2 = st.columns(2)
+
+                            with edit_col1:
+                                edit_bank = st.text_input(
+                                    "Bank",
+                                    value=account.bank_name,
+                                    key=f"edit_bank_{account.id}"
+                                )
+                                edit_account_name = st.text_input(
+                                    "Kontobezeichnung",
+                                    value=account.account_name,
+                                    key=f"edit_account_{account.id}"
+                                )
+                                edit_color = st.color_picker(
+                                    "Farbe",
+                                    value=account.color or "#1976D2",
+                                    key=f"edit_color_{account.id}"
+                                )
+
+                            with edit_col2:
+                                edit_iban = st.text_input(
+                                    "IBAN",
+                                    value=account.iban or "",
+                                    key=f"edit_iban_{account.id}"
+                                )
+                                edit_bic = st.text_input(
+                                    "BIC",
+                                    value=account.bic or "",
+                                    key=f"edit_bic_{account.id}"
+                                )
+                                icon_options = ["🏦", "💳", "🏧", "💰", "💵", "📊", "🏠", "🚗"]
+                                current_icon_index = icon_options.index(account.icon) if account.icon in icon_options else 0
+                                edit_icon = st.selectbox(
+                                    "Symbol",
+                                    options=icon_options,
+                                    index=current_icon_index,
+                                    key=f"edit_icon_{account.id}"
+                                )
+
+                            edit_active = st.checkbox(
+                                "Konto aktiv",
+                                value=account.is_active,
+                                key=f"edit_active_{account.id}"
+                            )
+                            edit_notes = st.text_area(
+                                "Notizen",
+                                value=account.notes or "",
+                                key=f"edit_notes_{account.id}"
+                            )
+
+                            btn_col1, btn_col2 = st.columns(2)
+                            with btn_col1:
+                                if st.button("💾 Speichern", key=f"save_{account.id}", type="primary"):
+                                    account.bank_name = edit_bank
+                                    account.account_name = edit_account_name
+                                    account.iban = edit_iban.replace(" ", "") if edit_iban else None
+                                    account.bic = edit_bic.replace(" ", "") if edit_bic else None
+                                    account.color = edit_color
+                                    account.icon = edit_icon
+                                    account.is_active = edit_active
+                                    account.notes = edit_notes if edit_notes else None
+                                    session.commit()
+                                    del st.session_state[f'editing_account_{account.id}']
+                                    st.success("✅ Änderungen gespeichert!")
+                                    st.rerun()
+
+                            with btn_col2:
+                                if st.button("❌ Abbrechen", key=f"cancel_{account.id}"):
+                                    del st.session_state[f'editing_account_{account.id}']
+                                    st.rerun()
+
+                    # Löschbestätigung
+                    if st.session_state.get(f'confirm_delete_{account.id}'):
+                        st.warning(f"⚠️ Konto '{account.bank_name} - {account.account_name}' wirklich löschen?")
+                        del_col1, del_col2 = st.columns(2)
+                        with del_col1:
+                            if st.button("🗑️ Ja, löschen", key=f"confirm_del_{account.id}", type="primary"):
+                                session.delete(account)
+                                session.commit()
+                                del st.session_state[f'confirm_delete_{account.id}']
+                                st.success("Konto gelöscht!")
+                                st.rerun()
+                        with del_col2:
+                            if st.button("❌ Abbrechen", key=f"cancel_del_{account.id}"):
+                                del st.session_state[f'confirm_delete_{account.id}']
+                                st.rerun()
+
+                    st.divider()
+        else:
+            st.info("📭 Noch keine Bankkonten hinterlegt. Fügen Sie oben Ihr erstes Konto hinzu!")
+
+    # Schnell-Hinzufügen für gängige Banken
+    st.markdown("---")
+    st.markdown("### 🚀 Schnell-Hinzufügen")
+    st.caption("Klicken Sie auf eine Bank, um ein Standardkonto anzulegen:")
+
+    quick_banks = [
+        ("🏦 Sparkasse", "Sparkasse", "#FF0000"),
+        ("🏦 Volksbank", "Volksbank", "#003399"),
+        ("🟧 ING", "ING", "#FF6600"),
+        ("🔵 DKB", "DKB", "#0066B3"),
+        ("🟢 N26", "N26", "#48D5A4"),
+        ("💜 Commerzbank", "Commerzbank", "#FFCC00"),
+        ("🔴 Deutsche Bank", "Deutsche Bank", "#0018A8"),
+        ("🟡 Postbank", "Postbank", "#FFCC00"),
+    ]
+
+    quick_cols = st.columns(4)
+    for idx, (label, bank, color) in enumerate(quick_banks):
+        with quick_cols[idx % 4]:
+            if st.button(label, key=f"quick_{bank}", use_container_width=True):
+                with get_db() as session:
+                    existing = session.query(BankAccount).filter(
+                        BankAccount.user_id == user_id,
+                        BankAccount.bank_name == bank,
+                        BankAccount.account_name == "Girokonto"
+                    ).first()
+
+                    if existing:
+                        st.warning(f"Girokonto bei {bank} existiert bereits!")
+                    else:
+                        new_acc = BankAccount(
+                            user_id=user_id,
+                            bank_name=bank,
+                            account_name="Girokonto",
+                            color=color,
+                            icon="🏦"
+                        )
+                        session.add(new_acc)
+                        session.commit()
+                        st.success(f"✅ Girokonto bei {bank} hinzugefügt!")
+                        st.rerun()
 
 
 with tab_calendar:
