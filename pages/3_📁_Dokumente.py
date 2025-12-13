@@ -21,6 +21,93 @@ from utils.components import render_sidebar_cart, add_to_cart
 st.set_page_config(page_title="Dokumente", page_icon="📁", layout="wide")
 init_db()
 
+
+def build_folder_tree(session, user_id: int, include_root: bool = False) -> list:
+    """
+    Baut eine hierarchische Ordnerliste für Selectboxen.
+
+    Returns:
+        Liste von Dicts mit 'id', 'display_name', 'path', 'depth'
+    """
+    from database.models import Folder
+
+    result = []
+
+    # Alle Ordner laden
+    all_folders = session.query(Folder).filter(
+        Folder.user_id == user_id
+    ).order_by(Folder.name).all()
+
+    # Index nach ID und parent_id
+    folders_by_id = {f.id: f for f in all_folders}
+    children_by_parent = {}
+    root_folders = []
+
+    for folder in all_folders:
+        if folder.parent_id is None:
+            root_folders.append(folder)
+        else:
+            if folder.parent_id not in children_by_parent:
+                children_by_parent[folder.parent_id] = []
+            children_by_parent[folder.parent_id].append(folder)
+
+    # Sortiere Root-Ordner: Posteingang zuerst, dann alphabetisch, Papierkorb zuletzt
+    def sort_key(f):
+        if f.name == "Posteingang":
+            return (0, f.name)
+        elif f.name == "Papierkorb":
+            return (2, f.name)
+        else:
+            return (1, f.name)
+
+    root_folders.sort(key=sort_key)
+
+    def add_folder_recursive(folder, depth=0, path_parts=None):
+        if path_parts is None:
+            path_parts = []
+
+        current_path = path_parts + [folder.name]
+
+        # Icon basierend auf Ordnername
+        if folder.name == "Posteingang":
+            icon = "📥"
+        elif folder.name == "Papierkorb":
+            icon = "🗑️"
+        elif folder.name == "Archiv" or "Archiv" in folder.name:
+            icon = "📦"
+        else:
+            icon = "📂"
+
+        # Einrückung mit Baumstruktur
+        if depth == 0:
+            prefix = ""
+        else:
+            prefix = "    " * (depth - 1) + "└── "
+
+        display_name = f"{prefix}{icon} {folder.name}"
+        full_path = " / ".join(current_path)
+
+        result.append({
+            'id': folder.id,
+            'name': folder.name,
+            'display_name': display_name,
+            'path': full_path,
+            'depth': depth
+        })
+
+        # Unterordner rekursiv hinzufügen
+        if folder.id in children_by_parent:
+            children = sorted(children_by_parent[folder.id], key=lambda f: f.name)
+            for child in children:
+                add_folder_recursive(child, depth + 1, current_path)
+
+    # Wurzelordner durchgehen
+    for folder in root_folders:
+        add_folder_recursive(folder)
+
+    return result
+
+
 # Sidebar mit Aktentasche
 render_sidebar_cart()
 
@@ -111,12 +198,25 @@ with col_folders:
     # Neuen Ordner erstellen
     with st.expander("➕ Neuer Ordner"):
         new_folder_name = st.text_input("Ordnername", key="new_folder_name")
+
+        # Hierarchische Ordnerauswahl für Parent
+        with get_db() as session:
+            parent_tree = build_folder_tree(session, user_id)
+
+        parent_options = [None] + [f['id'] for f in parent_tree]
         parent_folder = st.selectbox(
             "Übergeordneter Ordner",
-            options=[None] + [f['id'] for f in folder_data],
-            format_func=lambda x: "Kein (Root)" if x is None else next((f['name'] for f in folder_data if f['id'] == x), ""),
+            options=parent_options,
+            format_func=lambda x: "📁 Kein (Root-Ordner)" if x is None else next((f['display_name'] for f in parent_tree if f['id'] == x), ""),
             key="parent_folder"
         )
+
+        # Pfad anzeigen
+        if parent_folder:
+            selected_parent = next((f for f in parent_tree if f['id'] == parent_folder), None)
+            if selected_parent:
+                st.caption(f"📍 Wird erstellt unter: {selected_parent['path']}")
+
         if st.button("Erstellen") and new_folder_name:
             with get_db() as session:
                 new_folder = Folder(
@@ -126,7 +226,7 @@ with col_folders:
                 )
                 session.add(new_folder)
                 session.commit()
-            st.success(f"Ordner '{new_folder_name}' erstellt!")
+            st.success(f"✓ Ordner '{new_folder_name}' erstellt!")
             st.rerun()
 
 
@@ -480,11 +580,19 @@ if 'view_document_id' in st.session_state:
             # Verschieben
             st.markdown("**📂 Ordner**")
             with get_db() as session:
-                folders = session.query(Folder).filter(Folder.user_id == user_id).all()
-                folder_opts = {f.id: f.name for f in folders}
+                folder_tree = build_folder_tree(session, user_id)
 
-            move_folder = st.selectbox("Zielordner", options=list(folder_opts.keys()),
-                format_func=lambda x: folder_opts[x], key="move_select")
+            move_folder = st.selectbox(
+                "Zielordner",
+                options=[f['id'] for f in folder_tree],
+                format_func=lambda x: next((f['display_name'] for f in folder_tree if f['id'] == x), ""),
+                key="move_select"
+            )
+
+            # Pfad anzeigen
+            selected = next((f for f in folder_tree if f['id'] == move_folder), None)
+            if selected:
+                st.caption(f"📍 {selected['path']}")
 
             col_mv, col_cp = st.columns(2)
             with col_mv:
@@ -494,7 +602,11 @@ if 'view_document_id' in st.session_state:
                         if doc:
                             doc.folder_id = move_folder
                             session.commit()
-                            st.success("✅ Verschoben!")
+                            # Klassifikator lernen lassen
+                            classifier = get_classifier(user_id)
+                            classifier.learn_from_move(doc_id, move_folder)
+                            target_name = next((f['name'] for f in folder_tree if f['id'] == move_folder), "")
+                            st.success(f"✅ Verschoben nach '{target_name}'!")
                             st.rerun()
             with col_cp:
                 if st.button("📄 Kopieren", use_container_width=True):
@@ -539,14 +651,31 @@ if 'move_document_id' in st.session_state:
         st.subheader("📂 Dokument verschieben")
 
         with get_db() as session:
-            folders = session.query(Folder).filter(Folder.user_id == user_id).all()
-            folder_options = {f.id: f.name for f in folders}
+            # Hierarchische Ordnerstruktur laden
+            folder_tree = build_folder_tree(session, user_id)
 
+            # Aktuellen Ordner des Dokuments ermitteln
+            doc = session.query(Document).get(doc_id)
+            current_folder_name = ""
+            if doc and doc.folder_id:
+                current_folder = session.query(Folder).get(doc.folder_id)
+                if current_folder:
+                    current_folder_name = current_folder.name
+
+            st.info(f"📄 Aktueller Ordner: **{current_folder_name or 'Kein Ordner'}**")
+
+            # Ordnerauswahl mit Baumstruktur
             target_folder = st.selectbox(
-                "Zielordner",
-                options=list(folder_options.keys()),
-                format_func=lambda x: folder_options[x]
+                "Zielordner auswählen",
+                options=[f['id'] for f in folder_tree],
+                format_func=lambda x: next((f['display_name'] for f in folder_tree if f['id'] == x), ""),
+                key="move_target_folder"
             )
+
+            # Zeige vollständigen Pfad
+            selected_folder = next((f for f in folder_tree if f['id'] == target_folder), None)
+            if selected_folder:
+                st.caption(f"📍 Pfad: {selected_folder['path']}")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -561,7 +690,8 @@ if 'move_document_id' in st.session_state:
                         classifier = get_classifier(user_id)
                         classifier.learn_from_move(doc_id, target_folder)
 
-                        st.success("Verschoben!")
+                        target_name = next((f['name'] for f in folder_tree if f['id'] == target_folder), "")
+                        st.success(f"✓ Verschoben nach '{target_name}'!")
                         del st.session_state.move_document_id
                         st.rerun()
             with col2:
