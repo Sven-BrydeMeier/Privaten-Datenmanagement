@@ -165,6 +165,10 @@ def process_document(document_id: int, file_data: bytes, user_id: int):
                     if structured_data.get('contract_number') and not document.contract_number:
                         document.contract_number = structured_data['contract_number']
 
+                    # Rechnungsnummer
+                    if structured_data.get('invoice_number'):
+                        document.invoice_number = structured_data['invoice_number']
+
                     # Finanzinformationen
                     if structured_data.get('invoice_amount'):
                         document.invoice_amount = float(structured_data['invoice_amount'])
@@ -177,6 +181,14 @@ def process_document(document_id: int, file_data: bytes, user_id: int):
                         document.iban = structured_data['iban']
                     if structured_data.get('bic'):
                         document.bic = structured_data['bic']
+                    if structured_data.get('bank_name'):
+                        document.bank_name = structured_data['bank_name']
+
+                    # Automatische Rechnungserkennung - als OFFEN markieren
+                    is_invoice = structured_data.get('is_invoice', False)
+                    if is_invoice or structured_data.get('category') in ['Rechnung', 'Mahnung']:
+                        if document.invoice_amount and document.invoice_amount > 0:
+                            document.invoice_status = InvoiceStatus.OPEN
 
                 except Exception as e:
                     st.warning(f"KI-Analyse teilweise fehlgeschlagen: {e}")
@@ -295,6 +307,8 @@ with tab_upload:
                                             st.write(f"**Aktenzeichen:** {doc.reference_number}")
                                         if doc.customer_number:
                                             st.write(f"**Kundennummer:** {doc.customer_number}")
+                                        if getattr(doc, 'invoice_number', None):
+                                            st.write(f"**Rechnungsnr:** {doc.invoice_number}")
                                         if doc.insurance_number:
                                             st.write(f"**Vers.-Nr:** {doc.insurance_number}")
                                         if doc.processing_number:
@@ -302,12 +316,16 @@ with tab_upload:
                                         if doc.contract_number:
                                             st.write(f"**Vertragsnr:** {doc.contract_number}")
                                         if not any([doc.reference_number, doc.customer_number,
+                                                   getattr(doc, 'invoice_number', None),
                                                    doc.insurance_number, doc.processing_number,
                                                    doc.contract_number]):
                                             st.write("—")
 
                                     with col_finance:
                                         st.markdown("### 💰 Finanzdaten")
+                                        # Rechnungsstatus anzeigen
+                                        if doc.invoice_status == InvoiceStatus.OPEN:
+                                            st.error("🔴 Rechnung OFFEN")
                                         if doc.invoice_amount:
                                             st.write(f"**Betrag:** {format_currency(doc.invoice_amount)}")
                                         if doc.invoice_due_date:
@@ -316,6 +334,8 @@ with tab_upload:
                                             st.write(f"**IBAN:** {doc.iban}")
                                         if doc.bic:
                                             st.write(f"**BIC:** {doc.bic}")
+                                        if getattr(doc, 'bank_name', None):
+                                            st.write(f"**Bank:** {doc.bank_name}")
                                         if not any([doc.invoice_amount, doc.iban]):
                                             st.write("—")
 

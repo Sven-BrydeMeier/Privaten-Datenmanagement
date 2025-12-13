@@ -274,10 +274,13 @@ if 'view_document_id' in st.session_state:
                 'insurance_number': doc.insurance_number,
                 'processing_number': doc.processing_number,
                 'contract_number': doc.contract_number,
+                'invoice_number': getattr(doc, 'invoice_number', None),
                 'invoice_amount': doc.invoice_amount,
                 'invoice_due_date': doc.invoice_due_date,
+                'invoice_status': doc.invoice_status,
                 'iban': doc.iban,
                 'bic': doc.bic,
+                'bank_name': getattr(doc, 'bank_name', None),
                 'ocr_text': doc.ocr_text,
                 'created_at': doc.created_at,
                 'folder_id': doc.folder_id
@@ -356,6 +359,7 @@ if 'view_document_id' in st.session_state:
             refs = [
                 ("Aktenzeichen", doc_data['reference_number']),
                 ("Kundennummer", doc_data['customer_number']),
+                ("Rechnungsnr.", doc_data['invoice_number']),
                 ("Vers.-Nummer", doc_data['insurance_number']),
                 ("Bearbeitungsnr.", doc_data['processing_number']),
                 ("Vertragsnummer", doc_data['contract_number']),
@@ -370,6 +374,12 @@ if 'view_document_id' in st.session_state:
 
         with col_finance:
             st.markdown("### 💰 Finanzdaten")
+            if doc_data.get('invoice_status'):
+                from database.models import InvoiceStatus
+                if doc_data['invoice_status'] == InvoiceStatus.OPEN:
+                    st.error("🔴 Rechnung OFFEN")
+                elif doc_data['invoice_status'] == InvoiceStatus.PAID:
+                    st.success("✅ Rechnung BEZAHLT")
             if doc_data['invoice_amount']:
                 st.write(f"**Betrag:** {format_currency(doc_data['invoice_amount'])}")
             if doc_data['invoice_due_date']:
@@ -379,6 +389,8 @@ if 'view_document_id' in st.session_state:
                 st.caption("IBAN")
             if doc_data['bic']:
                 st.write(f"**BIC:** {doc_data['bic']}")
+            if doc_data.get('bank_name'):
+                st.write(f"**Bank:** {doc_data['bank_name']}")
             if not any([doc_data['invoice_amount'], doc_data['iban']]):
                 st.caption("Keine Finanzdaten erkannt")
 
@@ -400,12 +412,13 @@ if 'view_document_id' in st.session_state:
             with col_e2:
                 edit_ref = st.text_input("Aktenzeichen", value=doc_data['reference_number'] or "")
                 edit_customer = st.text_input("Kundennummer", value=doc_data['customer_number'] or "")
+                edit_invoice_nr = st.text_input("Rechnungsnummer", value=doc_data['invoice_number'] or "")
                 edit_insurance = st.text_input("Versicherungsnummer", value=doc_data['insurance_number'] or "")
                 edit_processing = st.text_input("Bearbeitungsnummer", value=doc_data['processing_number'] or "")
                 edit_contract = st.text_input("Vertragsnummer", value=doc_data['contract_number'] or "")
 
             st.markdown("**Finanzdaten**")
-            col_f1, col_f2, col_f3 = st.columns(3)
+            col_f1, col_f2, col_f3, col_f4 = st.columns(4)
             with col_f1:
                 edit_amount = st.number_input("Betrag (€)", value=doc_data['invoice_amount'] or 0.0, min_value=0.0, step=0.01)
             with col_f2:
@@ -413,6 +426,8 @@ if 'view_document_id' in st.session_state:
                     value=doc_data['invoice_due_date'].date() if doc_data['invoice_due_date'] else None)
             with col_f3:
                 edit_iban = st.text_input("IBAN", value=doc_data['iban'] or "")
+            with col_f4:
+                edit_bank = st.text_input("Bank", value=doc_data.get('bank_name') or "")
 
             if st.form_submit_button("💾 Speichern", type="primary"):
                 with get_db() as session:
@@ -426,12 +441,14 @@ if 'view_document_id' in st.session_state:
                         doc.document_date = datetime.combine(edit_doc_date, datetime.min.time()) if edit_doc_date else None
                         doc.reference_number = edit_ref or None
                         doc.customer_number = edit_customer or None
+                        doc.invoice_number = edit_invoice_nr or None
                         doc.insurance_number = edit_insurance or None
                         doc.processing_number = edit_processing or None
                         doc.contract_number = edit_contract or None
                         doc.invoice_amount = edit_amount if edit_amount > 0 else None
                         doc.invoice_due_date = datetime.combine(edit_due, datetime.min.time()) if edit_due else None
                         doc.iban = edit_iban or None
+                        doc.bank_name = edit_bank or None
                         session.commit()
                         st.success("✅ Metadaten gespeichert!")
                         st.rerun()

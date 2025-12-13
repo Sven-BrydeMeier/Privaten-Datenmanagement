@@ -661,36 +661,174 @@ with tab_invoices:
 
         st.markdown("---")
 
+        # Bankkonten für Bezahlauswahl (können in Einstellungen definiert werden)
+        bank_accounts = st.session_state.get('bank_accounts', [
+            "Girokonto Sparkasse",
+            "Girokonto Volksbank",
+            "Geschäftskonto",
+            "Sonstiges"
+        ])
+
         if invoices:
             for inv in invoices:
+                # Rechnungsdaten für diese Rechnung extrahieren
+                inv_data = {
+                    'id': inv.id,
+                    'title': inv.title or inv.filename,
+                    'sender': inv.sender or '',
+                    'iban': inv.iban or '',
+                    'bic': inv.bic or '',
+                    'bank_name': getattr(inv, 'bank_name', '') or '',
+                    'amount': inv.invoice_amount or 0,
+                    'amount_str': f"{inv.invoice_amount:.2f}".replace('.', ',') if inv.invoice_amount else '',
+                    'customer_number': inv.customer_number or '',
+                    'invoice_number': getattr(inv, 'invoice_number', '') or '',
+                    'reference_number': inv.reference_number or '',
+                    'due_date': inv.invoice_due_date,
+                    'status': inv.invoice_status,
+                    'paid_with': getattr(inv, 'paid_with_bank_account', '') or ''
+                }
+
                 with st.container():
-                    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                    # Hauptzeile mit Status
+                    status_icon = "🔴" if inv_data['status'] == InvoiceStatus.OPEN else "✅" if inv_data['status'] == InvoiceStatus.PAID else "⚪"
+                    st.markdown(f"### {status_icon} {inv_data['title']}")
 
-                    with col1:
-                        st.markdown(f"**{inv.title or inv.filename}**")
-                        st.caption(f"{inv.sender or 'Unbekannt'} | {format_date(inv.document_date)}")
+                    col_info, col_actions = st.columns([3, 1])
 
-                    with col2:
-                        st.markdown(f"**{format_currency(inv.invoice_amount)}**")
+                    with col_info:
+                        st.markdown(f"**Rechnungssteller:** {inv_data['sender']}")
 
-                    with col3:
-                        if inv.invoice_status == InvoiceStatus.OPEN:
-                            st.markdown("🔴 Offen")
-                        elif inv.invoice_status == InvoiceStatus.PAID:
-                            st.markdown("✅ Bezahlt")
-                        else:
-                            st.markdown("⚪ -")
+                        # Detailfelder in Spalten
+                        col_d1, col_d2, col_d3 = st.columns(3)
 
-                    with col4:
-                        if inv.invoice_status == InvoiceStatus.OPEN:
-                            if st.button("✓", key=f"pay_{inv.id}", help="Als bezahlt markieren"):
+                        with col_d1:
+                            st.write(f"**Betrag:** {format_currency(inv_data['amount'])}")
+                            if inv_data['due_date']:
+                                days_left = (inv_data['due_date'].date() - datetime.now().date()).days
+                                if days_left < 0:
+                                    st.error(f"⚠️ Überfällig seit {abs(days_left)} Tagen!")
+                                elif days_left <= 7:
+                                    st.warning(f"⏰ Fällig in {days_left} Tagen")
+                                else:
+                                    st.write(f"Fällig: {format_date(inv_data['due_date'])}")
+
+                        with col_d2:
+                            if inv_data['customer_number']:
+                                st.write(f"**Kd-Nr:** {inv_data['customer_number']}")
+                            if inv_data['invoice_number']:
+                                st.write(f"**RE-Nr:** {inv_data['invoice_number']}")
+                            if inv_data['reference_number']:
+                                st.write(f"**Az:** {inv_data['reference_number']}")
+
+                        with col_d3:
+                            if inv_data['iban']:
+                                st.code(inv_data['iban'], language=None)
+                            if inv_data['bank_name']:
+                                st.caption(inv_data['bank_name'])
+
+                    with col_actions:
+                        if inv_data['status'] == InvoiceStatus.OPEN:
+                            st.markdown("**Als bezahlt markieren:**")
+                            pay_bank = st.selectbox(
+                                "Bezahlt mit",
+                                options=bank_accounts,
+                                key=f"bank_{inv_data['id']}",
+                                label_visibility="collapsed"
+                            )
+                            if st.button("✅ Bezahlt", key=f"pay_{inv_data['id']}", use_container_width=True):
                                 inv.invoice_status = InvoiceStatus.PAID
                                 inv.invoice_paid_date = datetime.now()
+                                inv.paid_with_bank_account = pay_bank
                                 session.commit()
                                 st.rerun()
-                        if st.button("💼", key=f"cart_inv_{inv.id}", help="In Aktentasche"):
-                            add_to_cart(inv.id)
+                        else:
+                            if inv_data['paid_with']:
+                                st.success(f"Bezahlt: {inv_data['paid_with']}")
+                            if st.button("↩️ Wieder öffnen", key=f"reopen_{inv_data['id']}", use_container_width=True):
+                                inv.invoice_status = InvoiceStatus.OPEN
+                                inv.invoice_paid_date = None
+                                session.commit()
+                                st.rerun()
+
+                        if st.button("💼 Aktentasche", key=f"cart_inv_{inv_data['id']}", use_container_width=True):
+                            add_to_cart(inv_data['id'])
                             st.success("Hinzugefügt!")
+
+                    # Kopieren-Buttons für Überweisungsdaten (nur bei offenen Rechnungen)
+                    if inv_data['status'] == InvoiceStatus.OPEN:
+                        st.markdown("**📋 Für Überweisung kopieren:**")
+                        copy_cols = st.columns(5)
+
+                        # JavaScript für Zwischenablage
+                        copy_script = """
+                        <script>
+                        function copyToClipboard_{id}(text, btn) {{
+                            navigator.clipboard.writeText(text).then(function() {{
+                                btn.innerText = '✓';
+                                setTimeout(function() {{ btn.innerText = btn.getAttribute('data-original'); }}, 1500);
+                            }});
+                        }}
+                        </script>
+                        """
+
+                        with copy_cols[0]:
+                            if inv_data['iban']:
+                                st.markdown(f"""
+                                <button onclick="navigator.clipboard.writeText('{inv_data['iban']}')"
+                                    style="background:#4CAF50;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:100%">
+                                    📋 IBAN
+                                </button>
+                                """, unsafe_allow_html=True)
+                                st.caption(inv_data['iban'][:15] + "...")
+
+                        with copy_cols[1]:
+                            if inv_data['sender']:
+                                st.markdown(f"""
+                                <button onclick="navigator.clipboard.writeText('{inv_data['sender'].replace("'", "\\'")}')"
+                                    style="background:#2196F3;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:100%">
+                                    📋 Empfänger
+                                </button>
+                                """, unsafe_allow_html=True)
+                                st.caption(inv_data['sender'][:12] + "...")
+
+                        with copy_cols[2]:
+                            if inv_data['amount_str']:
+                                st.markdown(f"""
+                                <button onclick="navigator.clipboard.writeText('{inv_data['amount_str']}')"
+                                    style="background:#FF9800;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:100%">
+                                    📋 Betrag
+                                </button>
+                                """, unsafe_allow_html=True)
+                                st.caption(f"{inv_data['amount_str']} €")
+
+                        with copy_cols[3]:
+                            ref_text = inv_data['invoice_number'] or inv_data['customer_number'] or inv_data['reference_number']
+                            if ref_text:
+                                st.markdown(f"""
+                                <button onclick="navigator.clipboard.writeText('{ref_text}')"
+                                    style="background:#9C27B0;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:100%">
+                                    📋 Referenz
+                                </button>
+                                """, unsafe_allow_html=True)
+                                st.caption(ref_text[:12] + "..." if len(ref_text) > 12 else ref_text)
+
+                        with copy_cols[4]:
+                            # Verwendungszweck zusammenstellen
+                            purpose_parts = []
+                            if inv_data['invoice_number']:
+                                purpose_parts.append(f"RE {inv_data['invoice_number']}")
+                            if inv_data['customer_number']:
+                                purpose_parts.append(f"Kd {inv_data['customer_number']}")
+                            purpose = " ".join(purpose_parts) or inv_data['title'][:30]
+
+                            st.markdown(f"""
+                            <button onclick="navigator.clipboard.writeText('{purpose.replace("'", "\\'")}')"
+                                style="background:#607D8B;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:100%">
+                                📋 Zweck
+                            </button>
+                            """, unsafe_allow_html=True)
+                            st.caption("Verwendung")
 
                     st.divider()
         else:

@@ -139,12 +139,14 @@ Antworte im JSON-Format mit diesen Feldern (nur vorhandene Informationen, leere 
     "document_date": "YYYY-MM-DD",
     "subject": "Betreff/Titel des Schreibens",
     "category": "Rechnung|Vertrag|Versicherung|Mahnung|Kontoauszug|Lohnabrechnung|Steuerbescheid|Kündigung|Angebot|Sonstiges",
+    "is_invoice": true/false,
     "summary": "Kurze Zusammenfassung des Dokumentinhalts in 1-2 Sätzen",
     "reference_number": "Aktenzeichen/Geschäftszeichen/Az.",
     "customer_number": "Kundennummer/Kd-Nr.",
     "insurance_number": "Versicherungsnummer/Policennummer",
     "processing_number": "Bearbeitungsnummer/Vorgangsnummer",
     "contract_number": "Vertragsnummer",
+    "invoice_number": "Rechnungsnummer/RE-Nr./Rg-Nr.",
     "invoice_amount": 123.45,
     "invoice_currency": "EUR",
     "invoice_due_date": "YYYY-MM-DD (Zahlungsfrist/Fällig bis)",
@@ -157,9 +159,10 @@ Antworte im JSON-Format mit diesen Feldern (nur vorhandene Informationen, leere 
 }}
 
 Wichtig:
-- Suche nach allen Nummern wie "Aktenzeichen:", "Kd-Nr:", "Vers.-Nr:", "Bearbeitungsnr:", etc.
+- Setze "is_invoice": true wenn es sich um eine Rechnung, Mahnung oder Zahlungsaufforderung handelt
+- Suche nach allen Nummern wie "Rechnungsnr:", "RE-Nr:", "Kd-Nr:", "Vers.-Nr:", etc.
 - Extrahiere den vollständigen Absendernamen inkl. Rechtsform (GmbH, AG, etc.)
-- Bei Rechnungen: Betrag, IBAN, Fälligkeit extrahieren
+- Bei Rechnungen: Betrag, IBAN, Fälligkeit, Rechnungsnummer extrahieren
 - Erstelle eine prägnante Zusammenfassung
 """
 

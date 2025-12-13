@@ -135,13 +135,16 @@ class Document(Base):
     processing_number = Column(String(100)) # Bearbeitungsnummer
 
     # Rechnungsspezifisch
+    invoice_number = Column(String(100))    # Rechnungsnummer
     invoice_amount = Column(Float)
     invoice_currency = Column(String(3), default="EUR")
     invoice_status = Column(SQLEnum(InvoiceStatus))
     invoice_due_date = Column(DateTime)
     invoice_paid_date = Column(DateTime)
+    paid_with_bank_account = Column(String(200))  # Name des Bankkontos für Zahlung
     iban = Column(String(34))
     bic = Column(String(11))
+    bank_name = Column(String(200))         # Name der Bank des Rechnungsstellers
 
     # Vertragsspezifisch
     contract_number = Column(String(100))
