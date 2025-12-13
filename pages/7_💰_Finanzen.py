@@ -686,7 +686,8 @@ with tab_invoices:
                     'reference_number': inv.reference_number or '',
                     'due_date': inv.invoice_due_date,
                     'status': inv.invoice_status,
-                    'paid_with': getattr(inv, 'paid_with_bank_account', '') or ''
+                    'paid_with': getattr(inv, 'paid_with_bank_account', '') or '',
+                    'paid_date': inv.invoice_paid_date  # Bezahldatum
                 }
 
                 with st.container():
@@ -704,7 +705,10 @@ with tab_invoices:
 
                         with col_d1:
                             st.write(f"**Betrag:** {format_currency(inv_data['amount'])}")
-                            if inv_data['due_date']:
+                            if inv_data['status'] == InvoiceStatus.PAID and inv_data['paid_date']:
+                                # Bei bezahlten Rechnungen: Bezahldatum anzeigen
+                                st.success(f"✅ Bezahlt am {format_date(inv_data['paid_date'])}")
+                            elif inv_data['due_date']:
                                 days_left = (inv_data['due_date'].date() - datetime.now().date()).days
                                 if days_left < 0:
                                     st.error(f"⚠️ Überfällig seit {abs(days_left)} Tagen!")
@@ -743,11 +747,16 @@ with tab_invoices:
                                 session.commit()
                                 st.rerun()
                         else:
+                            # Zahlungsinformationen anzeigen
+                            st.markdown("**💳 Zahlungsdetails:**")
+                            if inv_data['paid_date']:
+                                st.write(f"📅 **{format_date(inv_data['paid_date'])}**")
                             if inv_data['paid_with']:
-                                st.success(f"Bezahlt: {inv_data['paid_with']}")
+                                st.write(f"🏦 {inv_data['paid_with']}")
                             if st.button("↩️ Wieder öffnen", key=f"reopen_{inv_data['id']}", use_container_width=True):
                                 inv.invoice_status = InvoiceStatus.OPEN
                                 inv.invoice_paid_date = None
+                                inv.paid_with_bank_account = None
                                 session.commit()
                                 st.rerun()
 

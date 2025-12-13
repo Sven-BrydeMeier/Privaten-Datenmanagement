@@ -278,6 +278,8 @@ if 'view_document_id' in st.session_state:
                 'invoice_amount': doc.invoice_amount,
                 'invoice_due_date': doc.invoice_due_date,
                 'invoice_status': doc.invoice_status,
+                'invoice_paid_date': doc.invoice_paid_date,
+                'paid_with_bank_account': getattr(doc, 'paid_with_bank_account', None),
                 'iban': doc.iban,
                 'bic': doc.bic,
                 'bank_name': getattr(doc, 'bank_name', None),
@@ -380,6 +382,11 @@ if 'view_document_id' in st.session_state:
                     st.error("🔴 Rechnung OFFEN")
                 elif doc_data['invoice_status'] == InvoiceStatus.PAID:
                     st.success("✅ Rechnung BEZAHLT")
+                    # Zahlungsdetails anzeigen
+                    if doc_data.get('invoice_paid_date'):
+                        st.write(f"📅 Bezahlt am: **{format_date(doc_data['invoice_paid_date'])}**")
+                    if doc_data.get('paid_with_bank_account'):
+                        st.write(f"🏦 Konto: **{doc_data['paid_with_bank_account']}**")
             if doc_data['invoice_amount']:
                 st.write(f"**Betrag:** {format_currency(doc_data['invoice_amount'])}")
             if doc_data['invoice_due_date']:
