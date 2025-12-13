@@ -81,17 +81,19 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
         return document.id
 
 
-def process_document(document_id: int, file_data: bytes, user_id: int):
-    """Verarbeitet ein Dokument mit OCR und KI"""
+def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
+    """Verarbeitet ein Dokument mit OCR und KI. Gibt Info über zugewiesenen Ordner zurück."""
     ocr = get_ocr_service()
     ai = get_ai_service()
     classifier = get_classifier(user_id)
     search = get_search_service(user_id)
 
+    result = {'folder_name': None, 'folder_created': False, 'sender': None}
+
     with get_db() as session:
         document = session.query(Document).get(document_id)
         if not document:
-            return
+            return result
 
         document.status = DocumentStatus.PROCESSING
         session.commit()
@@ -139,6 +141,7 @@ def process_document(document_id: int, file_data: bytes, user_id: int):
                     # Absender-Informationen
                     if structured_data.get('sender'):
                         document.sender = structured_data['sender']
+                        result['sender'] = structured_data['sender']
                     if structured_data.get('sender_address'):
                         document.sender_address = structured_data['sender_address']
 
@@ -199,6 +202,50 @@ def process_document(document_id: int, file_data: bytes, user_id: int):
             if not document.category and category:
                 document.category = category
 
+            # Ordnerzuweisung mit Sender-Fallback
+            assigned_folder_name = None
+            folder_created = False
+
+            # Prüfen ob ein intelligenter Ordner gefunden wurde (nicht nur Posteingang)
+            if folder_id:
+                folder = session.query(Folder).get(folder_id)
+                if folder and folder.name != 'Posteingang':
+                    # Intelligenter Ordner gefunden
+                    document.folder_id = folder_id
+                    assigned_folder_name = folder.name
+                else:
+                    folder_id = None  # Posteingang zählt nicht als "gefunden"
+
+            # Wenn kein passender Ordner gefunden, Ordner nach Absender erstellen
+            if not folder_id and document.sender:
+                sender_name = document.sender.strip()
+                if sender_name:
+                    # Prüfen ob Absender-Ordner bereits existiert
+                    existing_folder = session.query(Folder).filter(
+                        Folder.user_id == user_id,
+                        Folder.name == sender_name
+                    ).first()
+
+                    if existing_folder:
+                        document.folder_id = existing_folder.id
+                        assigned_folder_name = existing_folder.name
+                    else:
+                        # Neuen Ordner nach Absender erstellen
+                        new_folder = Folder(
+                            user_id=user_id,
+                            name=sender_name,
+                            description=f"Automatisch erstellt für Dokumente von {sender_name}",
+                            color="#607D8B"  # Grau-Blau für auto-erstellte Ordner
+                        )
+                        session.add(new_folder)
+                        session.flush()  # ID generieren
+                        document.folder_id = new_folder.id
+                        assigned_folder_name = sender_name
+                        folder_created = True
+
+            result['folder_name'] = assigned_folder_name
+            result['folder_created'] = folder_created
+
             # Fristen erkennen und Kalendereintrag erstellen
             for deadline in metadata.get('deadlines', []):
                 deadline_date = None
@@ -235,11 +282,15 @@ def process_document(document_id: int, file_data: bytes, user_id: int):
             document.status = DocumentStatus.COMPLETED
             session.commit()
 
+            return result
+
         except Exception as e:
             document.status = DocumentStatus.ERROR
             document.processing_error = str(e)
             session.commit()
             raise
+
+    return result
 
 
 with tab_upload:
@@ -276,8 +327,17 @@ with tab_upload:
                 if process_now:
                     with st.spinner("Verarbeite Dokument (OCR & Analyse)..."):
                         try:
-                            process_document(doc_id, file_data, user_id)
+                            process_result = process_document(doc_id, file_data, user_id)
                             st.success("Dokument erfolgreich verarbeitet!")
+
+                            # Ordnerzuweisung anzeigen
+                            if process_result.get('folder_name'):
+                                if process_result.get('folder_created'):
+                                    st.info(f"📁 **Neuer Ordner erstellt:** '{process_result['folder_name']}' (nach Absender)")
+                                else:
+                                    st.info(f"📁 **Eingeordnet in:** '{process_result['folder_name']}'")
+                            else:
+                                st.warning("📁 Kein passender Ordner gefunden. Dokument bleibt im Posteingang.")
 
                             # Ergebnisse anzeigen
                             with get_db() as session:
@@ -416,6 +476,8 @@ with tab_multi:
 
             # Jedes Teildokument verarbeiten
             progress = st.progress(0)
+            processed_docs = []
+
             for i, pdf_data in enumerate(split_pdfs):
                 progress.progress((i + 1) / len(split_pdfs))
                 filename = f"{multi_file.name.rsplit('.', 1)[0]}_Teil{i+1}.pdf"
@@ -423,12 +485,30 @@ with tab_multi:
                 with st.spinner(f"Verarbeite Dokument {i+1}/{len(split_pdfs)}..."):
                     doc_id = save_document(pdf_data, filename, user_id)
                     try:
-                        process_document(doc_id, pdf_data, user_id)
-                        st.success(f"✓ Dokument {i+1} verarbeitet")
+                        result = process_document(doc_id, pdf_data, user_id)
+                        folder_info = ""
+                        if result.get('folder_name'):
+                            if result.get('folder_created'):
+                                folder_info = f" → 📁 Neuer Ordner: '{result['folder_name']}'"
+                            else:
+                                folder_info = f" → 📁 '{result['folder_name']}'"
+                        else:
+                            folder_info = " → 📁 Posteingang"
+                        st.success(f"✓ Dokument {i+1} verarbeitet{folder_info}")
+                        processed_docs.append({'num': i+1, 'folder': result.get('folder_name') or 'Posteingang', 'created': result.get('folder_created', False)})
                     except Exception as e:
                         st.warning(f"⚠ Dokument {i+1}: {e}")
 
             st.success(f"Alle {len(split_pdfs)} Dokumente wurden verarbeitet!")
+
+            # Zusammenfassung der Ordnerzuweisungen
+            if processed_docs:
+                st.markdown("### 📁 Ordnerzuweisungen")
+                for doc_info in processed_docs:
+                    if doc_info['created']:
+                        st.write(f"- Dokument {doc_info['num']}: **{doc_info['folder']}** *(neu erstellt)*")
+                    else:
+                        st.write(f"- Dokument {doc_info['num']}: **{doc_info['folder']}**")
 
 
 with tab_process:
