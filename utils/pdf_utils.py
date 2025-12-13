@@ -2,7 +2,7 @@
 PDF-Verarbeitungsutilities
 """
 import io
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 from PIL import Image
 import streamlit as st
@@ -63,57 +63,174 @@ class PDFProcessor:
         """Extrahiert eine einzelne Seite als neues PDF"""
         return self.split_pdf(pdf_bytes, [(page_num, page_num + 1)])[0]
 
-    def detect_document_boundaries(self, pdf_bytes: bytes) -> List[int]:
+    def split_and_remove_separators(self, pdf_bytes: bytes) -> List[bytes]:
+        """
+        Teilt ein PDF an Trennseiten und entfernt die Trennseiten selbst.
+
+        Args:
+            pdf_bytes: Original-PDF mit Trennseiten
+
+        Returns:
+            Liste von PDF-Bytes (ohne Trennseiten)
+        """
+        from PyPDF2 import PdfReader, PdfWriter
+
+        boundaries, separator_pages = self.detect_document_boundaries(pdf_bytes)
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        page_count = len(reader.pages)
+
+        if page_count == 0:
+            return []
+
+        # Wenn nur eine Grenze (Seite 0) und keine Trennseiten, gibt's nur ein Dokument
+        if len(boundaries) == 1 and not separator_pages:
+            return [pdf_bytes]
+
+        result = []
+
+        # Erstelle Seitenbereiche für jedes Dokument
+        for i, start in enumerate(boundaries):
+            # Endseite bestimmen
+            if i + 1 < len(boundaries):
+                end = boundaries[i + 1]
+            else:
+                end = page_count
+
+            # Writer für dieses Dokument
+            writer = PdfWriter()
+
+            # Seiten hinzufügen, aber Trennseiten überspringen
+            for page_num in range(start, end):
+                if page_num not in separator_pages:
+                    writer.add_page(reader.pages[page_num])
+
+            # Nur hinzufügen wenn mindestens eine Seite vorhanden
+            if len(writer.pages) > 0:
+                output = io.BytesIO()
+                writer.write(output)
+                result.append(output.getvalue())
+
+        return result
+
+    def _is_separator_page_text(self, page_text: str) -> bool:
+        """
+        Erkennt ob eine Seite eine Trennseite ist basierend auf Text.
+
+        Args:
+            page_text: Extrahierter Text der Seite
+
+        Returns:
+            True wenn Trennseite erkannt
+        """
+        text_lower = page_text.lower().strip()
+
+        # Trennseite-Marker
+        separator_markers = ['trennseite', 'separator', 'neue dokument', 'neues dokument']
+
+        for marker in separator_markers:
+            if marker in text_lower:
+                # Prüfen ob die Seite hauptsächlich leer ist (wenig anderer Text)
+                # Entferne den Marker und prüfe wie viel Text übrig bleibt
+                cleaned_text = text_lower.replace(marker, '').strip()
+                # Wenn weniger als 50 Zeichen übrig, ist es wahrscheinlich eine Trennseite
+                if len(cleaned_text) < 50:
+                    return True
+
+        # Prüfe auf fast leere Seiten (könnte auch Trennseite sein)
+        if len(text_lower) < 20:
+            # Sehr wenig Text könnte leere Trennseite sein
+            return True
+
+        return False
+
+    def _extract_text_from_page(self, pdf_bytes: bytes, page_num: int) -> str:
+        """
+        Extrahiert Text aus einer PDF-Seite.
+
+        Args:
+            pdf_bytes: PDF-Bytes
+            page_num: Seitennummer (0-basiert)
+
+        Returns:
+            Extrahierter Text
+        """
+        from PyPDF2 import PdfReader
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        if page_num < len(reader.pages):
+            return reader.pages[page_num].extract_text() or ""
+        return ""
+
+    def detect_document_boundaries(self, pdf_bytes: bytes) -> Tuple[List[int], List[int]]:
         """
         Erkennt Dokumentgrenzen in einem mehrseitigen PDF.
 
+        Verwendet text-basierte Erkennung (kein Poppler erforderlich).
+
         Methoden:
-        1. Trennseiten (weiße Seiten mit "Trennseite")
-        2. Layoutwechsel (große Unterschiede im Layout)
+        1. Textextraktion mit PyPDF2
+        2. Suche nach "Trennseite" auf fast leeren Seiten
+        3. Optional: Layoutwechsel-Erkennung (wenn pdf2image verfügbar)
 
         Args:
             pdf_bytes: PDF-Bytes
 
         Returns:
-            Liste von Seitennummern, die neue Dokumente beginnen (immer mit 0)
+            Tuple von:
+            - Liste von Seitennummern, die neue Dokumente beginnen (immer mit 0)
+            - Liste von Trennseiten-Nummern (zum Entfernen)
         """
-        from services.ocr import get_ocr_service
+        from PyPDF2 import PdfReader
 
-        ocr = get_ocr_service()
         boundaries = [0]  # Erstes Dokument beginnt bei Seite 0
-
-        if not self.pdf2image_available:
-            return boundaries
+        separator_pages = []  # Seiten die entfernt werden sollen
 
         try:
-            from pdf2image import convert_from_bytes
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            page_count = len(reader.pages)
 
-            images = convert_from_bytes(pdf_bytes, dpi=150)
+            for i in range(page_count):
+                page_text = reader.pages[i].extract_text() or ""
 
-            for i, image in enumerate(images):
-                if i == 0:
-                    continue
-
-                # Prüfe auf Trennseite
-                if ocr.detect_separator_page(image):
+                if self._is_separator_page_text(page_text):
+                    # Diese Seite ist eine Trennseite
+                    separator_pages.append(i)
                     # Nächste Seite (nach Trennseite) ist neuer Dokumentanfang
-                    if i + 1 < len(images):
+                    if i + 1 < page_count:
                         boundaries.append(i + 1)
 
-                # Prüfe auf starken Layoutwechsel
-                elif i > 0 and self._detect_layout_change(images[i-1], image):
-                    boundaries.append(i)
+            # Optional: Layoutwechsel-Erkennung mit pdf2image (wenn verfügbar)
+            if self.pdf2image_available and page_count > 1:
+                try:
+                    from pdf2image import convert_from_bytes
+                    images = convert_from_bytes(pdf_bytes, dpi=100)  # Niedrigere DPI für Geschwindigkeit
+
+                    for i in range(1, len(images)):
+                        # Überspringe bereits erkannte Trennseiten
+                        if i in separator_pages or i - 1 in separator_pages:
+                            continue
+
+                        # Prüfe auf starken Layoutwechsel
+                        if self._detect_layout_change(images[i-1], images[i]):
+                            if i not in boundaries:
+                                boundaries.append(i)
+
+                except Exception:
+                    # Layoutwechsel-Erkennung ist optional, ignoriere Fehler
+                    pass
 
         except Exception as e:
-            error_msg = str(e)
-            if "poppler" in error_msg.lower():
-                st.warning("⚠️ Dokumenttrennung nicht verfügbar: Poppler ist nicht installiert. "
-                          "Für automatische Dokumenttrennung installieren Sie bitte 'poppler-utils' "
-                          "(Linux: apt install poppler-utils, Mac: brew install poppler)")
-            else:
-                st.warning(f"Dokumenttrennung fehlgeschlagen: {e}")
+            st.warning(f"Dokumenttrennung fehlgeschlagen: {e}")
 
-        return sorted(set(boundaries))
+        return sorted(set(boundaries)), sorted(set(separator_pages))
+
+    def detect_document_boundaries_simple(self, pdf_bytes: bytes) -> List[int]:
+        """
+        Vereinfachte Version für Rückwärtskompatibilität.
+        Gibt nur die Grenzen zurück, nicht die Trennseiten.
+        """
+        boundaries, _ = self.detect_document_boundaries(pdf_bytes)
+        return boundaries
 
     def _detect_layout_change(self, prev_image: Image.Image, curr_image: Image.Image) -> bool:
         """

@@ -389,14 +389,17 @@ with tab_multi:
 
             with st.spinner("Analysiere PDF..."):
                 if auto_detect:
-                    boundaries = pdf_processor.detect_document_boundaries(file_data)
-                    st.write(f"Erkannte Dokumentgrenzen: Seiten {boundaries}")
+                    # Neue text-basierte Erkennung mit automatischer Trennseiten-Entfernung
+                    boundaries, separator_pages = pdf_processor.detect_document_boundaries(file_data)
 
-                    # Seitenbereiche erstellen
-                    page_ranges = []
-                    for i, start in enumerate(boundaries):
-                        end = boundaries[i + 1] if i + 1 < len(boundaries) else page_count
-                        page_ranges.append((start, end))
+                    if separator_pages:
+                        st.info(f"🔍 {len(separator_pages)} Trennseite(n) erkannt auf Seite(n): {[s+1 for s in separator_pages]}")
+                        st.write(f"Dokumentgrenzen: Seiten {[b+1 for b in boundaries]}")
+                    else:
+                        st.write(f"Erkannte Dokumentgrenzen: Seiten {[b+1 for b in boundaries]}")
+
+                    # Automatisch trennen und Trennseiten entfernen
+                    split_pdfs = pdf_processor.split_and_remove_separators(file_data)
                 else:
                     # Manuelle Bereiche parsen
                     page_ranges = []
@@ -407,10 +410,9 @@ with tab_multi:
                         else:
                             page_ranges.append((int(range_str.strip()) - 1, int(range_str.strip())))
 
-            st.write(f"Trenne in {len(page_ranges)} Dokumente...")
+                    split_pdfs = pdf_processor.split_pdf(file_data, page_ranges)
 
-            # PDFs trennen
-            split_pdfs = pdf_processor.split_pdf(file_data, page_ranges)
+            st.write(f"Trenne in {len(split_pdfs)} Dokumente...")
 
             # Jedes Teildokument verarbeiten
             progress = st.progress(0)
