@@ -47,6 +47,11 @@ class Settings:
     outlook_client_id: str = ""
     outlook_client_secret: str = ""
 
+    # Nordigen/GoCardless Bank Account Data
+    nordigen_secret_id: str = ""
+    nordigen_secret_key: str = ""
+    nordigen_redirect_url: str = "http://localhost:8501"  # Streamlit default
+
     # Benachrichtigungen
     notification_email: str = ""
     notify_days_before_deadline: list = field(default_factory=lambda: [7, 1])

@@ -12,7 +12,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.db import init_db, get_db, get_current_user_id
-from database.models import Receipt, ReceiptGroup, ReceiptGroupMember, Document, InvoiceStatus, BankAccount
+from database.models import Receipt, ReceiptGroup, ReceiptGroupMember, Document, InvoiceStatus, BankAccount, BankConnection, BankTransaction
 from config.settings import RECEIPT_CATEGORIES
 from services.ocr import get_ocr_service
 from utils.helpers import (
@@ -32,11 +32,12 @@ user_id = get_current_user_id()
 st.title("💰 Finanzen & Ausgaben")
 
 # Tabs
-tab_receipts, tab_groups, tab_overview, tab_invoices = st.tabs([
+tab_receipts, tab_groups, tab_overview, tab_invoices, tab_transactions = st.tabs([
     "🧾 Bons erfassen",
     "👥 Gruppen & Teilen",
     "📊 Ausgaben-Übersicht",
-    "📄 Rechnungen"
+    "📄 Rechnungen",
+    "🏦 Transaktionen"
 ])
 
 
@@ -868,3 +869,213 @@ with tab_invoices:
                     st.divider()
         else:
             st.info("Keine Rechnungen gefunden")
+
+
+with tab_transactions:
+    st.subheader("🏦 Bank-Transaktionen")
+
+    with get_db() as session:
+        # Verbundene Konten laden
+        connections = session.query(BankConnection).filter(
+            BankConnection.user_id == user_id,
+            BankConnection.status == "active"
+        ).all()
+
+        if not connections:
+            st.info("""
+            📭 **Keine Bankkonten verbunden**
+
+            Verbinden Sie Ihre Bankkonten in den Einstellungen (🏦 Bankkonten → Bank-Synchronisation),
+            um Transaktionen automatisch abzurufen.
+            """)
+
+            if st.button("⚙️ Zu den Einstellungen"):
+                st.switch_page("pages/8_⚙️_Einstellungen.py")
+        else:
+            # Filter-Optionen
+            col_filter1, col_filter2, col_filter3 = st.columns(3)
+
+            with col_filter1:
+                # Konto-Auswahl
+                account_options = {"all": "Alle Konten"}
+                for conn in connections:
+                    account_options[str(conn.id)] = f"{conn.institution_name} ({conn.iban[-4:] if conn.iban else 'N/A'})"
+
+                selected_account = st.selectbox(
+                    "Konto",
+                    options=list(account_options.keys()),
+                    format_func=lambda x: account_options[x]
+                )
+
+            with col_filter2:
+                days_filter = st.selectbox(
+                    "Zeitraum",
+                    options=[7, 14, 30, 60, 90],
+                    format_func=lambda x: f"Letzte {x} Tage",
+                    index=2
+                )
+
+            with col_filter3:
+                tx_type = st.selectbox(
+                    "Art",
+                    options=["all", "income", "expense"],
+                    format_func=lambda x: {"all": "Alle", "income": "Einnahmen", "expense": "Ausgaben"}[x]
+                )
+
+            # Kontostand anzeigen
+            st.markdown("---")
+
+            if selected_account == "all":
+                total_available = sum(c.balance_available or 0 for c in connections)
+                st.metric("💰 Verfügbar (gesamt)", format_currency(total_available))
+            else:
+                conn = session.query(BankConnection).get(int(selected_account))
+                if conn and conn.balance_available is not None:
+                    col_bal1, col_bal2 = st.columns(2)
+                    with col_bal1:
+                        st.metric("💰 Verfügbar", format_currency(conn.balance_available))
+                    with col_bal2:
+                        if conn.balance_booked is not None:
+                            st.metric("📝 Gebucht", format_currency(conn.balance_booked))
+
+            st.markdown("---")
+
+            # Transaktionen laden
+            query = session.query(BankTransaction).filter(
+                BankTransaction.user_id == user_id,
+                BankTransaction.booking_date >= datetime.now() - timedelta(days=days_filter)
+            )
+
+            if selected_account != "all":
+                query = query.filter(BankTransaction.connection_id == int(selected_account))
+
+            if tx_type == "income":
+                query = query.filter(BankTransaction.amount > 0)
+            elif tx_type == "expense":
+                query = query.filter(BankTransaction.amount < 0)
+
+            transactions = query.order_by(BankTransaction.booking_date.desc()).limit(100).all()
+
+            if transactions:
+                # Zusammenfassung
+                total_income = sum(tx.amount for tx in transactions if tx.amount > 0)
+                total_expense = sum(tx.amount for tx in transactions if tx.amount < 0)
+
+                col_sum1, col_sum2, col_sum3 = st.columns(3)
+                with col_sum1:
+                    st.metric("📈 Einnahmen", format_currency(total_income), delta_color="normal")
+                with col_sum2:
+                    st.metric("📉 Ausgaben", format_currency(abs(total_expense)), delta_color="inverse")
+                with col_sum3:
+                    st.metric("📊 Saldo", format_currency(total_income + total_expense))
+
+                st.markdown("---")
+
+                # Transaktionsliste
+                st.markdown(f"### 📋 {len(transactions)} Transaktionen")
+
+                for tx in transactions:
+                    with st.container():
+                        col_date, col_details, col_amount, col_action = st.columns([1, 3, 1, 0.5])
+
+                        # Datum
+                        with col_date:
+                            if tx.booking_date:
+                                st.write(tx.booking_date.strftime("%d.%m."))
+                                st.caption(tx.booking_date.strftime("%Y"))
+                            else:
+                                st.write("--")
+
+                        # Details
+                        with col_details:
+                            # Name (Empfänger oder Absender)
+                            if tx.amount < 0:
+                                name = tx.creditor_name or "Unbekannt"
+                                icon = "📤"
+                            else:
+                                name = tx.debtor_name or "Unbekannt"
+                                icon = "📥"
+
+                            st.markdown(f"{icon} **{name[:40]}**{'...' if len(name) > 40 else ''}")
+
+                            # Verwendungszweck
+                            if tx.remittance_info:
+                                st.caption(tx.remittance_info[:80] + "..." if len(tx.remittance_info) > 80 else tx.remittance_info)
+
+                            # Kategorie
+                            if tx.category:
+                                st.caption(f"🏷️ {tx.category}")
+
+                        # Betrag
+                        with col_amount:
+                            color = "green" if tx.amount > 0 else "red"
+                            sign = "+" if tx.amount > 0 else ""
+                            st.markdown(
+                                f"<span style='color: {color}; font-weight: bold; font-size: 1.1em;'>"
+                                f"{sign}{tx.amount:,.2f} €</span>",
+                                unsafe_allow_html=True
+                            )
+
+                        # Aktionen
+                        with col_action:
+                            # Kategorie zuweisen
+                            with st.popover("⚙️"):
+                                st.markdown("**Kategorie zuweisen:**")
+                                categories = [
+                                    "Gehalt", "Miete", "Strom/Gas", "Versicherung",
+                                    "Lebensmittel", "Restaurant", "Transport",
+                                    "Shopping", "Unterhaltung", "Gesundheit",
+                                    "Umbuchung", "Sonstiges"
+                                ]
+                                new_cat = st.selectbox(
+                                    "Kategorie",
+                                    options=[""] + categories,
+                                    key=f"cat_{tx.id}",
+                                    label_visibility="collapsed"
+                                )
+                                if new_cat and st.button("Speichern", key=f"save_cat_{tx.id}"):
+                                    tx.category = new_cat
+                                    tx.is_categorized = True
+                                    session.commit()
+                                    st.success("Gespeichert!")
+                                    st.rerun()
+
+                                # Mit Rechnung/Bon verknüpfen
+                                st.markdown("---")
+                                st.markdown("**Mit Dokument verknüpfen:**")
+                                if st.button("🧾 Bon zuordnen", key=f"link_receipt_{tx.id}"):
+                                    st.session_state[f'linking_tx_{tx.id}'] = 'receipt'
+
+                                if st.button("📄 Rechnung zuordnen", key=f"link_invoice_{tx.id}"):
+                                    st.session_state[f'linking_tx_{tx.id}'] = 'invoice'
+
+                        st.divider()
+
+                # Sync-Button
+                st.markdown("---")
+                col_sync, col_info = st.columns([1, 3])
+                with col_sync:
+                    if st.button("🔄 Transaktionen aktualisieren", type="primary"):
+                        from services.banking_service import get_nordigen_service
+                        nordigen = get_nordigen_service()
+
+                        total_new = 0
+                        for conn in connections:
+                            result = nordigen.sync_connection(conn.id)
+                            if result.get("success"):
+                                total_new += result.get("new_transactions", 0)
+
+                        if total_new > 0:
+                            st.success(f"✅ {total_new} neue Transaktionen abgerufen!")
+                        else:
+                            st.info("Keine neuen Transaktionen")
+                        st.rerun()
+
+                with col_info:
+                    if connections:
+                        last_sync = max((c.last_sync for c in connections if c.last_sync), default=None)
+                        if last_sync:
+                            st.caption(f"Letzte Aktualisierung: {last_sync.strftime('%d.%m.%Y %H:%M')}")
+
+            else:
+                st.info("Keine Transaktionen im gewählten Zeitraum")

@@ -545,6 +545,178 @@ with tab_bank:
                         st.success(f"✅ Girokonto bei {bank} hinzugefügt!")
                         st.rerun()
 
+    # =====================
+    # BANK-SYNC (Nordigen/GoCardless)
+    # =====================
+    st.markdown("---")
+    st.markdown("### 🔄 Bank-Synchronisation")
+    st.markdown("Verbinden Sie Ihre Bankkonten, um Transaktionen automatisch abzurufen.")
+
+    # API-Credentials
+    with st.expander("🔑 GoCardless/Nordigen API-Credentials", expanded=False):
+        st.info("""
+        **Kostenlose Registrierung:**
+        1. Besuchen Sie [GoCardless Bank Account Data](https://bankaccountdata.gocardless.com/)
+        2. Erstellen Sie einen kostenlosen Account
+        3. Generieren Sie API-Credentials (Secret ID & Secret Key)
+        4. Tragen Sie diese unten ein
+        """)
+
+        nordigen_id = st.text_input(
+            "Secret ID",
+            value=settings.nordigen_secret_id,
+            type="password",
+            key="nordigen_id"
+        )
+        nordigen_key = st.text_input(
+            "Secret Key",
+            value=settings.nordigen_secret_key,
+            type="password",
+            key="nordigen_key"
+        )
+
+        if st.button("💾 API-Credentials speichern", key="save_nordigen"):
+            settings.nordigen_secret_id = nordigen_id
+            settings.nordigen_secret_key = nordigen_key
+            save_settings(settings)
+            st.success("✅ API-Credentials gespeichert!")
+
+    # Prüfen ob API konfiguriert
+    from services.banking_service import get_nordigen_service
+    nordigen = get_nordigen_service()
+
+    if nordigen.is_configured():
+        st.success("✅ GoCardless API ist konfiguriert")
+
+        # Bank verbinden
+        st.markdown("#### 🏦 Neue Bank verbinden")
+
+        # Banken-Suche
+        bank_search = st.text_input(
+            "Bank suchen",
+            placeholder="z.B. Sparkasse, ING, DKB...",
+            key="bank_search"
+        )
+
+        if bank_search and len(bank_search) >= 2:
+            with st.spinner("Suche Banken..."):
+                institutions = nordigen.search_institutions(bank_search, country="DE")
+
+            if institutions:
+                st.markdown(f"**{len(institutions)} Banken gefunden:**")
+
+                for inst in institutions[:10]:  # Max 10 anzeigen
+                    col_logo, col_name, col_action = st.columns([1, 3, 1])
+
+                    with col_logo:
+                        if inst.get("logo"):
+                            st.image(inst["logo"], width=40)
+                        else:
+                            st.write("🏦")
+
+                    with col_name:
+                        st.write(f"**{inst['name']}**")
+                        st.caption(f"ID: {inst['id']}")
+
+                    with col_action:
+                        if st.button("Verbinden", key=f"connect_{inst['id']}"):
+                            # Requisition erstellen
+                            st.session_state['connecting_bank'] = inst
+                            st.rerun()
+            else:
+                st.warning("Keine Banken gefunden")
+
+        # Verbindungsprozess
+        if st.session_state.get('connecting_bank'):
+            inst = st.session_state['connecting_bank']
+            st.info(f"🔗 Verbindung zu **{inst['name']}** wird hergestellt...")
+
+            # Redirect URL (für lokale Entwicklung)
+            redirect_url = settings.nordigen_redirect_url or "http://localhost:8501"
+
+            result = nordigen.create_requisition(
+                institution_id=inst['id'],
+                redirect_url=redirect_url,
+                reference=f"user_{user_id}_{inst['id']}"
+            )
+
+            if result and not result.get("error"):
+                st.markdown(f"""
+                ### 🔐 Bank-Authentifizierung
+
+                Klicken Sie auf den Button, um sich bei Ihrer Bank anzumelden:
+
+                [**→ Zur Bank-Anmeldung**]({result.get('link')})
+
+                Nach erfolgreicher Anmeldung werden Sie zurückgeleitet.
+                """)
+
+                # Requisition ID speichern
+                st.session_state['pending_requisition'] = result.get('id')
+
+                if st.button("❌ Abbrechen"):
+                    del st.session_state['connecting_bank']
+                    st.rerun()
+            else:
+                st.error(f"Fehler: {result.get('error', 'Unbekannter Fehler')}")
+                del st.session_state['connecting_bank']
+
+        # Verbundene Konten anzeigen
+        st.markdown("---")
+        st.markdown("#### 📋 Verbundene Konten")
+
+        from database.models import BankConnection
+        with get_db() as session:
+            connections = session.query(BankConnection).filter(
+                BankConnection.user_id == user_id
+            ).all()
+
+            if connections:
+                for conn in connections:
+                    with st.container():
+                        col1, col2, col3 = st.columns([1, 3, 1])
+
+                        with col1:
+                            if conn.institution_logo:
+                                st.image(conn.institution_logo, width=50)
+                            else:
+                                st.write("🏦")
+
+                        with col2:
+                            status_icon = "🟢" if conn.status == "active" else "🟡" if conn.status == "pending" else "🔴"
+                            st.markdown(f"**{conn.institution_name}** {status_icon}")
+                            st.caption(f"IBAN: {conn.iban or 'N/A'}")
+
+                            if conn.balance_available is not None:
+                                st.write(f"💰 Verfügbar: **{conn.balance_available:,.2f} €**")
+
+                            if conn.last_sync:
+                                st.caption(f"Letzte Sync: {conn.last_sync.strftime('%d.%m.%Y %H:%M')}")
+
+                        with col3:
+                            if conn.status == "active":
+                                if st.button("🔄", key=f"sync_{conn.id}", help="Synchronisieren"):
+                                    with st.spinner("Synchronisiere..."):
+                                        result = nordigen.sync_connection(conn.id)
+                                        if result.get("success"):
+                                            st.success(f"✅ {result.get('new_transactions', 0)} neue Transaktionen")
+                                            st.rerun()
+                                        else:
+                                            st.error(result.get("error"))
+
+                            if st.button("🗑️", key=f"del_conn_{conn.id}", help="Entfernen"):
+                                session.delete(conn)
+                                session.commit()
+                                st.success("Verbindung entfernt!")
+                                st.rerun()
+
+                        st.divider()
+            else:
+                st.info("Noch keine Bankkonten verbunden. Suchen Sie oben nach Ihrer Bank.")
+
+    else:
+        st.warning("⚠️ GoCardless API nicht konfiguriert. Tragen Sie oben Ihre API-Credentials ein.")
+
 
 with tab_calendar:
     st.subheader("📅 Kalender-Synchronisation")

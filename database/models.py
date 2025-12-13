@@ -701,3 +701,107 @@ class RecurringPattern(Base):
         Index('idx_recurring_user', 'user_id'),
         Index('idx_recurring_next', 'next_expected'),
     )
+
+
+class BankConnection(Base):
+    """Verbindung zu einer Bank über Nordigen/GoCardless"""
+    __tablename__ = 'bank_connections'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    bank_account_id = Column(Integer, ForeignKey('bank_accounts.id'))  # Verknüpfung zu manuellem Konto
+
+    # Nordigen-spezifisch
+    institution_id = Column(String(100), nullable=False)  # Nordigen Institution ID
+    institution_name = Column(String(255))
+    institution_logo = Column(String(500))  # URL zum Logo
+
+    # Requisition (Verbindungsanfrage)
+    requisition_id = Column(String(100))
+    agreement_id = Column(String(100))
+
+    # Konto-Informationen von Nordigen
+    account_id = Column(String(100))  # Nordigen Account ID
+    iban = Column(String(34))
+    account_name = Column(String(255))
+    account_type = Column(String(50))  # checking, savings, etc.
+    currency = Column(String(3), default="EUR")
+
+    # Status
+    status = Column(String(50), default="pending")  # pending, active, expired, error
+    last_sync = Column(DateTime)
+    sync_error = Column(Text)
+
+    # Verfügbare Daten
+    balance_available = Column(Float)
+    balance_booked = Column(Float)
+
+    # Gültigkeit
+    valid_until = Column(DateTime)  # Wann läuft die Verbindung ab
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    user = relationship("User")
+    bank_account = relationship("BankAccount")
+    transactions = relationship("BankTransaction", back_populates="connection", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('idx_bank_conn_user', 'user_id'),
+        Index('idx_bank_conn_account', 'account_id'),
+    )
+
+
+class BankTransaction(Base):
+    """Banktransaktionen von verbundenen Konten"""
+    __tablename__ = 'bank_transactions'
+
+    id = Column(Integer, primary_key=True)
+    connection_id = Column(Integer, ForeignKey('bank_connections.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Nordigen Transaction ID
+    transaction_id = Column(String(100), unique=True)
+
+    # Transaktionsdaten
+    booking_date = Column(DateTime)
+    value_date = Column(DateTime)
+    amount = Column(Float, nullable=False)
+    currency = Column(String(3), default="EUR")
+
+    # Details
+    creditor_name = Column(String(500))  # Empfänger
+    creditor_iban = Column(String(34))
+    debtor_name = Column(String(500))  # Absender
+    debtor_iban = Column(String(34))
+
+    # Verwendungszweck
+    remittance_info = Column(Text)  # Verwendungszweck
+    reference = Column(String(255))  # Referenz
+
+    # Klassifikation
+    category = Column(String(100))  # Automatisch oder manuell zugewiesen
+    is_categorized = Column(Boolean, default=False)
+
+    # Verknüpfung zu Dokumenten
+    document_id = Column(Integer, ForeignKey('documents.id'))  # Zugeordnete Rechnung
+    receipt_id = Column(Integer, ForeignKey('receipts.id'))  # Zugeordneter Bon
+
+    # Status
+    is_booked = Column(Boolean, default=True)  # Gebucht vs. Vormerkung
+    is_internal = Column(Boolean, default=False)  # Interne Umbuchung
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    connection = relationship("BankConnection", back_populates="transactions")
+    user = relationship("User")
+    document = relationship("Document")
+    receipt = relationship("Receipt")
+
+    __table_args__ = (
+        Index('idx_transaction_date', 'booking_date'),
+        Index('idx_transaction_user', 'user_id'),
+        Index('idx_transaction_connection', 'connection_id'),
+    )
