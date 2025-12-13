@@ -160,11 +160,16 @@ class Document(Base):
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
+    # Workflow-Status
+    workflow_status = Column(String(50), default="new")  # new, in_review, action_required, waiting, completed, archived
+
     # Beziehungen
     user = relationship("User", back_populates="documents")
     folder = relationship("Folder", back_populates="documents")
     tags = relationship("Tag", secondary=document_tags, back_populates="documents")
     calendar_events = relationship("CalendarEvent", back_populates="document")
+    notes = relationship("DocumentNote", back_populates="document", cascade="all, delete-orphan")
+    shares = relationship("DocumentShare", back_populates="document", cascade="all, delete-orphan")
 
     # Indizes für schnelle Suche
     __table_args__ = (
@@ -508,4 +513,191 @@ class BankAccount(Base):
 
     __table_args__ = (
         UniqueConstraint('user_id', 'bank_name', 'account_name', name='unique_bank_account'),
+    )
+
+
+class WorkflowStatus(enum.Enum):
+    """Workflow-Status für Dokumente"""
+    NEW = "new"                    # Neu eingetroffen
+    IN_REVIEW = "in_review"        # Wird geprüft
+    ACTION_REQUIRED = "action_required"  # Aktion erforderlich
+    WAITING = "waiting"            # Wartet auf Antwort
+    COMPLETED = "completed"        # Erledigt
+    ARCHIVED = "archived"          # Archiviert
+
+
+class DocumentNote(Base):
+    """Notizen und Kommentare zu Dokumenten"""
+    __tablename__ = 'document_notes'
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    content = Column(Text, nullable=False)
+    is_private = Column(Boolean, default=False)  # Nur für eigenen Benutzer sichtbar
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    document = relationship("Document", back_populates="notes")
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_note_document', 'document_id'),
+    )
+
+
+class DocumentShare(Base):
+    """Temporäre Freigabe-Links für Dokumente"""
+    __tablename__ = 'document_shares'
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Einzigartiger Token für den Link
+    share_token = Column(String(64), unique=True, nullable=False)
+
+    # Beschreibung/Zweck
+    description = Column(String(500))
+
+    # Gültigkeit
+    expires_at = Column(DateTime, nullable=False)
+    max_views = Column(Integer)  # None = unbegrenzt
+    view_count = Column(Integer, default=0)
+
+    # Berechtigungen
+    allow_download = Column(Boolean, default=True)
+
+    # Status
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=func.now())
+    last_accessed = Column(DateTime)
+
+    # Beziehungen
+    document = relationship("Document", back_populates="shares")
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_share_token', 'share_token'),
+        Index('idx_share_expires', 'expires_at'),
+    )
+
+
+class AuditLog(Base):
+    """Protokollierung aller wichtigen Aktionen"""
+    __tablename__ = 'audit_logs'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Was wurde geändert
+    entity_type = Column(String(50), nullable=False)  # document, folder, contact, etc.
+    entity_id = Column(Integer, nullable=False)
+
+    # Art der Änderung
+    action = Column(String(50), nullable=False)  # create, update, delete, view, download, share
+    action_detail = Column(String(500))  # Details zur Änderung
+
+    # Vorher/Nachher für Updates
+    old_values = Column(JSON)
+    new_values = Column(JSON)
+
+    # Metadaten
+    ip_address = Column(String(45))
+    user_agent = Column(String(500))
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehung
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_audit_entity', 'entity_type', 'entity_id'),
+        Index('idx_audit_user', 'user_id'),
+        Index('idx_audit_date', 'created_at'),
+    )
+
+
+class Notification(Base):
+    """Benachrichtigungen für Benutzer"""
+    __tablename__ = 'notifications'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Verknüpfung (optional)
+    document_id = Column(Integer, ForeignKey('documents.id'))
+    event_id = Column(Integer, ForeignKey('calendar_events.id'))
+
+    # Inhalt
+    title = Column(String(255), nullable=False)
+    message = Column(Text)
+    notification_type = Column(String(50))  # deadline, invoice, contract, birthday, reminder
+
+    # Status
+    is_read = Column(Boolean, default=False)
+    is_sent_email = Column(Boolean, default=False)
+    is_sent_push = Column(Boolean, default=False)
+
+    # Timing
+    scheduled_for = Column(DateTime)  # Wann soll benachrichtigt werden
+    sent_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    user = relationship("User")
+    document = relationship("Document")
+    event = relationship("CalendarEvent")
+
+    __table_args__ = (
+        Index('idx_notification_user', 'user_id'),
+        Index('idx_notification_scheduled', 'scheduled_for'),
+    )
+
+
+class RecurringPattern(Base):
+    """Erkennung wiederkehrender Rechnungen/Zahlungen"""
+    __tablename__ = 'recurring_patterns'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Erkennungsmerkmale
+    sender_pattern = Column(String(500))  # Absender-Muster
+    amount_min = Column(Float)  # Betragsbereich
+    amount_max = Column(Float)
+    typical_amount = Column(Float)  # Typischer Betrag
+
+    # Wiederholungsmuster
+    frequency = Column(String(20))  # monthly, quarterly, yearly
+    typical_day = Column(Integer)  # Typischer Tag im Monat (1-31)
+
+    # Vorhersage
+    next_expected = Column(DateTime)
+    last_occurrence = Column(DateTime)
+
+    # Statistik
+    occurrence_count = Column(Integer, default=0)
+    confidence = Column(Float, default=0.5)
+
+    # Beschreibung
+    name = Column(String(255))  # z.B. "Miete", "Strom", "Netflix"
+    category = Column(String(100))
+
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehung
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_recurring_user', 'user_id'),
+        Index('idx_recurring_next', 'next_expected'),
     )
