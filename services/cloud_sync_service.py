@@ -12,6 +12,9 @@ from typing import Optional, List, Dict, Any, Tuple
 import requests
 from urllib.parse import urlencode, urlparse, parse_qs
 
+import re
+from bs4 import BeautifulSoup
+
 from database.models import Document, Folder
 from database.db import get_db
 from database.extended_models import (
@@ -19,6 +22,15 @@ from database.extended_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== PUBLIC GOOGLE DRIVE KONSTANTEN ====================
+# Direkte Download-URL für öffentliche Dateien
+GOOGLE_DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
+# URL für öffentliche Ordner-Ansicht
+GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/{folder_id}"
+# Alternative API für öffentliche Ordner
+GOOGLE_DRIVE_PUBLIC_API = "https://www.googleapis.com/drive/v3/files"
 
 
 class CloudSyncConnectionWrapper:
@@ -356,6 +368,292 @@ class CloudSyncService:
 
         return None
 
+    # ==================== PUBLIC GOOGLE DRIVE API ====================
+
+    def _google_public_list_folder(self, folder_id: str) -> Dict:
+        """
+        Listet Dateien in einem öffentlich freigegebenen Google Drive-Ordner.
+        Verwendet Web-Scraping der öffentlichen Ordner-Seite.
+        """
+        try:
+            # Versuche, die öffentliche Ordnerseite zu laden
+            url = GOOGLE_DRIVE_FOLDER_URL.format(folder_id=folder_id)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+
+            response = requests.get(url, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                return {"error": f"HTTP {response.status_code}: Ordner nicht zugänglich"}
+
+            # Parse HTML und extrahiere Datei-Informationen
+            files = self._parse_google_drive_folder_page(response.text)
+
+            if not files:
+                # Alternative Methode: Versuche JSON-Daten aus der Seite zu extrahieren
+                files = self._extract_drive_data_from_html(response.text)
+
+            return {"files": files, "success": True}
+
+        except requests.exceptions.Timeout:
+            return {"error": "Zeitüberschreitung beim Laden des Ordners"}
+        except requests.exceptions.RequestException as e:
+            return {"error": f"Netzwerkfehler: {str(e)}"}
+        except Exception as e:
+            logger.error(f"Fehler beim Laden des öffentlichen Ordners: {e}")
+            return {"error": f"Fehler: {str(e)}"}
+
+    def _parse_google_drive_folder_page(self, html_content: str) -> List[Dict]:
+        """
+        Parsed die Google Drive Ordnerseite und extrahiert Datei-Informationen.
+        """
+        files = []
+
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Suche nach data-id Attributen (Google Drive Datei-IDs)
+            # Google Drive verwendet verschiedene Formate
+
+            # Methode 1: Suche nach Links mit file/d/ oder open?id=
+            file_links = soup.find_all('a', href=re.compile(r'(file/d/|open\?id=|uc\?id=)'))
+
+            for link in file_links:
+                href = link.get('href', '')
+                file_id = None
+
+                # Extrahiere File-ID
+                if 'file/d/' in href:
+                    match = re.search(r'file/d/([a-zA-Z0-9_-]+)', href)
+                    if match:
+                        file_id = match.group(1)
+                elif 'id=' in href:
+                    match = re.search(r'id=([a-zA-Z0-9_-]+)', href)
+                    if match:
+                        file_id = match.group(1)
+
+                if file_id and file_id not in [f.get('id') for f in files]:
+                    # Versuche den Dateinamen zu finden
+                    name = link.get_text(strip=True) or f"file_{file_id}"
+
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0  # Größe ist bei Public Folder nicht immer verfügbar
+                    })
+
+            # Methode 2: Suche nach data-id Attributen
+            elements_with_data_id = soup.find_all(attrs={"data-id": True})
+            for elem in elements_with_data_id:
+                file_id = elem.get('data-id')
+                if file_id and file_id not in [f.get('id') for f in files]:
+                    # Versuche Namen aus benachbarten Elementen zu finden
+                    name = elem.get_text(strip=True) or elem.get('data-tooltip', '') or f"file_{file_id}"
+
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+        except Exception as e:
+            logger.error(f"Fehler beim Parsen der Drive-Seite: {e}")
+
+        return files
+
+    def _extract_drive_data_from_html(self, html_content: str) -> List[Dict]:
+        """
+        Extrahiert Datei-Informationen aus eingebetteten JSON-Daten in der Google Drive Seite.
+        """
+        files = []
+
+        try:
+            # Google Drive enthält oft JSON-Daten in Script-Tags
+            # Suche nach typischen Mustern
+
+            # Muster 1: AF_initDataCallback mit Datei-Array
+            pattern = r'\["([a-zA-Z0-9_-]{25,})","([^"]+)"'
+            matches = re.findall(pattern, html_content)
+
+            for file_id, name in matches:
+                # Filtere ungültige/System-IDs
+                if len(file_id) >= 25 and not name.startswith('_'):
+                    if file_id not in [f.get('id') for f in files]:
+                        files.append({
+                            "id": file_id,
+                            "name": name,
+                            "mimeType": self._guess_mime_type(name),
+                            "size": 0
+                        })
+
+            # Muster 2: itemId mit Namen
+            pattern2 = r'"itemId":"([a-zA-Z0-9_-]+)"[^}]*"name":"([^"]+)"'
+            matches2 = re.findall(pattern2, html_content)
+
+            for file_id, name in matches2:
+                if file_id not in [f.get('id') for f in files]:
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+        except Exception as e:
+            logger.error(f"Fehler beim Extrahieren von Drive-Daten: {e}")
+
+        return files
+
+    def _guess_mime_type(self, filename: str) -> str:
+        """Schätzt MIME-Type basierend auf Dateinamen"""
+        ext = Path(filename).suffix.lower() if '.' in filename else ''
+        mime_map = {
+            '.pdf': 'application/pdf',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xls': 'application/vnd.ms-excel',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.txt': 'text/plain',
+            '.csv': 'text/csv'
+        }
+        return mime_map.get(ext, 'application/octet-stream')
+
+    def _google_public_download_file(self, file_id: str) -> Tuple[bytes, bool]:
+        """
+        Lädt eine Datei von einem öffentlichen Google Drive herunter.
+
+        Returns:
+            Tuple von (file_content, success)
+        """
+        try:
+            # Direkte Download-URL
+            download_url = GOOGLE_DRIVE_DOWNLOAD_URL.format(file_id=file_id)
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+
+            # Erste Anfrage - kann eine Bestätigungsseite zurückgeben
+            session = requests.Session()
+            response = session.get(download_url, headers=headers, stream=True, timeout=60)
+
+            # Prüfe auf Virus-Scan-Warnung (große Dateien)
+            if 'download_warning' in response.url or b'confirm=' in response.content[:1000]:
+                # Extrahiere Bestätigungs-Token
+                confirm_token = None
+
+                for key, value in response.cookies.items():
+                    if key.startswith('download_warning'):
+                        confirm_token = value
+                        break
+
+                if not confirm_token:
+                    # Versuche Token aus HTML zu extrahieren
+                    match = re.search(r'confirm=([a-zA-Z0-9_-]+)', response.text)
+                    if match:
+                        confirm_token = match.group(1)
+
+                if confirm_token:
+                    # Zweite Anfrage mit Bestätigung
+                    confirm_url = f"{download_url}&confirm={confirm_token}"
+                    response = session.get(confirm_url, headers=headers, stream=True, timeout=60)
+
+            # Prüfe ob Download erfolgreich
+            content_type = response.headers.get('Content-Type', '')
+
+            if 'text/html' in content_type:
+                # Wahrscheinlich eine Fehlerseite
+                if 'Access denied' in response.text or 'denied' in response.text.lower():
+                    logger.warning(f"Zugriff verweigert für Datei {file_id}")
+                    return b'', False
+                elif 'quota' in response.text.lower():
+                    logger.warning(f"Download-Quota überschritten für Datei {file_id}")
+                    return b'', False
+
+            # Lade vollständigen Inhalt
+            content = response.content
+
+            if len(content) == 0:
+                return b'', False
+
+            return content, True
+
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout beim Download von Datei {file_id}")
+            return b'', False
+        except Exception as e:
+            logger.error(f"Fehler beim Download von Datei {file_id}: {e}")
+            return b'', False
+
+    def _collect_google_drive_files_public(self, connection: CloudSyncConnection,
+                                            session) -> List[Dict]:
+        """
+        Sammelt Dateien aus einem öffentlichen Google Drive-Ordner.
+        Wird verwendet wenn kein Access Token vorhanden ist.
+        """
+        files = []
+
+        folder_id = connection.remote_folder_id
+        if not folder_id and connection.remote_folder_path:
+            folder_id = self._google_get_folder_id_from_link(connection.remote_folder_path)
+
+        if not folder_id:
+            logger.error("Keine Ordner-ID gefunden")
+            return files
+
+        # Lade öffentlichen Ordner
+        response = self._google_public_list_folder(folder_id)
+
+        if "error" in response:
+            logger.error(f"Fehler beim Laden des öffentlichen Ordners: {response['error']}")
+            return files
+
+        file_list = response.get("files", [])
+
+        for file_info in file_list:
+            mime_type = file_info.get("mimeType", "")
+
+            # Google Docs/Sheets etc. überspringen
+            if mime_type.startswith("application/vnd.google-apps"):
+                continue
+
+            filename = file_info.get("name", "")
+            ext = Path(filename).suffix.lower()
+
+            # Dateiendung prüfen
+            if connection.file_extensions and ext and ext not in connection.file_extensions:
+                continue
+
+            # Prüfen ob bereits synchronisiert
+            file_id = file_info.get("id")
+            existing_log = session.query(CloudSyncLog).filter(
+                CloudSyncLog.connection_id == connection.id,
+                CloudSyncLog.remote_file_id == file_id
+            ).first()
+
+            if existing_log:
+                continue
+
+            files.append({
+                "name": filename,
+                "path": filename,
+                "id": file_id,
+                "size": file_info.get("size", 0),
+                "hash": None,  # Bei öffentlichen Ordnern nicht verfügbar
+                "modified": None,
+                "mime_type": mime_type,
+                "provider": "google_drive_public"
+            })
+
+        return files
+
     # ==================== SYNCHRONISATION ====================
 
     def sync_connection(self, connection_id: int,
@@ -434,8 +732,14 @@ class CloudSyncService:
                 yield result
                 return
 
-            # Prüfen ob Access Token vorhanden
-            if not connection.access_token:
+            # Prüfen ob Access Token vorhanden (außer bei öffentlichen Google Drive Ordnern)
+            is_public_google_drive = (
+                connection.provider == CloudProvider.GOOGLE_DRIVE and
+                not connection.access_token and
+                (connection.remote_folder_id or connection.remote_folder_path)
+            )
+
+            if not connection.access_token and not is_public_google_drive:
                 result["phase"] = "error"
                 result["error"] = "Kein Access Token konfiguriert. Bitte API-Konfiguration in Einstellungen prüfen."
                 result["errors"].append(result["error"])
@@ -456,7 +760,11 @@ class CloudSyncService:
                     # Erst alle Dateien sammeln
                     files_to_sync = self._collect_dropbox_files(connection, session)
                 elif connection.provider == CloudProvider.GOOGLE_DRIVE:
-                    files_to_sync = self._collect_google_drive_files(connection, session)
+                    # Öffentliche Ordner verwenden andere Methode
+                    if is_public_google_drive:
+                        files_to_sync = self._collect_google_drive_files_public(connection, session)
+                    else:
+                        files_to_sync = self._collect_google_drive_files(connection, session)
                 else:
                     result["phase"] = "error"
                     result["error"] = f"Provider {connection.provider} nicht unterstützt"
@@ -684,12 +992,23 @@ class CloudSyncService:
             'synced', 'skipped', oder 'error'
         """
         try:
-            if file_info.get("provider") == "dropbox":
+            provider = file_info.get("provider", "")
+
+            if provider == "dropbox":
                 file_content, metadata = self._dropbox_download_file(
                     connection.access_token,
                     file_info.get("path")
                 )
+            elif provider == "google_drive_public":
+                # Öffentlicher Google Drive Download
+                file_content, success = self._google_public_download_file(
+                    file_info.get("id")
+                )
+                if not success:
+                    logger.error(f"Download fehlgeschlagen für {file_info.get('name')}")
+                    return "error"
             else:
+                # Authentifizierter Google Drive Download
                 file_content = self._google_download_file(
                     connection.access_token,
                     file_info.get("id")
