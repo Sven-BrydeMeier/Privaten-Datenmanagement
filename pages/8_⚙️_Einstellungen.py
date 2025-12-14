@@ -799,10 +799,129 @@ with tab_ui:
         step=10
     )
 
+    st.markdown("---")
+
+    st.markdown("### 🗑️ Papierkorb-Einstellungen")
+
+    trash_retention = st.slider(
+        "Aufbewahrungszeit (Stunden)",
+        min_value=1,
+        max_value=720,  # Max 30 Tage
+        value=settings.trash_retention_hours,
+        step=1,
+        help="Dokumente werden nach dieser Zeit automatisch endgültig gelöscht"
+    )
+
+    # Vorschlage für gängige Werte
+    quick_trash_col = st.columns(5)
+    with quick_trash_col[0]:
+        if st.button("12h", key="trash_12h"):
+            trash_retention = 12
+    with quick_trash_col[1]:
+        if st.button("24h", key="trash_24h"):
+            trash_retention = 24
+    with quick_trash_col[2]:
+        if st.button("48h", key="trash_48h"):
+            trash_retention = 48
+    with quick_trash_col[3]:
+        if st.button("7 Tage", key="trash_7d"):
+            trash_retention = 168
+    with quick_trash_col[4]:
+        if st.button("30 Tage", key="trash_30d"):
+            trash_retention = 720
+
+    auto_cleanup = st.checkbox(
+        "Automatische Bereinigung beim App-Start",
+        value=settings.auto_cleanup_trash,
+        help="Abgelaufene Dokumente werden automatisch gelöscht wenn die App gestartet wird"
+    )
+
+    # Papierkorb Statistik
+    from services.trash_service import get_trash_service
+    trash_service = get_trash_service()
+    trash_stats = trash_service.get_trash_stats(user_id)
+
+    if trash_stats["count"] > 0:
+        st.info(f"""
+        **Papierkorb-Status:**
+        - 📄 {trash_stats['count']} Dokument(e) im Papierkorb
+        - 💾 {trash_stats['total_size_mb']} MB belegt
+        """)
+
+        col_trash1, col_trash2 = st.columns(2)
+        with col_trash1:
+            if st.button("🔄 Abgelaufene bereinigen", key="cleanup_trash"):
+                result = trash_service.cleanup_expired()
+                if result["deleted_count"] > 0:
+                    st.success(f"✅ {result['deleted_count']} Dokument(e) endgültig gelöscht")
+                else:
+                    st.info("Keine abgelaufenen Dokumente gefunden")
+        with col_trash2:
+            if st.button("🗑️ Papierkorb leeren", key="empty_trash"):
+                st.session_state['confirm_empty_trash'] = True
+
+        if st.session_state.get('confirm_empty_trash'):
+            st.warning("⚠️ Alle Dokumente im Papierkorb werden endgültig gelöscht!")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("✅ Ja, alles löschen", key="confirm_empty_yes"):
+                    result = trash_service.empty_trash(user_id)
+                    del st.session_state['confirm_empty_trash']
+                    st.success(result["message"])
+                    st.rerun()
+            with c2:
+                if st.button("❌ Abbrechen", key="confirm_empty_no"):
+                    del st.session_state['confirm_empty_trash']
+                    st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### 🔊 Vorlese-Einstellungen (Text-to-Speech)")
+
+    from services.tts_service import TTSService
+
+    tts_voice = st.selectbox(
+        "Standard-Stimme",
+        options=list(TTSService.VOICES.keys()),
+        format_func=lambda x: TTSService.VOICES.get(x, x),
+        index=list(TTSService.VOICES.keys()).index(settings.tts_voice) if settings.tts_voice in TTSService.VOICES else 4
+    )
+
+    tts_model = st.selectbox(
+        "Qualität",
+        options=list(TTSService.MODELS.keys()),
+        format_func=lambda x: TTSService.MODELS.get(x, x),
+        index=0 if settings.tts_model == "tts-1" else 1
+    )
+
+    tts_speed = st.slider(
+        "Geschwindigkeit",
+        min_value=0.5,
+        max_value=2.0,
+        value=settings.tts_speed,
+        step=0.1,
+        help="1.0 = normale Geschwindigkeit"
+    )
+
+    tts_use_browser = st.checkbox(
+        "Browser-TTS als Fallback verwenden",
+        value=settings.tts_use_browser,
+        help="Verwendet die eingebaute Sprachsynthese des Browsers wenn keine API konfiguriert ist"
+    )
+
+    if not settings.openai_api_key:
+        st.warning("⚠️ Für OpenAI TTS wird ein API-Schlüssel benötigt (Tab: API-Keys)")
+
     if st.button("💾 UI-Einstellungen speichern", type="primary"):
         settings.language = language
         settings.theme = theme
         settings.items_per_page = items_per_page
+        settings.trash_retention_hours = trash_retention
+        settings.auto_cleanup_trash = auto_cleanup
+        settings.tts_voice = tts_voice
+        settings.tts_model = tts_model
+        settings.tts_speed = tts_speed
+        settings.tts_use_browser = tts_use_browser
         save_settings(settings)
         st.success("UI-Einstellungen gespeichert!")
 

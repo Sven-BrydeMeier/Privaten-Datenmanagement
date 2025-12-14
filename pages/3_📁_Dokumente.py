@@ -248,9 +248,20 @@ with col_docs:
     with get_db() as session:
         query = session.query(Document).filter(Document.user_id == user_id)
 
-        # Ordnerfilter
+        # Gelöschte Dokumente ausschließen (außer im Papierkorb-Modus)
+        is_trash_view = False
         if current_folder_id:
-            query = query.filter(Document.folder_id == current_folder_id)
+            folder = session.query(Folder).get(current_folder_id)
+            if folder and folder.name == "Papierkorb":
+                is_trash_view = True
+                # Im Papierkorb: nur gelöschte Dokumente zeigen
+                query = query.filter(Document.is_deleted == True)
+            else:
+                query = query.filter(Document.folder_id == current_folder_id)
+                query = query.filter((Document.is_deleted == False) | (Document.is_deleted == None))
+        else:
+            # Alle Dokumente: keine gelöschten
+            query = query.filter((Document.is_deleted == False) | (Document.is_deleted == None))
 
         # Kategoriefilter
         if filter_category != "Alle":
@@ -563,6 +574,49 @@ if 'view_document_id' in st.session_state:
     with tab_actions:
         st.markdown("### ⚡ Aktionen")
 
+        # Vorlesen-Funktion
+        st.markdown("**🔊 Vorlesen**")
+
+        from services.tts_service import get_tts_service, TTSService
+        from config.settings import get_settings
+        tts_settings = get_settings()
+
+        tts_col1, tts_col2 = st.columns([2, 1])
+
+        with tts_col1:
+            tts_voice = st.selectbox(
+                "Stimme",
+                options=list(TTSService.VOICES.keys()),
+                format_func=lambda x: TTSService.VOICES.get(x, x),
+                index=list(TTSService.VOICES.keys()).index(tts_settings.tts_voice) if tts_settings.tts_voice in TTSService.VOICES else 4,
+                key="tts_voice_select"
+            )
+
+        with tts_col2:
+            tts_speed = st.slider("Tempo", 0.5, 2.0, tts_settings.tts_speed, 0.1, key="tts_speed_select")
+
+        if st.button("🔊 Dokument vorlesen", use_container_width=True, type="primary"):
+            if not tts_settings.openai_api_key:
+                if tts_settings.tts_use_browser:
+                    # Browser-TTS als Fallback
+                    text_to_read = doc_data.get('ai_summary') or doc_data.get('ocr_text') or doc_data.get('subject') or "Kein Text verfügbar"
+                    tts_service = get_tts_service()
+                    st.markdown(tts_service.get_browser_tts_script(text_to_read[:2000]), unsafe_allow_html=True)
+                else:
+                    st.warning("⚠️ OpenAI API nicht konfiguriert. Aktivieren Sie Browser-TTS in Einstellungen.")
+            else:
+                with st.spinner("Generiere Audio..."):
+                    tts_service = get_tts_service()
+                    result = tts_service.read_document(doc_id, tts_voice, tts_settings.tts_model, tts_speed)
+
+                    if result.get("error"):
+                        st.error(f"❌ {result['error']}")
+                    else:
+                        st.audio(result["audio_bytes"], format="audio/mp3")
+                        st.success("✅ Audio generiert!")
+
+        st.markdown("---")
+
         col_act1, col_act2 = st.columns(2)
 
         with col_act1:
@@ -705,27 +759,79 @@ if 'delete_document_id' in st.session_state:
 
     with st.container():
         st.divider()
-        st.warning("⚠️ Dokument wirklich löschen?")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🗑️ Ja, löschen", type="primary"):
-                with get_db() as session:
-                    doc = session.query(Document).get(doc_id)
-                    if doc:
-                        # In Papierkorb verschieben statt löschen
-                        trash = session.query(Folder).filter(
-                            Folder.user_id == user_id,
-                            Folder.name == "Papierkorb"
-                        ).first()
-                        if trash:
-                            doc.folder_id = trash.id
+        # Prüfen ob Dokument bereits im Papierkorb ist
+        with get_db() as session:
+            doc = session.query(Document).get(doc_id)
+            is_already_deleted = doc.is_deleted if doc else False
+            doc_title = doc.title or doc.filename if doc else "Dokument"
+
+        if is_already_deleted:
+            # Im Papierkorb: Endgültig löschen oder wiederherstellen
+            st.warning(f"⚠️ '{doc_title}' ist im Papierkorb. Was möchten Sie tun?")
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("♻️ Wiederherstellen", type="primary"):
+                    from services.trash_service import get_trash_service
+                    trash_service = get_trash_service()
+                    result = trash_service.restore_from_trash(doc_id, user_id)
+                    if result["success"]:
+                        st.success(result["message"])
+                    else:
+                        st.error(result["error"])
+                    del st.session_state.delete_document_id
+                    st.rerun()
+            with col2:
+                if st.button("🗑️ Endgültig löschen"):
+                    st.session_state.confirm_permanent_delete = doc_id
+            with col3:
+                if st.button("❌ Abbrechen"):
+                    del st.session_state.delete_document_id
+                    st.rerun()
+
+            # Bestätigung für endgültiges Löschen
+            if st.session_state.get('confirm_permanent_delete') == doc_id:
+                st.error("⚠️ Das Dokument wird ENDGÜLTIG gelöscht und kann nicht wiederhergestellt werden!")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("✅ Ja, endgültig löschen", key="confirm_perm_del"):
+                        from services.trash_service import get_trash_service
+                        trash_service = get_trash_service()
+                        result = trash_service.permanent_delete(doc_id, user_id)
+                        if result["success"]:
+                            st.success(result["message"])
                         else:
-                            session.delete(doc)
-                        session.commit()
-                del st.session_state.delete_document_id
-                st.rerun()
-        with col2:
-            if st.button("Abbrechen"):
-                del st.session_state.delete_document_id
-                st.rerun()
+                            st.error(result["error"])
+                        del st.session_state.delete_document_id
+                        if 'confirm_permanent_delete' in st.session_state:
+                            del st.session_state.confirm_permanent_delete
+                        st.rerun()
+                with c2:
+                    if st.button("❌ Doch nicht", key="cancel_perm_del"):
+                        del st.session_state.confirm_permanent_delete
+                        st.rerun()
+        else:
+            # Normales Löschen: In Papierkorb verschieben
+            from services.trash_service import get_trash_service
+            from config.settings import get_settings
+            settings = get_settings()
+
+            st.warning(f"⚠️ '{doc_title}' in den Papierkorb verschieben?")
+            st.info(f"💡 Das Dokument kann innerhalb von {settings.trash_retention_hours} Stunden wiederhergestellt werden.")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🗑️ In Papierkorb", type="primary"):
+                    trash_service = get_trash_service()
+                    result = trash_service.move_to_trash(doc_id, user_id)
+                    if result["success"]:
+                        st.success(result["message"])
+                    else:
+                        st.error(result.get("error", "Fehler beim Löschen"))
+                    del st.session_state.delete_document_id
+                    st.rerun()
+            with col2:
+                if st.button("Abbrechen"):
+                    del st.session_state.delete_document_id
+                    st.rerun()

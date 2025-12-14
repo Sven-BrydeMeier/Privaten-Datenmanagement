@@ -170,6 +170,11 @@ class Document(Base):
     # Workflow-Status
     workflow_status = Column(String(50), default="new")  # new, in_review, action_required, waiting, completed, archived
 
+    # Soft Delete (Papierkorb)
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(DateTime)  # Wann wurde das Dokument gelöscht
+    previous_folder_id = Column(Integer)  # Vorheriger Ordner vor Löschung
+
     # Beziehungen
     user = relationship("User", back_populates="documents")
     folder = relationship("Folder", back_populates="documents")
@@ -184,6 +189,7 @@ class Document(Base):
         Index('idx_document_category', 'category'),
         Index('idx_document_date', 'document_date'),
         Index('idx_document_user_folder', 'user_id', 'folder_id'),
+        Index('idx_document_deleted', 'is_deleted', 'deleted_at'),
     )
 
 

@@ -9,7 +9,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # App-Version im Format JJ.MM.TT.HHMM
-APP_VERSION = "25.12.14.1000"
+APP_VERSION = "25.12.14.1100"
 APP_NAME = "Privates Dokumentenmanagement"
 
 

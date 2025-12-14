@@ -65,6 +65,16 @@ class Settings:
     language: str = "de"
     items_per_page: int = 20
 
+    # Papierkorb-Einstellungen
+    trash_retention_hours: int = 48  # Aufbewahrungszeit in Stunden (Standard: 48h)
+    auto_cleanup_trash: bool = True  # Automatische Bereinigung beim Start
+
+    # Text-to-Speech Einstellungen
+    tts_voice: str = "nova"  # Standard-Stimme (alloy, echo, fable, onyx, nova, shimmer)
+    tts_model: str = "tts-1"  # TTS-Modell (tts-1 oder tts-1-hd)
+    tts_speed: float = 1.0  # Geschwindigkeit (0.25 - 4.0)
+    tts_use_browser: bool = False  # Browser-TTS als Fallback verwenden
+
     def save(self):
         """Einstellungen in Datei speichern"""
         config_data = asdict(self)
