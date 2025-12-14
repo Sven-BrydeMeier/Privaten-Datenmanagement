@@ -9,13 +9,44 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # App-Version im Format JJ.MM.TT.HHMM
-APP_VERSION = "25.12.14.1100"
+APP_VERSION = "25.12.14.1200"
 APP_NAME = "Privates Dokumentenmanagement"
 
 
 def get_version_string():
     """Gibt den formatierten Versionsstring zurück"""
     return f"Version {APP_VERSION}"
+
+
+def page_header(title: str, subtitle: str = None):
+    """
+    Rendert einen einheitlichen Seitenkopf.
+
+    Args:
+        title: Haupttitel der Seite
+        subtitle: Optionaler Untertitel
+    """
+    st.title(title)
+    if subtitle:
+        st.caption(subtitle)
+
+
+def show_notification(message: str, type: str = "info"):
+    """
+    Zeigt eine Benachrichtigung an.
+
+    Args:
+        message: Nachrichtentext
+        type: Typ der Nachricht (info, success, warning, error)
+    """
+    if type == "success":
+        st.success(message)
+    elif type == "warning":
+        st.warning(message)
+    elif type == "error":
+        st.error(message)
+    else:
+        st.info(message)
 
 
 def _render_compact_share_buttons(title: str, text: str, key_prefix: str = "share"):

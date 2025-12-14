@@ -77,10 +77,16 @@ with tab_commands:
     with col1:
         # Audio Recorder für Befehle
         try:
-            from st_audiorec import st_audiorec
+            from audio_recorder_streamlit import audio_recorder
 
             st.write("**Befehl aufnehmen:**")
-            command_audio = st_audiorec()
+            command_audio = audio_recorder(
+                text="🎤 Klicken zum Aufnehmen",
+                recording_color="#e74c3c",
+                neutral_color="#3498db",
+                icon_size="2x",
+                key="voice_cmd_recorder"
+            )
 
             if command_audio:
                 st.audio(command_audio, format="audio/wav")
@@ -109,7 +115,7 @@ with tab_commands:
                                 st.warning(cmd_result['message'])
 
         except ImportError:
-            st.error("📦 Audio-Recorder nicht installiert. `pip install st-audiorec`")
+            st.warning("📦 Audio-Recorder nicht verfügbar.")
 
             # Alternative: Text-Eingabe
             st.write("**Alternative: Befehl eintippen:**")
@@ -287,10 +293,16 @@ with tab_record:
 
         # Audio Recorder
         try:
-            from st_audiorec import st_audiorec
+            from audio_recorder_streamlit import audio_recorder
 
             st.write("**Audio aufnehmen:**")
-            audio_bytes = st_audiorec()
+            audio_bytes = audio_recorder(
+                text="🎤 Klicken zum Aufnehmen",
+                recording_color="#e74c3c",
+                neutral_color="#2ecc71",
+                icon_size="3x",
+                key="dictation_recorder"
+            )
 
             if audio_bytes:
                 st.session_state.audio_bytes = audio_bytes
@@ -298,12 +310,8 @@ with tab_record:
                 st.audio(audio_bytes, format="audio/wav")
 
         except ImportError:
-            st.error(
-                "📦 Audio-Recorder nicht installiert.\n\n"
-                "Bitte installieren Sie: `pip install st-audiorec`"
-            )
+            st.warning("📦 Audio-Recorder nicht verfügbar. Audio-Datei hochladen stattdessen:")
 
-            st.write("**Alternative: Audio-Datei hochladen**")
             uploaded_audio = st.file_uploader(
                 "Audio-Datei auswählen",
                 type=["wav", "mp3", "m4a", "ogg", "webm"],
