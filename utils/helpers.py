@@ -384,13 +384,15 @@ def render_share_buttons(title: str, text: str, url: str = None, key_prefix: str
         )
 
     # Native Share API für Mobilgeräte (JavaScript)
+    title_escaped = title.replace("'", "\\'")
+    text_escaped = text.replace("'", "\\'")
     share_js = f"""
     <script>
     function nativeShare_{key_prefix}() {{
         if (navigator.share) {{
             navigator.share({{
-                title: '{title.replace("'", "\\'")}',
-                text: '{text.replace("'", "\\'")}',
+                title: '{title_escaped}',
+                text: '{text_escaped}',
                 url: '{url or ""}'
             }}).catch(console.error);
         }} else {{

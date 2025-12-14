@@ -820,8 +820,9 @@ with tab_invoices:
 
                         with copy_cols[1]:
                             if inv_data['sender']:
+                                sender_escaped = inv_data['sender'].replace("'", "\\'")
                                 st.markdown(f"""
-                                <button onclick="navigator.clipboard.writeText('{inv_data['sender'].replace("'", "\\'")}')"
+                                <button onclick="navigator.clipboard.writeText('{sender_escaped}')"
                                     style="background:#2196F3;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:100%">
                                     📋 Empfänger
                                 </button>
@@ -857,9 +858,10 @@ with tab_invoices:
                             if inv_data['customer_number']:
                                 purpose_parts.append(f"Kd {inv_data['customer_number']}")
                             purpose = " ".join(purpose_parts) or inv_data['title'][:30]
+                            purpose_escaped = purpose.replace("'", "\\'")
 
                             st.markdown(f"""
-                            <button onclick="navigator.clipboard.writeText('{purpose.replace("'", "\\'")}')"
+                            <button onclick="navigator.clipboard.writeText('{purpose_escaped}')"
                                 style="background:#607D8B;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;width:100%">
                                 📋 Zweck
                             </button>
