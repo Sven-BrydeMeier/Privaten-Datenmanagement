@@ -853,6 +853,7 @@ class CloudSyncService:
                     result["current_file"] = file_info.get("name", "Unbekannt")
                     result["current_file_size"] = file_info.get("size", 0)
                     result["files_processed"] = idx
+                    result["source_folder"] = file_info.get("source_folder", "")
 
                     # Fortschritt berechnen
                     if result["files_total"] > 0:
@@ -864,13 +865,22 @@ class CloudSyncService:
                             remaining_files = result["files_total"] - idx
                             result["estimated_remaining_seconds"] = avg_time_per_file * remaining_files
 
+                    # Status: Download startet
+                    result["current_step"] = "downloading"
+                    result["current_step_detail"] = f"Lade {file_info.get('name')} herunter..."
                     yield result.copy()
 
                     # Datei verarbeiten
                     try:
-                        sync_status = self._process_file(
-                            connection, session, file_info, process_documents
+                        sync_status, processing_steps = self._process_file_with_status(
+                            connection, session, file_info, process_documents, result
                         )
+
+                        # Yield für jeden Verarbeitungsschritt
+                        for step in processing_steps:
+                            result["current_step"] = step.get("step", "processing")
+                            result["current_step_detail"] = step.get("detail", "")
+                            yield result.copy()
 
                         if sync_status == "synced":
                             result["files_synced"] += 1
@@ -1056,16 +1066,36 @@ class CloudSyncService:
     def _process_file(self, connection: CloudSyncConnection, session,
                       file_info: Dict, process_documents: bool) -> str:
         """
-        Verarbeitet eine einzelne Datei.
+        Verarbeitet eine einzelne Datei (Wrapper ohne Status-Rückgabe).
 
         Returns:
             'synced', 'skipped', oder 'error'
         """
+        status, _ = self._process_file_with_status(connection, session, file_info, process_documents, {})
+        return status
+
+    def _process_file_with_status(self, connection: CloudSyncConnection, session,
+                                   file_info: Dict, process_documents: bool,
+                                   progress_result: Dict) -> Tuple[str, List[Dict]]:
+        """
+        Verarbeitet eine einzelne Datei mit detaillierten Status-Updates.
+
+        Returns:
+            Tuple von (status: 'synced'/'skipped'/'error', processing_steps: Liste von Status-Updates)
+        """
+        processing_steps = []
+
         try:
             provider = file_info.get("provider", "")
             filename = file_info.get("name", "unknown")
 
             logger.info(f"Verarbeite Datei: {filename} (Provider: {provider})")
+
+            # Schritt 1: Download
+            processing_steps.append({
+                "step": "downloading",
+                "detail": f"📥 Lade herunter: {filename}"
+            })
 
             if provider == "dropbox":
                 file_content, metadata = self._dropbox_download_file(
@@ -1073,38 +1103,53 @@ class CloudSyncService:
                     file_info.get("path")
                 )
             elif provider == "google_drive_public":
-                # Öffentlicher Google Drive Download
                 logger.info(f"Starte öffentlichen Download für: {filename}")
                 file_content, success = self._google_public_download_file(
                     file_info.get("id")
                 )
                 if not success:
                     logger.error(f"Download fehlgeschlagen für {filename}")
-                    return "error"
+                    processing_steps.append({
+                        "step": "error",
+                        "detail": f"❌ Download fehlgeschlagen: {filename}"
+                    })
+                    return "error", processing_steps
                 logger.info(f"Download erfolgreich: {len(file_content)} Bytes")
             else:
-                # Authentifizierter Google Drive Download
                 file_content = self._google_download_file(
                     connection.access_token,
                     file_info.get("id")
                 )
 
+            processing_steps.append({
+                "step": "downloaded",
+                "detail": f"✅ Heruntergeladen: {len(file_content):,} Bytes"
+            })
+
             # Quellordner-Pfad für intelligente Kategorisierung
-            # Bevorzuge source_folder, dann path, dann nur ID
             source_folder_path = file_info.get("source_folder") or file_info.get("path") or ""
 
             logger.info(f"Importiere Datei: {filename} aus Ordner: {source_folder_path}")
 
-            # Dokument erstellen
-            doc = self._import_file(
+            # Schritt 2: Speichern
+            processing_steps.append({
+                "step": "saving",
+                "detail": f"💾 Speichere Datei lokal..."
+            })
+
+            # Dokument erstellen mit Status-Tracking
+            doc, import_steps = self._import_file_with_status(
                 session, connection,
                 filename,
                 file_content,
                 file_info.get("size", len(file_content)),
                 file_info.get("hash"),
-                source_folder_path,  # Vollständiger Quellordner-Pfad
+                source_folder_path,
                 process_documents
             )
+
+            # Import-Schritte hinzufügen
+            processing_steps.extend(import_steps)
 
             # Sync-Log erstellen
             modified_time = file_info.get("modified")
@@ -1130,11 +1175,20 @@ class CloudSyncService:
             )
             session.add(sync_log)
 
-            return "synced"
+            processing_steps.append({
+                "step": "completed",
+                "detail": f"✅ Fertig: {filename}"
+            })
+
+            return "synced", processing_steps
 
         except Exception as e:
             logger.error(f"Fehler beim Verarbeiten von {file_info.get('name')}: {e}")
-            return "error"
+            processing_steps.append({
+                "step": "error",
+                "detail": f"❌ Fehler: {str(e)}"
+            })
+            return "error", processing_steps
 
     def _sync_dropbox(self, connection: CloudSyncConnection,
                       session, process_documents: bool) -> Dict:
@@ -1419,19 +1473,87 @@ class CloudSyncService:
 
         return doc
 
-    def _process_document_intelligent(self, session, doc: Document,
-                                       content: bytes, remote_path: str,
-                                       filename: str):
+    def _import_file_with_status(self, session, connection: CloudSyncConnection,
+                                  filename: str, content: bytes, file_size: int,
+                                  content_hash: str, remote_path: str,
+                                  process_documents: bool) -> Tuple[Optional[Document], List[Dict]]:
         """
-        Führt intelligente Dokumentenverarbeitung durch:
-        1. OCR (falls PDF/Bild)
-        2. Metadaten-Extraktion
-        3. Automatische Ordnererstellung
-        4. Verknüpfung mit Versicherungen/Verträgen
+        Importiert eine Datei mit Status-Updates für die Fortschrittsanzeige.
+
+        Returns:
+            Tuple von (Document, Liste von Status-Updates)
         """
+        processing_steps = []
+
+        # Speicherpfad erstellen
+        upload_dir = Path("data/uploads") / str(self.user_id) / "cloud_sync"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        # Eindeutigen Dateinamen erstellen
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_filename = f"{timestamp}_{filename}"
+        file_path = upload_dir / safe_filename
+
+        # Datei speichern
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        processing_steps.append({
+            "step": "saved",
+            "detail": f"💾 Datei gespeichert"
+        })
+
+        # Dokument in DB erstellen
+        doc = Document(
+            user_id=self.user_id,
+            folder_id=connection.local_folder_id,
+            title=Path(filename).stem,
+            filename=filename,
+            file_path=str(file_path),
+            file_size=file_size,
+            mime_type=self._get_mime_type(filename),
+            content_hash=content_hash,
+            status="pending" if process_documents else "completed",
+            category="Cloud-Import"
+        )
+
+        session.add(doc)
+        session.flush()
+
+        # Intelligente Dokumentenverarbeitung wenn aktiviert
+        if process_documents:
+            try:
+                intelligent_steps = self._process_document_intelligent_with_status(
+                    session, doc, content, remote_path, filename
+                )
+                processing_steps.extend(intelligent_steps)
+            except Exception as e:
+                logger.error(f"Intelligente Verarbeitung fehlgeschlagen für {filename}: {e}")
+                processing_steps.append({
+                    "step": "processing_error",
+                    "detail": f"⚠️ Verarbeitung teilweise fehlgeschlagen"
+                })
+
+        return doc, processing_steps
+
+    def _process_document_intelligent_with_status(self, session, doc: Document,
+                                                   content: bytes, remote_path: str,
+                                                   filename: str) -> List[Dict]:
+        """
+        Führt intelligente Dokumentenverarbeitung mit Status-Updates durch.
+
+        Returns:
+            Liste von Status-Updates für Fortschrittsanzeige
+        """
+        processing_steps = []
         ocr_text = ""
 
         # 1. OCR durchführen
+        processing_steps.append({
+            "step": "ocr_starting",
+            "detail": f"🔍 Starte Texterkennung (OCR)..."
+        })
+
         try:
             from services.ocr import OCRService
             ocr_service = OCRService()
@@ -1439,24 +1561,62 @@ class CloudSyncService:
             mime_type = doc.mime_type or self._get_mime_type(filename)
 
             if mime_type == "application/pdf":
+                processing_steps.append({
+                    "step": "ocr_pdf",
+                    "detail": f"📄 Verarbeite PDF mit OCR..."
+                })
                 ocr_result = ocr_service.process_pdf(doc.file_path)
                 ocr_text = ocr_result.get("text", "")
                 doc.ocr_text = ocr_text
                 doc.ocr_confidence = ocr_result.get("confidence", 0)
 
+                text_length = len(ocr_text)
+                processing_steps.append({
+                    "step": "ocr_complete",
+                    "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
+                })
+
             elif mime_type.startswith("image/"):
+                processing_steps.append({
+                    "step": "ocr_image",
+                    "detail": f"🖼️ Verarbeite Bild mit OCR..."
+                })
                 ocr_result = ocr_service.process_image(doc.file_path)
                 ocr_text = ocr_result.get("text", "")
                 doc.ocr_text = ocr_text
                 doc.ocr_confidence = ocr_result.get("confidence", 0)
 
+                text_length = len(ocr_text)
+                processing_steps.append({
+                    "step": "ocr_complete",
+                    "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
+                })
+            else:
+                processing_steps.append({
+                    "step": "ocr_skipped",
+                    "detail": f"⏭️ OCR übersprungen (kein PDF/Bild)"
+                })
+
         except ImportError:
             logger.warning("OCR Service nicht verfügbar")
+            processing_steps.append({
+                "step": "ocr_unavailable",
+                "detail": f"⚠️ OCR Service nicht verfügbar"
+            })
         except Exception as e:
             logger.error(f"OCR fehlgeschlagen: {e}")
+            processing_steps.append({
+                "step": "ocr_error",
+                "detail": f"⚠️ OCR Fehler: {str(e)[:50]}"
+            })
 
         # 2. Intelligente Analyse mit Document Intelligence Service
         if ocr_text and len(ocr_text) > 50:
+            processing_steps.append({
+                "step": "analyzing",
+                "detail": f"🧠 Analysiere Dokumentinhalt..."
+            })
+
             try:
                 from services.document_intelligence_service import DocumentIntelligenceService
 
@@ -1465,6 +1625,10 @@ class CloudSyncService:
                 try:
                     from services.ai_service import AIService
                     ai_service = AIService()
+                    processing_steps.append({
+                        "step": "ai_loaded",
+                        "detail": f"🤖 KI-Service geladen"
+                    })
                 except:
                     pass
 
@@ -1473,11 +1637,33 @@ class CloudSyncService:
                 )
 
                 # Analysiere Dokument
+                processing_steps.append({
+                    "step": "extracting_metadata",
+                    "detail": f"📋 Extrahiere Metadaten..."
+                })
+
                 metadata = intel_service.analyze_document(
                     ocr_text,
                     source_folder_path=remote_path,
                     filename=filename
                 )
+
+                # Status-Update für gefundene Metadaten
+                found_items = []
+                if metadata.sender:
+                    found_items.append(f"Absender: {metadata.sender}")
+                if metadata.document_date:
+                    found_items.append(f"Datum: {metadata.document_date.strftime('%d.%m.%Y')}")
+                if metadata.insurance_number:
+                    found_items.append(f"Vers.-Nr: {metadata.insurance_number}")
+                if metadata.document_type:
+                    found_items.append(f"Typ: {metadata.document_type}")
+
+                if found_items:
+                    processing_steps.append({
+                        "step": "metadata_found",
+                        "detail": f"✅ Gefunden: {', '.join(found_items[:3])}"
+                    })
 
                 # Aktualisiere Dokument mit extrahierten Metadaten
                 if metadata.sender:
@@ -1503,12 +1689,21 @@ class CloudSyncService:
 
                 # 3. Erstelle Ordnerstruktur und verschiebe Dokument
                 if metadata.suggested_folder_path:
+                    processing_steps.append({
+                        "step": "creating_folder",
+                        "detail": f"📁 Erstelle Ordner: {metadata.suggested_folder_path}"
+                    })
+
                     folder_id = intel_service.create_folder_structure(
                         metadata.suggested_folder_path
                     )
                     if folder_id:
                         doc.folder_id = folder_id
                         logger.info(f"Dokument {filename} in Ordner {metadata.suggested_folder_path} verschoben")
+                        processing_steps.append({
+                            "step": "folder_assigned",
+                            "detail": f"✅ In Ordner eingeordnet"
+                        })
 
                 # 4. Generiere besseren Titel
                 title_parts = []
@@ -1529,13 +1724,37 @@ class CloudSyncService:
 
                 if title_parts:
                     doc.title = " - ".join([p for p in title_parts if p])
+                    processing_steps.append({
+                        "step": "title_generated",
+                        "detail": f"📝 Titel: {doc.title[:40]}..."
+                    })
 
                 doc.status = "completed"
 
+                processing_steps.append({
+                    "step": "analysis_complete",
+                    "detail": f"✅ Intelligente Analyse abgeschlossen"
+                })
+
             except ImportError:
                 logger.warning("Document Intelligence Service nicht verfügbar")
+                processing_steps.append({
+                    "step": "intel_unavailable",
+                    "detail": f"⚠️ Dokumenten-Intelligenz nicht verfügbar"
+                })
             except Exception as e:
                 logger.error(f"Dokumenten-Intelligenz fehlgeschlagen: {e}")
+                processing_steps.append({
+                    "step": "intel_error",
+                    "detail": f"⚠️ Analysefehler: {str(e)[:40]}"
+                })
+        else:
+            processing_steps.append({
+                "step": "analysis_skipped",
+                "detail": f"⏭️ Analyse übersprungen (zu wenig Text)"
+            })
+
+        return processing_steps
 
     def _get_mime_type(self, filename: str) -> str:
         """Ermittelt MIME-Type aus Dateinamen"""
@@ -1563,12 +1782,12 @@ class CloudSyncService:
             "timestamp": datetime.now().isoformat(),
             "connection_id": connection_id,
             "user_id": self.user_id,
-            "files_found": result["files_found"],
-            "files_synced": result["files_synced"],
-            "files_skipped": result["files_skipped"],
-            "files_error": result["files_error"],
-            "synced_files": result["synced_files"],
-            "errors": result["errors"]
+            "files_found": result.get("files_total", 0),
+            "files_synced": result.get("files_synced", 0),
+            "files_skipped": result.get("files_skipped", 0),
+            "files_error": result.get("files_error", 0),
+            "synced_files": result.get("synced_files", []),
+            "errors": result.get("errors", [])
         }
 
         with open(log_file, "a", encoding="utf-8") as f:

@@ -816,6 +816,7 @@ with tab_cloud:
                         progress_bar = st.progress(0, text="Initialisiere...")
                         status_container = st.empty()
                         file_info_container = st.empty()
+                        step_detail_container = st.empty()  # NEU: Detaillierte Schritte
                         stats_container = st.empty()
 
                         # Synchronisieren mit Fortschrittsanzeige
@@ -831,8 +832,12 @@ with tab_cloud:
                             # Status-Text
                             if phase == "initializing":
                                 status_container.info("🔄 Initialisiere Verbindung...")
+                                step_detail_container.markdown("*Verbindung wird hergestellt...*")
                             elif phase == "scanning":
-                                status_container.info("🔍 Scanne Cloud-Ordner nach Dateien...")
+                                status_container.info("🔍 **Scanne Cloud-Ordner nach Dateien...**")
+                                step_detail_container.markdown(
+                                    "⏳ *Durchsuche Ordner und Unterordner... Dies kann einen Moment dauern.*"
+                                )
                             elif phase == "downloading":
                                 files_total = progress.get("files_total", 0)
                                 files_processed = progress.get("files_processed", 0)
@@ -850,10 +855,19 @@ with tab_cloud:
                                 # Aktuelle Datei anzeigen
                                 current_file = progress.get("current_file")
                                 current_size = progress.get("current_file_size", 0)
+                                source_folder = progress.get("source_folder", "")
                                 if current_file:
+                                    folder_info = f" (aus `{source_folder}`)" if source_folder else ""
                                     file_info_container.markdown(
-                                        f"📄 **Aktuelle Datei:** `{current_file}` ({format_file_size(current_size)})"
+                                        f"📄 **Aktuelle Datei:** `{current_file}` ({format_file_size(current_size)}){folder_info}"
                                     )
+
+                                # Detaillierter Verarbeitungsschritt anzeigen
+                                current_step_detail = progress.get("current_step_detail", "")
+                                if current_step_detail:
+                                    step_detail_container.markdown(f"**Aktion:** {current_step_detail}")
+                                else:
+                                    step_detail_container.empty()
 
                                 # Statistiken
                                 synced = progress.get("files_synced", 0)
@@ -869,12 +883,15 @@ with tab_cloud:
                                     f"✅ **Synchronisation abgeschlossen!**\n\n"
                                     f"⏱️ Gesamtzeit: {format_time(progress.get('elapsed_seconds', 0))}"
                                 )
+                                step_detail_container.empty()
                             elif phase == "error":
                                 progress_bar.progress(0, text="❌ Fehler")
                                 status_container.error(f"❌ Fehler: {progress.get('error', 'Unbekannt')}")
+                                step_detail_container.empty()
 
                         # Endergebnis verarbeiten
                         file_info_container.empty()
+                        step_detail_container.empty()
 
                         if final_result:
                             new_files = final_result.get("new_files", 0)
