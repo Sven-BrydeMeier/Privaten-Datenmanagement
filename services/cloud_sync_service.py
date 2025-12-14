@@ -406,24 +406,20 @@ class CloudSyncService:
 
     def _parse_google_drive_folder_page(self, html_content: str) -> List[Dict]:
         """
-        Parsed die Google Drive Ordnerseite und extrahiert Datei-Informationen.
+        Parsed die Google Drive Ordnerseite und extrahiert Datei- und Ordner-Informationen.
         """
         files = []
 
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
 
-            # Suche nach data-id Attributen (Google Drive Datei-IDs)
-            # Google Drive verwendet verschiedene Formate
-
-            # Methode 1: Suche nach Links mit file/d/ oder open?id=
+            # Methode 1: Suche nach Links mit file/d/ (Dateien)
             file_links = soup.find_all('a', href=re.compile(r'(file/d/|open\?id=|uc\?id=)'))
 
             for link in file_links:
                 href = link.get('href', '')
                 file_id = None
 
-                # Extrahiere File-ID
                 if 'file/d/' in href:
                     match = re.search(r'file/d/([a-zA-Z0-9_-]+)', href)
                     if match:
@@ -434,28 +430,44 @@ class CloudSyncService:
                         file_id = match.group(1)
 
                 if file_id and file_id not in [f.get('id') for f in files]:
-                    # Versuche den Dateinamen zu finden
                     name = link.get_text(strip=True) or f"file_{file_id}"
-
                     files.append({
                         "id": file_id,
                         "name": name,
                         "mimeType": self._guess_mime_type(name),
-                        "size": 0  # Größe ist bei Public Folder nicht immer verfügbar
+                        "size": 0
                     })
 
-            # Methode 2: Suche nach data-id Attributen
+            # Methode 2: Suche nach Links mit folders/ (Unterordner)
+            folder_links = soup.find_all('a', href=re.compile(r'folders/'))
+            for link in folder_links:
+                href = link.get('href', '')
+                match = re.search(r'folders/([a-zA-Z0-9_-]+)', href)
+                if match:
+                    folder_id = match.group(1)
+                    if folder_id not in [f.get('id') for f in files]:
+                        name = link.get_text(strip=True) or f"folder_{folder_id}"
+                        # Nur hinzufügen wenn es nach einem Ordnernamen aussieht
+                        if name and len(name) > 1 and not name.startswith('folder_'):
+                            files.append({
+                                "id": folder_id,
+                                "name": name,
+                                "mimeType": "application/vnd.google-apps.folder",
+                                "size": 0
+                            })
+
+            # Methode 3: Suche nach data-id Attributen
             elements_with_data_id = soup.find_all(attrs={"data-id": True})
             for elem in elements_with_data_id:
                 file_id = elem.get('data-id')
                 if file_id and file_id not in [f.get('id') for f in files]:
-                    # Versuche Namen aus benachbarten Elementen zu finden
-                    name = elem.get_text(strip=True) or elem.get('data-tooltip', '') or f"file_{file_id}"
-
+                    name = elem.get_text(strip=True) or elem.get('data-tooltip', '') or f"item_{file_id}"
+                    # Bestimme ob Ordner oder Datei
+                    is_folder = 'folder' in elem.get('class', []) or not '.' in name
                     files.append({
                         "id": file_id,
                         "name": name,
-                        "mimeType": self._guess_mime_type(name),
+                        "mimeType": "application/vnd.google-apps.folder" if is_folder else self._guess_mime_type(name),
                         "size": 0
                     })
 
@@ -596,7 +608,7 @@ class CloudSyncService:
                                             session) -> List[Dict]:
         """
         Sammelt Dateien aus einem öffentlichen Google Drive-Ordner.
-        Wird verwendet wenn kein Access Token vorhanden ist.
+        Durchsucht REKURSIV alle Unterordner.
         """
         files = []
 
@@ -608,23 +620,76 @@ class CloudSyncService:
             logger.error("Keine Ordner-ID gefunden")
             return files
 
-        # Lade öffentlichen Ordner
+        # Rekursiv alle Dateien sammeln
+        self._collect_public_folder_recursive(
+            folder_id=folder_id,
+            folder_path="",  # Root-Ordner
+            connection=connection,
+            session=session,
+            files=files
+        )
+
+        logger.info(f"Insgesamt {len(files)} Dateien in öffentlichem Ordner gefunden")
+        return files
+
+    def _collect_public_folder_recursive(self, folder_id: str, folder_path: str,
+                                          connection: CloudSyncConnection,
+                                          session, files: List[Dict],
+                                          depth: int = 0, max_depth: int = 10):
+        """
+        Sammelt rekursiv Dateien aus öffentlichen Google Drive Ordnern.
+
+        Args:
+            folder_id: Google Drive Ordner-ID
+            folder_path: Aktueller Pfad für die Kategorisierung (z.B. "Versicherung/Leben")
+            connection: CloudSyncConnection
+            session: DB Session
+            files: Liste zum Sammeln der Dateien
+            depth: Aktuelle Rekursionstiefe
+            max_depth: Maximale Rekursionstiefe
+        """
+        if depth > max_depth:
+            logger.warning(f"Maximale Ordnertiefe {max_depth} erreicht")
+            return
+
+        logger.info(f"Durchsuche Ordner: {folder_path or 'Root'} (ID: {folder_id})")
+
+        # Lade Ordnerinhalt
         response = self._google_public_list_folder(folder_id)
 
         if "error" in response:
-            logger.error(f"Fehler beim Laden des öffentlichen Ordners: {response['error']}")
-            return files
+            logger.error(f"Fehler beim Laden des Ordners {folder_path}: {response['error']}")
+            return
 
         file_list = response.get("files", [])
+        logger.info(f"Gefunden: {len(file_list)} Einträge in {folder_path or 'Root'}")
 
         for file_info in file_list:
             mime_type = file_info.get("mimeType", "")
+            filename = file_info.get("name", "")
+            file_id = file_info.get("id", "")
+
+            # Unterordner rekursiv durchsuchen
+            if mime_type == "application/vnd.google-apps.folder" or not '.' in filename:
+                # Könnte ein Ordner sein - versuche rekursiv zu laden
+                subfolder_path = f"{folder_path}/{filename}" if folder_path else filename
+                logger.info(f"Unterordner gefunden: {subfolder_path}")
+
+                self._collect_public_folder_recursive(
+                    folder_id=file_id,
+                    folder_path=subfolder_path,
+                    connection=connection,
+                    session=session,
+                    files=files,
+                    depth=depth + 1,
+                    max_depth=max_depth
+                )
+                continue
 
             # Google Docs/Sheets etc. überspringen
             if mime_type.startswith("application/vnd.google-apps"):
                 continue
 
-            filename = file_info.get("name", "")
             ext = Path(filename).suffix.lower()
 
             # Dateiendung prüfen
@@ -632,7 +697,6 @@ class CloudSyncService:
                 continue
 
             # Prüfen ob bereits synchronisiert
-            file_id = file_info.get("id")
             existing_log = session.query(CloudSyncLog).filter(
                 CloudSyncLog.connection_id == connection.id,
                 CloudSyncLog.remote_file_id == file_id
@@ -641,16 +705,22 @@ class CloudSyncService:
             if existing_log:
                 continue
 
+            # Vollständigen Pfad für die Datei erstellen
+            full_path = f"{folder_path}/{filename}" if folder_path else filename
+
             files.append({
                 "name": filename,
-                "path": filename,
+                "path": full_path,  # WICHTIG: Vollständiger Pfad für Kategorisierung
                 "id": file_id,
                 "size": file_info.get("size", 0),
-                "hash": None,  # Bei öffentlichen Ordnern nicht verfügbar
+                "hash": None,
                 "modified": None,
                 "mime_type": mime_type,
-                "provider": "google_drive_public"
+                "provider": "google_drive_public",
+                "source_folder": folder_path  # Quellordner für Dokumenten-Intelligenz
             })
+
+            logger.info(f"Datei gefunden: {full_path}")
 
         return files
 
@@ -993,6 +1063,9 @@ class CloudSyncService:
         """
         try:
             provider = file_info.get("provider", "")
+            filename = file_info.get("name", "unknown")
+
+            logger.info(f"Verarbeite Datei: {filename} (Provider: {provider})")
 
             if provider == "dropbox":
                 file_content, metadata = self._dropbox_download_file(
@@ -1001,12 +1074,14 @@ class CloudSyncService:
                 )
             elif provider == "google_drive_public":
                 # Öffentlicher Google Drive Download
+                logger.info(f"Starte öffentlichen Download für: {filename}")
                 file_content, success = self._google_public_download_file(
                     file_info.get("id")
                 )
                 if not success:
-                    logger.error(f"Download fehlgeschlagen für {file_info.get('name')}")
+                    logger.error(f"Download fehlgeschlagen für {filename}")
                     return "error"
+                logger.info(f"Download erfolgreich: {len(file_content)} Bytes")
             else:
                 # Authentifizierter Google Drive Download
                 file_content = self._google_download_file(
@@ -1014,14 +1089,20 @@ class CloudSyncService:
                     file_info.get("id")
                 )
 
+            # Quellordner-Pfad für intelligente Kategorisierung
+            # Bevorzuge source_folder, dann path, dann nur ID
+            source_folder_path = file_info.get("source_folder") or file_info.get("path") or ""
+
+            logger.info(f"Importiere Datei: {filename} aus Ordner: {source_folder_path}")
+
             # Dokument erstellen
             doc = self._import_file(
                 session, connection,
-                file_info.get("name"),
+                filename,
                 file_content,
-                file_info.get("size"),
+                file_info.get("size", len(file_content)),
                 file_info.get("hash"),
-                file_info.get("path") or file_info.get("id"),
+                source_folder_path,  # Vollständiger Quellordner-Pfad
                 process_documents
             )
 
