@@ -12,12 +12,58 @@ from typing import Optional, List, Dict, Any, Tuple
 import requests
 from urllib.parse import urlencode, urlparse, parse_qs
 
-from database.models import Document, Folder, get_session
+from database.models import Document, Folder
+from database.db import get_db
 from database.extended_models import (
     CloudSyncConnection, CloudSyncLog, CloudProvider, SyncStatus
 )
 
 logger = logging.getLogger(__name__)
+
+
+class CloudSyncConnectionWrapper:
+    """Wrapper für CloudSyncConnection mit vereinfachtem Attributzugriff"""
+
+    def __init__(self, connection: CloudSyncConnection):
+        self.id = connection.id
+        self.user_id = connection.user_id
+        self.provider = connection.provider
+        self.provider_name = connection.provider_name
+        self.is_active = connection.is_active
+        self.sync_interval_minutes = connection.sync_interval_minutes
+
+        # Aliase für einfacheren Zugriff
+        self.folder_path = connection.remote_folder_path
+        self.folder_id = connection.remote_folder_id
+        self.sync_status = connection.status
+        self.last_sync = connection.last_sync_at
+        self.last_sync_error = connection.last_sync_error
+
+        # Originale Attribute
+        self.remote_folder_path = connection.remote_folder_path
+        self.remote_folder_id = connection.remote_folder_id
+        self.access_token = connection.access_token
+        self.status = connection.status
+        self.last_sync_at = connection.last_sync_at
+        self.total_files_synced = connection.total_files_synced
+        self.auto_sync_enabled = connection.auto_sync_enabled
+        self.created_at = connection.created_at
+        self.updated_at = connection.updated_at
+
+
+class CloudSyncLogWrapper:
+    """Wrapper für CloudSyncLog mit vereinfachtem Attributzugriff"""
+
+    def __init__(self, log: CloudSyncLog):
+        self.id = log.id
+        self.connection_id = log.connection_id
+        self.user_id = log.user_id
+        self.status = log.sync_status
+        self.created_at = log.synced_at
+        self.files_synced = 1 if log.sync_status == "synced" else 0
+        self.files_skipped = 1 if log.sync_status == "skipped" else 0
+        self.original_filename = log.original_filename
+        self.error_message = log.error_message
 
 
 class CloudSyncService:
@@ -110,22 +156,29 @@ class CloudSyncService:
 
     # ==================== VERBINDUNG ERSTELLEN ====================
 
-    def create_connection(self, provider: CloudProvider, remote_folder_path: str,
-                          access_token: str, refresh_token: str = None,
+    def create_connection(self, provider: CloudProvider,
+                          folder_id: str = None,
+                          folder_path: str = None,
+                          access_token: str = None,
+                          refresh_token: str = None,
                           token_expires_at: datetime = None,
                           local_folder_id: int = None,
-                          provider_name: str = None) -> CloudSyncConnection:
+                          sync_interval_minutes: int = None,
+                          provider_name: str = None) -> 'CloudSyncConnectionWrapper':
         """Erstellt eine neue Cloud-Sync-Verbindung"""
-        with get_session() as session:
+        with get_db() as session:
             connection = CloudSyncConnection(
                 user_id=self.user_id,
                 provider=provider,
                 provider_name=provider_name or provider.value,
-                remote_folder_path=remote_folder_path,
-                access_token=access_token,
+                remote_folder_path=folder_path or folder_id or "",
+                remote_folder_id=folder_id,
+                access_token=access_token or "",
                 refresh_token=refresh_token,
                 token_expires_at=token_expires_at,
                 local_folder_id=local_folder_id,
+                sync_interval_minutes=sync_interval_minutes,
+                auto_sync_enabled=sync_interval_minutes is not None,
                 status=SyncStatus.PENDING,
                 file_extensions=[".pdf", ".jpg", ".jpeg", ".png", ".gif", ".doc",
                                 ".docx", ".xls", ".xlsx", ".txt"]
@@ -133,29 +186,35 @@ class CloudSyncService:
             session.add(connection)
             session.commit()
             session.refresh(connection)
-            return connection
+            # Return wrapped connection with easier attribute access
+            return CloudSyncConnectionWrapper(connection)
 
-    def get_connections(self, active_only: bool = True) -> List[CloudSyncConnection]:
+    def get_connections(self, active_only: bool = False) -> List['CloudSyncConnectionWrapper']:
         """Holt alle Verbindungen eines Benutzers"""
-        with get_session() as session:
+        with get_db() as session:
             query = session.query(CloudSyncConnection).filter(
                 CloudSyncConnection.user_id == self.user_id
             )
             if active_only:
                 query = query.filter(CloudSyncConnection.is_active == True)
-            return query.all()
+            connections = query.all()
+            # Convert to wrapper objects for easier attribute access
+            return [CloudSyncConnectionWrapper(c) for c in connections]
 
-    def get_connection(self, connection_id: int) -> Optional[CloudSyncConnection]:
+    def get_connection(self, connection_id: int) -> Optional['CloudSyncConnectionWrapper']:
         """Holt eine spezifische Verbindung"""
-        with get_session() as session:
-            return session.query(CloudSyncConnection).filter(
+        with get_db() as session:
+            conn = session.query(CloudSyncConnection).filter(
                 CloudSyncConnection.id == connection_id,
                 CloudSyncConnection.user_id == self.user_id
             ).first()
+            if conn:
+                return CloudSyncConnectionWrapper(conn)
+            return None
 
     def update_connection(self, connection_id: int, **kwargs) -> bool:
         """Aktualisiert Verbindungseinstellungen"""
-        with get_session() as session:
+        with get_db() as session:
             connection = session.query(CloudSyncConnection).filter(
                 CloudSyncConnection.id == connection_id,
                 CloudSyncConnection.user_id == self.user_id
@@ -173,7 +232,7 @@ class CloudSyncService:
 
     def delete_connection(self, connection_id: int) -> bool:
         """Löscht eine Verbindung"""
-        with get_session() as session:
+        with get_db() as session:
             connection = session.query(CloudSyncConnection).filter(
                 CloudSyncConnection.id == connection_id,
                 CloudSyncConnection.user_id == self.user_id
@@ -306,33 +365,50 @@ class CloudSyncService:
 
         Returns:
             Dict mit Statistiken:
+            - success: True wenn Synchronisation erfolgreich
+            - new_files: Anzahl neu importierter Dateien (Alias für files_synced)
             - files_found: Anzahl gefundener Dateien
             - files_synced: Anzahl synchronisierter Dateien
             - files_skipped: Anzahl übersprungener Dateien (Duplikate)
+            - skipped_files: Alias für files_skipped
             - files_error: Anzahl fehlgeschlagener Dateien
             - errors: Liste von Fehlermeldungen
+            - error: Erste Fehlermeldung als String (für UI)
         """
         result = {
+            "success": False,
             "files_found": 0,
             "files_synced": 0,
+            "new_files": 0,
             "files_skipped": 0,
+            "skipped_files": 0,
             "files_error": 0,
             "errors": [],
+            "error": None,
             "synced_files": []
         }
 
-        with get_session() as session:
+        with get_db() as session:
             connection = session.query(CloudSyncConnection).filter(
                 CloudSyncConnection.id == connection_id,
                 CloudSyncConnection.user_id == self.user_id
             ).first()
 
             if not connection:
-                result["errors"].append("Verbindung nicht gefunden")
+                result["error"] = "Verbindung nicht gefunden"
+                result["errors"].append(result["error"])
                 return result
 
             if not connection.is_active:
-                result["errors"].append("Verbindung ist deaktiviert")
+                result["error"] = "Verbindung ist deaktiviert"
+                result["errors"].append(result["error"])
+                return result
+
+            # Prüfen ob Access Token vorhanden
+            if not connection.access_token:
+                result["error"] = "Kein Access Token konfiguriert. Bitte API-Konfiguration in Einstellungen prüfen."
+                result["errors"].append(result["error"])
+                result["success"] = True  # Nicht als Fehler behandeln, nur Hinweis
                 return result
 
             # Status auf "syncing" setzen
@@ -341,11 +417,19 @@ class CloudSyncService:
 
             try:
                 if connection.provider == CloudProvider.DROPBOX:
-                    result = self._sync_dropbox(connection, session, process_documents)
+                    sync_result = self._sync_dropbox(connection, session, process_documents)
                 elif connection.provider == CloudProvider.GOOGLE_DRIVE:
-                    result = self._sync_google_drive(connection, session, process_documents)
+                    sync_result = self._sync_google_drive(connection, session, process_documents)
                 else:
-                    result["errors"].append(f"Provider {connection.provider} nicht unterstützt")
+                    result["error"] = f"Provider {connection.provider} nicht unterstützt"
+                    result["errors"].append(result["error"])
+                    sync_result = result
+
+                # Ergebnisse übernehmen
+                result.update(sync_result)
+                result["new_files"] = result["files_synced"]
+                result["skipped_files"] = result["files_skipped"]
+                result["success"] = len(result.get("errors", [])) == 0
 
                 # Status aktualisieren
                 connection.status = SyncStatus.COMPLETED
@@ -357,12 +441,17 @@ class CloudSyncService:
                 logger.error(f"Sync-Fehler für Verbindung {connection_id}: {e}")
                 connection.status = SyncStatus.ERROR
                 connection.last_sync_error = str(e)
+                result["error"] = str(e)
                 result["errors"].append(str(e))
 
             session.commit()
 
         # Sync-Log schreiben
         self._write_sync_log(connection_id, result)
+
+        # Wenn Fehler vorhanden, erste Fehlermeldung setzen
+        if result["errors"] and not result["error"]:
+            result["error"] = result["errors"][0]
 
         return result
 
@@ -671,9 +760,9 @@ class CloudSyncService:
     # ==================== SYNC-LOGS ====================
 
     def get_sync_logs(self, connection_id: int = None,
-                      limit: int = 100) -> List[CloudSyncLog]:
+                      limit: int = 100) -> List[CloudSyncLogWrapper]:
         """Holt Sync-Logs"""
-        with get_session() as session:
+        with get_db() as session:
             query = session.query(CloudSyncLog).filter(
                 CloudSyncLog.user_id == self.user_id
             )
@@ -681,11 +770,12 @@ class CloudSyncService:
             if connection_id:
                 query = query.filter(CloudSyncLog.connection_id == connection_id)
 
-            return query.order_by(CloudSyncLog.synced_at.desc()).limit(limit).all()
+            logs = query.order_by(CloudSyncLog.synced_at.desc()).limit(limit).all()
+            return [CloudSyncLogWrapper(log) for log in logs]
 
     def get_sync_statistics(self, connection_id: int = None) -> Dict:
         """Holt Statistiken zur Synchronisation"""
-        with get_session() as session:
+        with get_db() as session:
             query = session.query(CloudSyncLog).filter(
                 CloudSyncLog.user_id == self.user_id
             )
@@ -725,7 +815,7 @@ class CloudSyncService:
 
     def get_connections_due_for_sync(self) -> List[CloudSyncConnection]:
         """Holt Verbindungen die synchronisiert werden müssen"""
-        with get_session() as session:
+        with get_db() as session:
             connections = session.query(CloudSyncConnection).filter(
                 CloudSyncConnection.user_id == self.user_id,
                 CloudSyncConnection.is_active == True,

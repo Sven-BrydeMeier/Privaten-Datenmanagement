@@ -9,6 +9,18 @@ import streamlit as st
 from config.settings import DATABASE_PATH, DEFAULT_FOLDERS
 from .models import Base, User, Folder
 
+# Import extended models so their tables get registered with Base.metadata
+try:
+    from .extended_models import (
+        Warranty, Insurance, InsuranceClaim, Subscription,
+        InventoryItem, CloudSyncConnection, CloudSyncLog,
+        DocumentVersion, DocumentTemplate, Vehicle, MileageTrip,
+        BackupLog, FamilyGroup, FamilyMember, SharedDocument, DocumentComment
+    )
+except ImportError:
+    # Extended models not available
+    pass
+
 
 # Datenbank-Engine
 DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
