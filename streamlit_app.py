@@ -176,6 +176,45 @@ def render_dashboard():
     st.title("📊 Dashboard")
     st.markdown("Willkommen zu Ihrer privaten Dokumentenverwaltung")
 
+    # Erinnerung: Lokale Installation für volle Funktionalität
+    reminder_key = "local_install_reminder_dismissed"
+    reminder_date_key = "local_install_reminder_date"
+
+    # Erinnerung anzeigen wenn nicht abgelehnt und mindestens alle 7 Tage
+    show_reminder = False
+    if reminder_key not in st.session_state:
+        st.session_state[reminder_key] = False
+    if reminder_date_key not in st.session_state:
+        st.session_state[reminder_date_key] = datetime.now()
+
+    days_since_shown = (datetime.now() - st.session_state[reminder_date_key]).days
+    if not st.session_state[reminder_key] or days_since_shown >= 7:
+        show_reminder = True
+        st.session_state[reminder_date_key] = datetime.now()
+
+    if show_reminder:
+        with st.expander("💡 **Hinweis: Erweiterte Funktionen verfügbar**", expanded=False):
+            st.markdown("""
+            **Folgende Funktionen erfordern eine lokale Installation:**
+
+            | Funktion | Benötigt | Status |
+            |----------|----------|--------|
+            | 🔍 OCR (Texterkennung) | Tesseract | ⚠️ Nur lokal |
+            | 📄 PDF zu Bild | Poppler | ⚠️ Nur lokal |
+            | 📷 Barcode-Scan | ZBar | ⚠️ Nur lokal |
+            | 🎤 Audio-Aufnahme | System-Audio | ⚠️ Nur lokal |
+
+            **Alternativen in der Cloud:**
+            - OCR: OpenAI Vision API (in Einstellungen konfigurieren)
+            - Audio: Datei-Upload statt Live-Aufnahme
+            - PDF: Textextraktion funktioniert weiterhin
+
+            👉 Für volle Funktionalität: App lokal mit Docker oder direkt ausführen.
+            """)
+            if st.button("✓ Verstanden, nicht mehr anzeigen"):
+                st.session_state[reminder_key] = True
+                st.rerun()
+
     # =====================
     # HAUPT-KPIs (Zeile 1)
     # =====================
