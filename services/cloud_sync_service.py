@@ -1287,7 +1287,15 @@ class CloudSyncService:
                      filename: str, content: bytes, file_size: int,
                      content_hash: str, remote_path: str,
                      process_documents: bool) -> Optional[Document]:
-        """Importiert eine Datei ins Dokumentenmanagement"""
+        """
+        Importiert eine Datei ins Dokumentenmanagement mit intelligenter Analyse.
+
+        - Speichert Datei lokal
+        - Führt OCR durch (falls PDF/Bild)
+        - Analysiert Inhalt und extrahiert Metadaten
+        - Erstellt automatisch passende Ordnerstruktur
+        - Verknüpft mit Versicherungen/Verträgen
+        """
         # Speicherpfad erstellen
         upload_dir = Path("data/uploads") / str(self.user_id) / "cloud_sync"
         upload_dir.mkdir(parents=True, exist_ok=True)
@@ -1301,7 +1309,7 @@ class CloudSyncService:
         with open(file_path, "wb") as f:
             f.write(content)
 
-        # Dokument in DB erstellen
+        # Dokument in DB erstellen (vorerst mit Basis-Infos)
         doc = Document(
             user_id=self.user_id,
             folder_id=connection.local_folder_id,
@@ -1318,7 +1326,135 @@ class CloudSyncService:
         session.add(doc)
         session.flush()  # Um ID zu erhalten
 
+        # Intelligente Dokumentenverarbeitung wenn aktiviert
+        if process_documents:
+            try:
+                self._process_document_intelligent(
+                    session, doc, content, remote_path, filename
+                )
+            except Exception as e:
+                logger.error(f"Intelligente Verarbeitung fehlgeschlagen für {filename}: {e}")
+                # Fehler nicht propagieren - Dokument wurde bereits gespeichert
+
         return doc
+
+    def _process_document_intelligent(self, session, doc: Document,
+                                       content: bytes, remote_path: str,
+                                       filename: str):
+        """
+        Führt intelligente Dokumentenverarbeitung durch:
+        1. OCR (falls PDF/Bild)
+        2. Metadaten-Extraktion
+        3. Automatische Ordnererstellung
+        4. Verknüpfung mit Versicherungen/Verträgen
+        """
+        ocr_text = ""
+
+        # 1. OCR durchführen
+        try:
+            from services.ocr import OCRService
+            ocr_service = OCRService()
+
+            mime_type = doc.mime_type or self._get_mime_type(filename)
+
+            if mime_type == "application/pdf":
+                ocr_result = ocr_service.process_pdf(doc.file_path)
+                ocr_text = ocr_result.get("text", "")
+                doc.ocr_text = ocr_text
+                doc.ocr_confidence = ocr_result.get("confidence", 0)
+
+            elif mime_type.startswith("image/"):
+                ocr_result = ocr_service.process_image(doc.file_path)
+                ocr_text = ocr_result.get("text", "")
+                doc.ocr_text = ocr_text
+                doc.ocr_confidence = ocr_result.get("confidence", 0)
+
+        except ImportError:
+            logger.warning("OCR Service nicht verfügbar")
+        except Exception as e:
+            logger.error(f"OCR fehlgeschlagen: {e}")
+
+        # 2. Intelligente Analyse mit Document Intelligence Service
+        if ocr_text and len(ocr_text) > 50:
+            try:
+                from services.document_intelligence_service import DocumentIntelligenceService
+
+                # AI Service laden falls verfügbar
+                ai_service = None
+                try:
+                    from services.ai_service import AIService
+                    ai_service = AIService()
+                except:
+                    pass
+
+                intel_service = DocumentIntelligenceService(
+                    self.user_id, ai_service=ai_service
+                )
+
+                # Analysiere Dokument
+                metadata = intel_service.analyze_document(
+                    ocr_text,
+                    source_folder_path=remote_path,
+                    filename=filename
+                )
+
+                # Aktualisiere Dokument mit extrahierten Metadaten
+                if metadata.sender:
+                    doc.sender = metadata.sender
+
+                if metadata.document_date:
+                    doc.document_date = metadata.document_date
+
+                if metadata.insurance_number:
+                    doc.insurance_number = metadata.insurance_number
+
+                if metadata.contract_number:
+                    doc.contract_number = metadata.contract_number
+
+                if metadata.customer_number:
+                    doc.customer_number = metadata.customer_number
+
+                if metadata.amount:
+                    doc.invoice_amount = metadata.amount
+
+                if metadata.document_type:
+                    doc.category = metadata.document_type.capitalize()
+
+                # 3. Erstelle Ordnerstruktur und verschiebe Dokument
+                if metadata.suggested_folder_path:
+                    folder_id = intel_service.create_folder_structure(
+                        metadata.suggested_folder_path
+                    )
+                    if folder_id:
+                        doc.folder_id = folder_id
+                        logger.info(f"Dokument {filename} in Ordner {metadata.suggested_folder_path} verschoben")
+
+                # 4. Generiere besseren Titel
+                title_parts = []
+                if metadata.document_date:
+                    title_parts.append(metadata.document_date.strftime("%Y-%m-%d"))
+                if metadata.sender:
+                    title_parts.append(metadata.sender)
+                if metadata.document_type:
+                    type_names = {
+                        "versicherung": "Versicherung",
+                        "vertrag": "Vertrag",
+                        "rechnung": "Rechnung",
+                        "abonnement": "Abo"
+                    }
+                    title_parts.append(type_names.get(metadata.document_type, ""))
+                if metadata.insurance_number:
+                    title_parts.append(metadata.insurance_number)
+
+                if title_parts:
+                    doc.title = " - ".join([p for p in title_parts if p])
+
+                doc.status = "completed"
+
+            except ImportError:
+                logger.warning("Document Intelligence Service nicht verfügbar")
+            except Exception as e:
+                logger.error(f"Dokumenten-Intelligenz fehlgeschlagen: {e}")
 
     def _get_mime_type(self, filename: str) -> str:
         """Ermittelt MIME-Type aus Dateinamen"""

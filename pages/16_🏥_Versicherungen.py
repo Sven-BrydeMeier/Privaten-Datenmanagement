@@ -1,17 +1,20 @@
 """
 Versicherungs-Manager Seite
-Übersicht und Verwaltung von Versicherungen
+Übersicht und Verwaltung von Versicherungen mit strukturierter Darstellung
 """
 import streamlit as st
 from datetime import datetime, timedelta
+from typing import Optional
 import plotly.express as px
 import plotly.graph_objects as go
+import pandas as pd
 
 # Imports
 try:
     from services.insurance_service import InsuranceService
     from database.extended_models import Insurance, InsuranceType, SubscriptionInterval
-    from database.models import Document, get_session
+    from database.models import Document, Folder
+    from database.db import get_db
     INSURANCE_AVAILABLE = True
 except ImportError:
     INSURANCE_AVAILABLE = False
@@ -20,7 +23,7 @@ except ImportError:
 def render_insurance_page():
     """Rendert die Versicherungs-Seite"""
     st.title("Versicherungs-Manager")
-    st.markdown("Alle Ihre Versicherungen im Überblick")
+    st.markdown("Alle Ihre Versicherungen im Überblick - strukturiert und verknüpft")
 
     if not INSURANCE_AVAILABLE:
         st.error("Versicherungs-Module nicht verfügbar.")
@@ -34,20 +37,23 @@ def render_insurance_page():
     service = InsuranceService(user_id)
 
     # Tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Übersicht", "Neue Versicherung", "Alle Versicherungen", "Schäden"
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Übersicht", "Strukturierte Ansicht", "Neue Versicherung", "Alle Versicherungen", "Schäden"
     ])
 
     with tab1:
         render_overview(service)
 
     with tab2:
-        render_new_insurance(service, user_id)
+        render_structured_view(service, user_id)
 
     with tab3:
-        render_all_insurances(service)
+        render_new_insurance(service, user_id)
 
     with tab4:
+        render_all_insurances(service)
+
+    with tab5:
         render_claims(service)
 
 
@@ -141,6 +147,288 @@ def render_overview(service: InsuranceService):
                     st.info(f"{item['days_remaining']} Tage")
     else:
         st.info("Keine anstehenden Kündigungsfristen")
+
+
+def render_structured_view(service: InsuranceService, user_id: int):
+    """
+    Tab: Strukturierte Ansicht
+    Zeigt alle Versicherungen in einer übersichtlichen Tabelle mit:
+    - Versicherungsname und Typ
+    - Versicherungsnummer
+    - Abschlussdatum
+    - Monatliche/Jährliche Rate
+    - Rückkaufwert (bei Lebensversicherungen)
+    - Zuteilungsdatum und -wert
+    - Kündigungsfristen
+    - Link zum Dokumentenordner
+    """
+    st.subheader("Strukturierte Versicherungsübersicht")
+    st.markdown("Alle wichtigen Informationen auf einen Blick")
+
+    insurances = service.get_all_insurances(active_only=False)
+
+    if not insurances:
+        st.info("Keine Versicherungen erfasst. Fügen Sie eine neue Versicherung hinzu.")
+        return
+
+    # Gruppiere nach Versicherungstyp
+    type_groups = {}
+    for ins in insurances:
+        type_key = ins.insurance_type.value
+        if type_key not in type_groups:
+            type_groups[type_key] = []
+        type_groups[type_key].append(ins)
+
+    # Sortierung der Typen
+    type_order = ["life", "car", "household", "liability", "health", "legal", "disability", "travel", "pet", "other"]
+
+    for type_key in type_order:
+        if type_key not in type_groups:
+            continue
+
+        type_insurances = type_groups[type_key]
+        type_name = get_insurance_type_name(type_key)
+        icon = get_insurance_icon(InsuranceType(type_key))
+
+        st.markdown(f"### {icon} {type_name}")
+
+        for ins in type_insurances:
+            # Container für jede Versicherung
+            with st.container():
+                # Kopfzeile
+                status_color = "🟢" if ins.is_active else "🔴"
+                col1, col2 = st.columns([4, 1])
+
+                with col1:
+                    st.markdown(f"#### {status_color} {ins.company}")
+                    if ins.policy_name:
+                        st.caption(f"Tarif: {ins.policy_name}")
+
+                with col2:
+                    monthly = service._to_monthly(ins.premium_amount, ins.premium_interval)
+                    st.metric("Monatlich", f"{monthly:.2f} €")
+
+                # Details in Spalten
+                col1, col2, col3, col4 = st.columns(4)
+
+                with col1:
+                    st.markdown("**Vertragsdaten**")
+                    st.markdown(f"📋 Policennr.: `{ins.policy_number or '-'}`")
+                    st.markdown(f"📅 Beginn: {ins.start_date.strftime('%d.%m.%Y')}")
+                    if ins.end_date:
+                        st.markdown(f"📅 Ende: {ins.end_date.strftime('%d.%m.%Y')}")
+                    else:
+                        st.markdown(f"🔄 Automatische Verlängerung")
+
+                with col2:
+                    st.markdown("**Kosten & Deckung**")
+                    yearly = service._to_monthly(ins.premium_amount, ins.premium_interval) * 12
+                    st.markdown(f"💰 Jährlich: {yearly:.2f} €")
+                    if ins.coverage_amount:
+                        st.markdown(f"🛡️ Deckung: {ins.coverage_amount:,.0f} €")
+                    if ins.deductible:
+                        st.markdown(f"💸 Selbstbet.: {ins.deductible:.0f} €")
+
+                with col3:
+                    st.markdown("**Kündigungsfrist**")
+                    st.markdown(f"⏰ {ins.notice_period_days} Tage")
+
+                    # Berechne nächste Kündigungsfrist
+                    if ins.end_date and ins.is_active:
+                        deadline = ins.end_date - timedelta(days=ins.notice_period_days)
+                        days_to_deadline = (deadline - datetime.now()).days
+                        if days_to_deadline > 0:
+                            if days_to_deadline <= 30:
+                                st.warning(f"⚠️ In {days_to_deadline} Tagen!")
+                            else:
+                                st.info(f"📆 {deadline.strftime('%d.%m.%Y')}")
+
+                with col4:
+                    st.markdown("**Kontakt**")
+                    if ins.agent_name:
+                        st.markdown(f"👤 {ins.agent_name}")
+                    if ins.agent_phone:
+                        st.markdown(f"📞 {ins.agent_phone}")
+                    if ins.claims_phone:
+                        st.markdown(f"🚨 {ins.claims_phone}")
+
+                # Spezielle Felder für Lebensversicherungen
+                if type_key == "life":
+                    st.markdown("---")
+                    col1, col2, col3 = st.columns(3)
+
+                    with col1:
+                        # Versuche Rückkaufwert aus verknüpften Dokumenten zu holen
+                        surrender_value = get_life_insurance_value(user_id, ins.id, "surrender_value")
+                        if surrender_value:
+                            st.metric("Rückkaufwert", f"{surrender_value:,.2f} €")
+                        else:
+                            st.metric("Rückkaufwert", "Nicht erfasst")
+
+                    with col2:
+                        maturity_date = get_life_insurance_value(user_id, ins.id, "maturity_date")
+                        if maturity_date:
+                            st.metric("Zuteilungsdatum", maturity_date.strftime('%d.%m.%Y'))
+                        else:
+                            st.metric("Zuteilungsdatum", "Nicht erfasst")
+
+                    with col3:
+                        maturity_value = get_life_insurance_value(user_id, ins.id, "maturity_value")
+                        if maturity_value:
+                            st.metric("Zuteilungswert", f"{maturity_value:,.2f} €")
+                        else:
+                            st.metric("Zuteilungswert", "Nicht erfasst")
+
+                # KFZ spezifische Felder
+                if type_key == "car":
+                    st.markdown("---")
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        vehicle_info = get_insured_object(user_id, ins.id)
+                        if vehicle_info:
+                            st.markdown(f"**Versichertes Fahrzeug:** {vehicle_info}")
+                        else:
+                            st.info("Fahrzeug aus Dokumenten ermitteln")
+
+                # Verknüpfte Dokumente und Ordner
+                st.markdown("---")
+                docs_info = get_linked_documents(user_id, ins)
+
+                col1, col2 = st.columns([3, 1])
+
+                with col1:
+                    if docs_info["count"] > 0:
+                        st.markdown(f"📁 **{docs_info['count']} verknüpfte Dokumente**")
+                        if docs_info["folder_path"]:
+                            st.markdown(f"Ordner: `{docs_info['folder_path']}`")
+                    else:
+                        st.markdown("📁 Keine verknüpften Dokumente")
+
+                with col2:
+                    if docs_info["folder_id"]:
+                        if st.button(f"📂 Ordner öffnen", key=f"folder_{ins.id}"):
+                            st.session_state["selected_folder_id"] = docs_info["folder_id"]
+                            st.switch_page("pages/3_📁_Dokumente.py")
+
+                st.divider()
+
+    # Exportieren
+    st.markdown("---")
+    if st.button("📊 Als Tabelle exportieren"):
+        export_data = []
+        for ins in insurances:
+            monthly = service._to_monthly(ins.premium_amount, ins.premium_interval)
+            export_data.append({
+                "Typ": get_insurance_type_name(ins.insurance_type.value),
+                "Unternehmen": ins.company,
+                "Tarif": ins.policy_name or "",
+                "Policennummer": ins.policy_number or "",
+                "Beginn": ins.start_date.strftime('%d.%m.%Y'),
+                "Ende": ins.end_date.strftime('%d.%m.%Y') if ins.end_date else "Unbefristet",
+                "Monatlich €": f"{monthly:.2f}",
+                "Jährlich €": f"{monthly * 12:.2f}",
+                "Deckung €": f"{ins.coverage_amount:,.0f}" if ins.coverage_amount else "",
+                "Selbstbeteiligung €": f"{ins.deductible:.0f}" if ins.deductible else "",
+                "Kündigungsfrist Tage": ins.notice_period_days,
+                "Aktiv": "Ja" if ins.is_active else "Nein"
+            })
+
+        df = pd.DataFrame(export_data)
+        st.dataframe(df, use_container_width=True)
+
+        # CSV Download
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "💾 CSV herunterladen",
+            csv,
+            "versicherungen_uebersicht.csv",
+            "text/csv"
+        )
+
+
+def get_life_insurance_value(user_id: int, insurance_id: int, field: str):
+    """Holt spezifische Werte aus verknüpften Dokumenten einer Lebensversicherung"""
+    # Diese Werte könnten aus OCR-extrahierten Daten kommen
+    # Vorerst Platzhalter - später mit DocumentIntelligenceService verknüpfen
+    return None
+
+
+def get_insured_object(user_id: int, insurance_id: int) -> Optional[str]:
+    """Holt Informationen über das versicherte Objekt"""
+    # Aus verknüpften Dokumenten extrahieren
+    return None
+
+
+def get_linked_documents(user_id: int, insurance) -> dict:
+    """
+    Findet verknüpfte Dokumente und deren Ordner für eine Versicherung.
+    Sucht nach Dokumenten mit passender Versicherungsnummer oder Absender.
+    """
+    result = {"count": 0, "folder_id": None, "folder_path": None}
+
+    try:
+        with get_db() as session:
+            # Suche nach Dokumenten mit passender Versicherungsnummer
+            query = session.query(Document).filter(
+                Document.user_id == user_id,
+                Document.is_deleted == False
+            )
+
+            conditions = []
+
+            # Nach Policennummer suchen
+            if insurance.policy_number:
+                conditions.append(Document.insurance_number == insurance.policy_number)
+
+            # Nach Absender/Unternehmen suchen
+            if insurance.company:
+                conditions.append(Document.sender.ilike(f"%{insurance.company}%"))
+
+            if conditions:
+                from sqlalchemy import or_
+                query = query.filter(or_(*conditions))
+
+                docs = query.all()
+                result["count"] = len(docs)
+
+                # Finde den häufigsten Ordner
+                if docs:
+                    folder_ids = [d.folder_id for d in docs if d.folder_id]
+                    if folder_ids:
+                        # Häufigster Ordner
+                        most_common = max(set(folder_ids), key=folder_ids.count)
+                        result["folder_id"] = most_common
+
+                        # Ordnerpfad ermitteln
+                        folder = session.query(Folder).filter(
+                            Folder.id == most_common
+                        ).first()
+                        if folder:
+                            result["folder_path"] = get_folder_path(session, folder)
+
+    except Exception as e:
+        pass
+
+    return result
+
+
+def get_folder_path(session, folder) -> str:
+    """Ermittelt den vollständigen Ordnerpfad"""
+    parts = [folder.name]
+    current = folder
+
+    while current.parent_id:
+        parent = session.query(Folder).filter(
+            Folder.id == current.parent_id
+        ).first()
+        if parent:
+            parts.insert(0, parent.name)
+            current = parent
+        else:
+            break
+
+    return " / ".join(parts)
 
 
 def render_new_insurance(service: InsuranceService, user_id: int):
