@@ -17,3 +17,4 @@ aiosmtplib>=3.0.0
 imapclient>=2.3.0
 whoosh>=2.7.4
 numpy>=1.24.0
+requests>=2.31.0
