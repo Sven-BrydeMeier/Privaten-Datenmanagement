@@ -770,57 +770,156 @@ with tab_cloud:
                 st.info("🔂 Einmalig: Dateien werden nur jetzt importiert")
                 sync_interval = None
 
+        # Hilfsfunktion für Zeitformatierung
+        def format_time(seconds):
+            """Formatiert Sekunden als lesbare Zeit"""
+            if seconds is None or seconds < 0:
+                return "Berechne..."
+            if seconds < 60:
+                return f"{int(seconds)} Sek."
+            elif seconds < 3600:
+                mins = int(seconds / 60)
+                secs = int(seconds % 60)
+                return f"{mins} Min. {secs} Sek."
+            else:
+                hours = int(seconds / 3600)
+                mins = int((seconds % 3600) / 60)
+                return f"{hours} Std. {mins} Min."
+
+        def format_file_size(bytes_size):
+            """Formatiert Bytes als lesbare Größe"""
+            if bytes_size < 1024:
+                return f"{bytes_size} B"
+            elif bytes_size < 1024 * 1024:
+                return f"{bytes_size / 1024:.1f} KB"
+            else:
+                return f"{bytes_size / (1024 * 1024):.1f} MB"
+
         # Import starten
         if st.button("☁️ Import starten", type="primary", disabled=not cloud_link or not detected_provider):
             if cloud_link and detected_provider:
-                with st.spinner("Erstelle Cloud-Verbindung..."):
-                    try:
-                        # Verbindung erstellen
-                        conn = cloud_service.create_connection(
-                            provider=CloudProvider.DROPBOX if detected_provider == "dropbox" else CloudProvider.GOOGLE_DRIVE,
-                            folder_id=cloud_link,
-                            folder_path=cloud_link,
-                            sync_interval_minutes=sync_interval
-                        )
+                try:
+                    # Verbindung erstellen
+                    conn = cloud_service.create_connection(
+                        provider=CloudProvider.DROPBOX if detected_provider == "dropbox" else CloudProvider.GOOGLE_DRIVE,
+                        folder_id=cloud_link,
+                        folder_path=cloud_link,
+                        sync_interval_minutes=sync_interval
+                    )
 
-                        st.success("✅ Cloud-Verbindung erstellt!")
+                    st.success("✅ Cloud-Verbindung erstellt!")
 
-                        # Sofort synchronisieren
-                        with st.spinner("Importiere Dateien aus Cloud..."):
-                            result = cloud_service.sync_connection(conn.id)
+                    # Fortschrittsanzeige
+                    progress_container = st.container()
 
-                            if result.get("success"):
-                                new_files = result.get("new_files", 0)
-                                skipped = result.get("skipped_files", 0)
+                    with progress_container:
+                        progress_bar = st.progress(0, text="Initialisiere...")
+                        status_container = st.empty()
+                        file_info_container = st.empty()
+                        stats_container = st.empty()
 
-                                if new_files > 0:
-                                    st.success(f"✅ **{new_files} Dateien importiert!**")
-                                    st.info(f"📁 Dateien wurden im Posteingang abgelegt und werden verarbeitet.")
+                        # Synchronisieren mit Fortschrittsanzeige
+                        final_result = None
+                        for progress in cloud_service.sync_connection_with_progress(conn.id):
+                            final_result = progress
+                            phase = progress.get("phase", "")
 
-                                    # Hinweis auf Verarbeitung
-                                    st.markdown("---")
-                                    st.markdown("### 📋 Nächste Schritte")
-                                    st.write("1. Gehen Sie zum Tab **'⚙️ Verarbeitung'** um die importierten Dokumente zu verarbeiten")
-                                    st.write("2. Oder besuchen Sie **'📁 Dokumente'** um die neuen Dokumente zu sehen")
+                            # Fortschrittsbalken aktualisieren
+                            percent = progress.get("progress_percent", 0)
+                            progress_bar.progress(percent / 100)
 
-                                if skipped > 0:
-                                    st.caption(f"ℹ️ {skipped} Dateien übersprungen (bereits vorhanden oder nicht unterstützt)")
-                            else:
-                                error_msg = result.get("error", "Unbekannter Fehler")
+                            # Status-Text
+                            if phase == "initializing":
+                                status_container.info("🔄 Initialisiere Verbindung...")
+                            elif phase == "scanning":
+                                status_container.info("🔍 Scanne Cloud-Ordner nach Dateien...")
+                            elif phase == "downloading":
+                                files_total = progress.get("files_total", 0)
+                                files_processed = progress.get("files_processed", 0)
+                                elapsed = progress.get("elapsed_seconds", 0)
+                                remaining = progress.get("estimated_remaining_seconds")
+
+                                time_info = f"⏱️ Verstrichene Zeit: {format_time(elapsed)}"
+                                if remaining is not None and remaining > 0:
+                                    time_info += f" | ⏳ Restzeit: ~{format_time(remaining)}"
+
+                                status_container.info(
+                                    f"📥 Importiere Dateien: {files_processed + 1} von {files_total}\n\n{time_info}"
+                                )
+
+                                # Aktuelle Datei anzeigen
+                                current_file = progress.get("current_file")
+                                current_size = progress.get("current_file_size", 0)
+                                if current_file:
+                                    file_info_container.markdown(
+                                        f"📄 **Aktuelle Datei:** `{current_file}` ({format_file_size(current_size)})"
+                                    )
+
+                                # Statistiken
+                                synced = progress.get("files_synced", 0)
+                                skipped = progress.get("files_skipped", 0)
+                                errors = progress.get("files_error", 0)
+                                stats_container.caption(
+                                    f"✅ Importiert: {synced} | ⏭️ Übersprungen: {skipped} | ❌ Fehler: {errors}"
+                                )
+
+                            elif phase == "completed":
+                                progress_bar.progress(1.0, text="✅ Abgeschlossen!")
+                                status_container.success(
+                                    f"✅ **Synchronisation abgeschlossen!**\n\n"
+                                    f"⏱️ Gesamtzeit: {format_time(progress.get('elapsed_seconds', 0))}"
+                                )
+                            elif phase == "error":
+                                progress_bar.progress(0, text="❌ Fehler")
+                                status_container.error(f"❌ Fehler: {progress.get('error', 'Unbekannt')}")
+
+                        # Endergebnis verarbeiten
+                        file_info_container.empty()
+
+                        if final_result:
+                            new_files = final_result.get("new_files", 0)
+                            skipped = final_result.get("skipped_files", 0)
+                            synced_files = final_result.get("synced_files", [])
+
+                            if new_files > 0:
+                                st.success(f"✅ **{new_files} Dateien erfolgreich importiert!**")
+
+                                # Importierte Dateien auflisten
+                                if synced_files:
+                                    with st.expander(f"📋 Importierte Dateien ({len(synced_files)})", expanded=False):
+                                        for fname in synced_files:
+                                            st.write(f"• {fname}")
+
+                                st.info(f"📁 Dateien wurden im Posteingang abgelegt.")
+
+                                # Hinweis auf Verarbeitung
+                                st.markdown("---")
+                                st.markdown("### 📋 Nächste Schritte")
+                                st.write("1. Gehen Sie zum Tab **'⚙️ Verarbeitung'** um die importierten Dokumente zu verarbeiten")
+                                st.write("2. Oder besuchen Sie **'📁 Dokumente'** um die neuen Dokumente zu sehen")
+
+                            elif final_result.get("files_total", 0) == 0:
+                                st.info("📭 Keine neuen Dateien zum Importieren gefunden.")
+
+                            if skipped > 0:
+                                st.caption(f"ℹ️ {skipped} Dateien übersprungen (bereits vorhanden oder nicht unterstützt)")
+
+                            if final_result.get("error") and not final_result.get("success"):
+                                error_msg = final_result.get("error", "Unbekannter Fehler")
                                 if "token" in error_msg.lower() or "auth" in error_msg.lower():
                                     st.warning(f"⚠️ API-Authentifizierung erforderlich. Bitte konfigurieren Sie Ihre Cloud-API unter **Einstellungen → Cloud-Sync**.")
                                 else:
                                     st.error(f"❌ Import fehlgeschlagen: {error_msg}")
 
-                        # Bei einmaligem Import Verbindung deaktivieren
-                        if import_mode == "once":
-                            cloud_service.delete_connection(conn.id)
-                            st.caption("ℹ️ Einmaliger Import abgeschlossen. Verbindung wurde entfernt.")
-                        else:
-                            st.info(f"🔄 Dauerhafte Sync eingerichtet. Verwalten unter **Einstellungen → Cloud-Sync**.")
+                    # Bei einmaligem Import Verbindung deaktivieren
+                    if import_mode == "once":
+                        cloud_service.delete_connection(conn.id)
+                        st.caption("ℹ️ Einmaliger Import abgeschlossen. Verbindung wurde entfernt.")
+                    else:
+                        st.info(f"🔄 Dauerhafte Sync eingerichtet. Verwalten unter **Einstellungen → Cloud-Sync**.")
 
-                    except Exception as e:
-                        st.error(f"Fehler beim Import: {e}")
+                except Exception as e:
+                    st.error(f"Fehler beim Import: {e}")
             else:
                 st.error("Bitte geben Sie einen gültigen Cloud-Link ein.")
 

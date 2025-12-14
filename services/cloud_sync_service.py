@@ -361,32 +361,58 @@ class CloudSyncService:
     def sync_connection(self, connection_id: int,
                         process_documents: bool = True) -> Dict[str, Any]:
         """
-        Führt Synchronisation für eine Verbindung durch
-
-        Returns:
-            Dict mit Statistiken:
-            - success: True wenn Synchronisation erfolgreich
-            - new_files: Anzahl neu importierter Dateien (Alias für files_synced)
-            - files_found: Anzahl gefundener Dateien
-            - files_synced: Anzahl synchronisierter Dateien
-            - files_skipped: Anzahl übersprungener Dateien (Duplikate)
-            - skipped_files: Alias für files_skipped
-            - files_error: Anzahl fehlgeschlagener Dateien
-            - errors: Liste von Fehlermeldungen
-            - error: Erste Fehlermeldung als String (für UI)
+        Führt Synchronisation für eine Verbindung durch (ohne Fortschrittsanzeige)
         """
+        # Sammle alle Updates und gib nur das finale Ergebnis zurück
+        final_result = None
+        for progress in self.sync_connection_with_progress(connection_id, process_documents):
+            final_result = progress
+        return final_result or {"success": False, "error": "Keine Ergebnisse"}
+
+    def sync_connection_with_progress(self, connection_id: int,
+                                       process_documents: bool = True):
+        """
+        Führt Synchronisation mit Fortschritts-Updates durch (Generator).
+
+        Yields:
+            Dict mit Fortschrittsinformationen:
+            - phase: 'scanning', 'downloading', 'completed', 'error'
+            - current_file: Name der aktuell verarbeiteten Datei
+            - current_file_size: Größe der aktuellen Datei
+            - files_total: Gesamtanzahl gefundener Dateien
+            - files_processed: Bisher verarbeitete Dateien
+            - files_synced: Erfolgreich synchronisierte Dateien
+            - files_skipped: Übersprungene Dateien
+            - progress_percent: Fortschritt in Prozent (0-100)
+            - elapsed_seconds: Verstrichene Zeit
+            - estimated_remaining_seconds: Geschätzte Restzeit
+            - success: True wenn abgeschlossen und erfolgreich
+            - error: Fehlermeldung falls vorhanden
+        """
+        import time
+        start_time = time.time()
+
         result = {
-            "success": False,
-            "files_found": 0,
+            "phase": "initializing",
+            "current_file": None,
+            "current_file_size": 0,
+            "files_total": 0,
+            "files_processed": 0,
             "files_synced": 0,
-            "new_files": 0,
             "files_skipped": 0,
-            "skipped_files": 0,
             "files_error": 0,
+            "progress_percent": 0,
+            "elapsed_seconds": 0,
+            "estimated_remaining_seconds": None,
+            "success": False,
+            "new_files": 0,
+            "skipped_files": 0,
             "errors": [],
             "error": None,
             "synced_files": []
         }
+
+        yield result.copy()
 
         with get_db() as session:
             connection = session.query(CloudSyncConnection).filter(
@@ -395,41 +421,101 @@ class CloudSyncService:
             ).first()
 
             if not connection:
+                result["phase"] = "error"
                 result["error"] = "Verbindung nicht gefunden"
                 result["errors"].append(result["error"])
-                return result
+                yield result
+                return
 
             if not connection.is_active:
+                result["phase"] = "error"
                 result["error"] = "Verbindung ist deaktiviert"
                 result["errors"].append(result["error"])
-                return result
+                yield result
+                return
 
             # Prüfen ob Access Token vorhanden
             if not connection.access_token:
+                result["phase"] = "error"
                 result["error"] = "Kein Access Token konfiguriert. Bitte API-Konfiguration in Einstellungen prüfen."
                 result["errors"].append(result["error"])
                 result["success"] = True  # Nicht als Fehler behandeln, nur Hinweis
-                return result
+                yield result
+                return
 
             # Status auf "syncing" setzen
             connection.status = SyncStatus.SYNCING
             session.commit()
 
             try:
+                # Phase 1: Dateien scannen
+                result["phase"] = "scanning"
+                yield result.copy()
+
                 if connection.provider == CloudProvider.DROPBOX:
-                    sync_result = self._sync_dropbox(connection, session, process_documents)
+                    # Erst alle Dateien sammeln
+                    files_to_sync = self._collect_dropbox_files(connection, session)
                 elif connection.provider == CloudProvider.GOOGLE_DRIVE:
-                    sync_result = self._sync_google_drive(connection, session, process_documents)
+                    files_to_sync = self._collect_google_drive_files(connection, session)
                 else:
+                    result["phase"] = "error"
                     result["error"] = f"Provider {connection.provider} nicht unterstützt"
                     result["errors"].append(result["error"])
-                    sync_result = result
+                    yield result
+                    return
 
-                # Ergebnisse übernehmen
-                result.update(sync_result)
+                result["files_total"] = len(files_to_sync)
+                result["phase"] = "downloading"
+                yield result.copy()
+
+                # Phase 2: Dateien herunterladen und importieren
+                for idx, file_info in enumerate(files_to_sync):
+                    elapsed = time.time() - start_time
+                    result["elapsed_seconds"] = elapsed
+                    result["current_file"] = file_info.get("name", "Unbekannt")
+                    result["current_file_size"] = file_info.get("size", 0)
+                    result["files_processed"] = idx
+
+                    # Fortschritt berechnen
+                    if result["files_total"] > 0:
+                        result["progress_percent"] = int((idx / result["files_total"]) * 100)
+
+                        # Restzeit schätzen
+                        if idx > 0:
+                            avg_time_per_file = elapsed / idx
+                            remaining_files = result["files_total"] - idx
+                            result["estimated_remaining_seconds"] = avg_time_per_file * remaining_files
+
+                    yield result.copy()
+
+                    # Datei verarbeiten
+                    try:
+                        sync_status = self._process_file(
+                            connection, session, file_info, process_documents
+                        )
+
+                        if sync_status == "synced":
+                            result["files_synced"] += 1
+                            result["synced_files"].append(file_info.get("name"))
+                        elif sync_status == "skipped":
+                            result["files_skipped"] += 1
+                        else:
+                            result["files_error"] += 1
+
+                    except Exception as e:
+                        logger.error(f"Fehler beim Import von {file_info.get('name')}: {e}")
+                        result["files_error"] += 1
+                        result["errors"].append(f"{file_info.get('name')}: {str(e)}")
+
+                # Phase 3: Abschluss
+                result["phase"] = "completed"
+                result["files_processed"] = result["files_total"]
+                result["progress_percent"] = 100
                 result["new_files"] = result["files_synced"]
                 result["skipped_files"] = result["files_skipped"]
-                result["success"] = len(result.get("errors", [])) == 0
+                result["success"] = len(result["errors"]) == 0
+                result["elapsed_seconds"] = time.time() - start_time
+                result["estimated_remaining_seconds"] = 0
 
                 # Status aktualisieren
                 connection.status = SyncStatus.COMPLETED
@@ -441,6 +527,7 @@ class CloudSyncService:
                 logger.error(f"Sync-Fehler für Verbindung {connection_id}: {e}")
                 connection.status = SyncStatus.ERROR
                 connection.last_sync_error = str(e)
+                result["phase"] = "error"
                 result["error"] = str(e)
                 result["errors"].append(str(e))
 
@@ -453,7 +540,201 @@ class CloudSyncService:
         if result["errors"] and not result["error"]:
             result["error"] = result["errors"][0]
 
-        return result
+        yield result
+
+    def _collect_dropbox_files(self, connection: CloudSyncConnection,
+                                session) -> List[Dict]:
+        """Sammelt alle zu synchronisierenden Dropbox-Dateien"""
+        files = []
+        cursor = connection.last_cursor
+        has_more = True
+
+        while has_more:
+            response = self._dropbox_list_folder(
+                connection.access_token,
+                connection.remote_folder_path,
+                cursor
+            )
+
+            if "error" in response:
+                break
+
+            entries = response.get("entries", [])
+
+            for entry in entries:
+                if entry.get(".tag") != "file":
+                    continue
+
+                filename = entry.get("name", "")
+                ext = Path(filename).suffix.lower()
+
+                # Dateiendung prüfen
+                if connection.file_extensions and ext not in connection.file_extensions:
+                    continue
+
+                # Dateigröße prüfen
+                file_size = entry.get("size", 0)
+                max_size = (connection.max_file_size_mb or 50) * 1024 * 1024
+                if file_size > max_size:
+                    continue
+
+                # Prüfen ob bereits synchronisiert
+                content_hash = entry.get("content_hash")
+                existing_log = session.query(CloudSyncLog).filter(
+                    CloudSyncLog.connection_id == connection.id,
+                    CloudSyncLog.remote_file_hash == content_hash
+                ).first()
+
+                if existing_log:
+                    continue
+
+                files.append({
+                    "name": filename,
+                    "path": entry.get("path_display"),
+                    "id": entry.get("id"),
+                    "size": file_size,
+                    "hash": content_hash,
+                    "modified": entry.get("server_modified"),
+                    "provider": "dropbox"
+                })
+
+            cursor = response.get("cursor")
+            has_more = response.get("has_more", False)
+
+        # Cursor speichern
+        if cursor:
+            connection.last_cursor = cursor
+
+        return files
+
+    def _collect_google_drive_files(self, connection: CloudSyncConnection,
+                                     session) -> List[Dict]:
+        """Sammelt alle zu synchronisierenden Google Drive-Dateien"""
+        files = []
+
+        folder_id = connection.remote_folder_id
+        if not folder_id and connection.remote_folder_path:
+            folder_id = self._google_get_folder_id_from_link(connection.remote_folder_path)
+
+        page_token = None
+        has_more = True
+
+        while has_more:
+            response = self._google_list_folder(
+                connection.access_token,
+                folder_id,
+                page_token
+            )
+
+            if "error" in response:
+                break
+
+            file_list = response.get("files", [])
+
+            for file_info in file_list:
+                mime_type = file_info.get("mimeType", "")
+                if mime_type.startswith("application/vnd.google-apps"):
+                    continue
+
+                filename = file_info.get("name", "")
+                ext = Path(filename).suffix.lower()
+
+                # Dateiendung prüfen
+                if connection.file_extensions and ext not in connection.file_extensions:
+                    continue
+
+                # Dateigröße prüfen
+                file_size = int(file_info.get("size", 0))
+                max_size = (connection.max_file_size_mb or 50) * 1024 * 1024
+                if file_size > max_size:
+                    continue
+
+                # Prüfen ob bereits synchronisiert
+                file_hash = file_info.get("md5Checksum")
+                existing_log = session.query(CloudSyncLog).filter(
+                    CloudSyncLog.connection_id == connection.id,
+                    CloudSyncLog.remote_file_hash == file_hash
+                ).first()
+
+                if existing_log:
+                    continue
+
+                files.append({
+                    "name": filename,
+                    "path": filename,
+                    "id": file_info.get("id"),
+                    "size": file_size,
+                    "hash": file_hash,
+                    "modified": file_info.get("modifiedTime"),
+                    "mime_type": mime_type,
+                    "provider": "google_drive"
+                })
+
+            page_token = response.get("nextPageToken")
+            has_more = page_token is not None
+
+        return files
+
+    def _process_file(self, connection: CloudSyncConnection, session,
+                      file_info: Dict, process_documents: bool) -> str:
+        """
+        Verarbeitet eine einzelne Datei.
+
+        Returns:
+            'synced', 'skipped', oder 'error'
+        """
+        try:
+            if file_info.get("provider") == "dropbox":
+                file_content, metadata = self._dropbox_download_file(
+                    connection.access_token,
+                    file_info.get("path")
+                )
+            else:
+                file_content = self._google_download_file(
+                    connection.access_token,
+                    file_info.get("id")
+                )
+
+            # Dokument erstellen
+            doc = self._import_file(
+                session, connection,
+                file_info.get("name"),
+                file_content,
+                file_info.get("size"),
+                file_info.get("hash"),
+                file_info.get("path") or file_info.get("id"),
+                process_documents
+            )
+
+            # Sync-Log erstellen
+            modified_time = file_info.get("modified")
+            if modified_time and isinstance(modified_time, str):
+                try:
+                    modified_time = datetime.fromisoformat(modified_time.replace("Z", "+00:00"))
+                except:
+                    modified_time = None
+
+            sync_log = CloudSyncLog(
+                connection_id=connection.id,
+                user_id=self.user_id,
+                remote_file_path=file_info.get("path") or file_info.get("name"),
+                remote_file_id=file_info.get("id"),
+                remote_file_hash=file_info.get("hash"),
+                file_size=file_info.get("size"),
+                file_modified_at=modified_time,
+                document_id=doc.id if doc else None,
+                local_file_path=doc.file_path if doc else None,
+                sync_status="synced",
+                original_filename=file_info.get("name"),
+                mime_type=file_info.get("mime_type") or self._get_mime_type(file_info.get("name"))
+            )
+            session.add(sync_log)
+
+            return "synced"
+
+        except Exception as e:
+            logger.error(f"Fehler beim Verarbeiten von {file_info.get('name')}: {e}")
+            return "error"
 
     def _sync_dropbox(self, connection: CloudSyncConnection,
                       session, process_documents: bool) -> Dict:

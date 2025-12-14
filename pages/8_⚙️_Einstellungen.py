@@ -766,19 +766,82 @@ with tab_cloud:
                         action_cols = st.columns(2)
                         with action_cols[0]:
                             if st.button("🔄", key=f"sync_cloud_{conn.id}", help="Jetzt synchronisieren"):
-                                with st.spinner("Synchronisiere..."):
-                                    result = cloud_service.sync_connection(conn.id)
-                                    if result.get("success"):
-                                        st.success(f"✅ {result.get('new_files', 0)} neue Dateien importiert")
-                                        st.rerun()
-                                    else:
-                                        st.error(result.get("error", "Fehler"))
+                                st.session_state[f"syncing_{conn.id}"] = True
+                                st.rerun()
 
                         with action_cols[1]:
                             if st.button("🗑️", key=f"del_cloud_{conn.id}", help="Verbindung löschen"):
                                 cloud_service.delete_connection(conn.id)
                                 st.success("Verbindung gelöscht!")
                                 st.rerun()
+
+                    # Sync-Fortschritt anzeigen wenn aktiv
+                    if st.session_state.get(f"syncing_{conn.id}"):
+                        def format_time(seconds):
+                            if seconds is None or seconds < 0:
+                                return "Berechne..."
+                            if seconds < 60:
+                                return f"{int(seconds)} Sek."
+                            elif seconds < 3600:
+                                return f"{int(seconds / 60)} Min. {int(seconds % 60)} Sek."
+                            else:
+                                return f"{int(seconds / 3600)} Std. {int((seconds % 3600) / 60)} Min."
+
+                        def format_size(bytes_size):
+                            if bytes_size < 1024:
+                                return f"{bytes_size} B"
+                            elif bytes_size < 1024 * 1024:
+                                return f"{bytes_size / 1024:.1f} KB"
+                            return f"{bytes_size / (1024 * 1024):.1f} MB"
+
+                        sync_progress = st.progress(0, text="Initialisiere...")
+                        sync_status = st.empty()
+                        sync_file = st.empty()
+                        sync_stats = st.empty()
+
+                        final_result = None
+                        for progress in cloud_service.sync_connection_with_progress(conn.id):
+                            final_result = progress
+                            phase = progress.get("phase", "")
+                            percent = progress.get("progress_percent", 0)
+                            sync_progress.progress(percent / 100)
+
+                            if phase == "scanning":
+                                sync_status.info("🔍 Scanne Cloud-Ordner...")
+                            elif phase == "downloading":
+                                total = progress.get("files_total", 0)
+                                processed = progress.get("files_processed", 0)
+                                elapsed = progress.get("elapsed_seconds", 0)
+                                remaining = progress.get("estimated_remaining_seconds")
+
+                                time_text = f"⏱️ {format_time(elapsed)}"
+                                if remaining and remaining > 0:
+                                    time_text += f" | ⏳ ~{format_time(remaining)}"
+
+                                sync_status.info(f"📥 {processed + 1}/{total} | {time_text}")
+
+                                current_file = progress.get("current_file")
+                                if current_file:
+                                    sync_file.caption(f"📄 {current_file} ({format_size(progress.get('current_file_size', 0))})")
+
+                                sync_stats.caption(
+                                    f"✅ {progress.get('files_synced', 0)} | "
+                                    f"⏭️ {progress.get('files_skipped', 0)} | "
+                                    f"❌ {progress.get('files_error', 0)}"
+                                )
+                            elif phase == "completed":
+                                sync_progress.progress(1.0, text="✅ Fertig!")
+                            elif phase == "error":
+                                sync_progress.progress(0, text="❌ Fehler")
+
+                        # Aufräumen
+                        del st.session_state[f"syncing_{conn.id}"]
+                        sync_file.empty()
+
+                        if final_result and final_result.get("success"):
+                            sync_status.success(f"✅ {final_result.get('new_files', 0)} Dateien importiert!")
+                        elif final_result:
+                            sync_status.error(final_result.get("error", "Fehler"))
 
                     st.divider()
         else:
@@ -890,16 +953,57 @@ with tab_cloud:
 
                         st.success(f"✅ Cloud-Verbindung erstellt!")
 
-                        # Bei einmalig sofort synchronisieren
+                        # Bei einmalig sofort synchronisieren mit Fortschritt
                         if sync_mode == "once":
-                            with st.spinner("Importiere Dateien..."):
-                                result = cloud_service.sync_connection(conn.id)
-                                if result.get("success"):
-                                    st.success(f"✅ {result.get('new_files', 0)} Dateien importiert!")
-                                else:
-                                    st.warning(f"Import-Hinweis: {result.get('error', 'Bitte API-Token konfigurieren')}")
+                            def fmt_time(s):
+                                if s is None or s < 0: return "..."
+                                if s < 60: return f"{int(s)}s"
+                                return f"{int(s/60)}m {int(s%60)}s"
 
-                        st.rerun()
+                            def fmt_size(b):
+                                if b < 1024: return f"{b}B"
+                                if b < 1024*1024: return f"{b/1024:.1f}KB"
+                                return f"{b/1024/1024:.1f}MB"
+
+                            prog_bar = st.progress(0, text="Starte Import...")
+                            prog_status = st.empty()
+                            prog_file = st.empty()
+
+                            final = None
+                            for p in cloud_service.sync_connection_with_progress(conn.id):
+                                final = p
+                                phase = p.get("phase", "")
+                                pct = p.get("progress_percent", 0)
+                                prog_bar.progress(pct / 100)
+
+                                if phase == "scanning":
+                                    prog_status.info("🔍 Scanne Ordner...")
+                                elif phase == "downloading":
+                                    t, pr = p.get("files_total", 0), p.get("files_processed", 0)
+                                    el, rem = p.get("elapsed_seconds", 0), p.get("estimated_remaining_seconds")
+                                    time_str = f"⏱️ {fmt_time(el)}"
+                                    if rem and rem > 0: time_str += f" | ⏳ ~{fmt_time(rem)}"
+                                    prog_status.info(f"📥 {pr+1}/{t} | {time_str}")
+                                    cf = p.get("current_file")
+                                    if cf: prog_file.caption(f"📄 {cf} ({fmt_size(p.get('current_file_size',0))})")
+                                elif phase == "completed":
+                                    prog_bar.progress(1.0, text="✅ Fertig!")
+                                elif phase == "error":
+                                    prog_bar.progress(0, text="❌ Fehler")
+
+                            prog_file.empty()
+                            if final:
+                                if final.get("success"):
+                                    nf = final.get("new_files", 0)
+                                    sf = final.get("synced_files", [])
+                                    prog_status.success(f"✅ {nf} Dateien importiert!")
+                                    if sf:
+                                        with st.expander(f"📋 Importierte Dateien ({len(sf)})"):
+                                            for f in sf: st.write(f"• {f}")
+                                else:
+                                    prog_status.warning(f"⚠️ {final.get('error', 'Bitte API-Token konfigurieren')}")
+                        else:
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Fehler: {e}")
 
