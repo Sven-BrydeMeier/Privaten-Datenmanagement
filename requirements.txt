@@ -21,3 +21,4 @@ whoosh>=2.7.4
 pyzbar>=0.1.9
 streamlit-calendar>=0.6.0
 extra-streamlit-components>=0.1.60
+st-audiorec>=0.1.3
