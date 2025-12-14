@@ -549,10 +549,10 @@ with tab_history:
                     session = get_session()
                     try:
                         doc = session.query(Document).filter_by(id=trans['id']).first()
-                        if doc and doc.extracted_text:
+                        if doc and doc.ocr_text:
                             st.text_area(
                                 "Vollständiger Text",
-                                value=doc.extracted_text,
+                                value=doc.ocr_text,
                                 height=300,
                                 key=f"full_text_{trans['id']}"
                             )

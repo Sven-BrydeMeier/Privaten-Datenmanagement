@@ -142,14 +142,13 @@ class SpeechService:
 
             doc = Document(
                 title=title,
-                original_filename=filename,
+                filename=filename,
                 file_path=str(file_path),
-                file_type="text/plain",
+                mime_type="text/plain",
                 file_size=len(text.encode('utf-8')),
                 category=category,
-                extracted_text=text,
-                user_id=user.id,
-                upload_date=timestamp
+                ocr_text=text,
+                user_id=user.id
             )
             session.add(doc)
             session.commit()
@@ -186,14 +185,14 @@ class SpeechService:
         try:
             docs = session.query(Document).filter(
                 Document.file_path.like("%/transcriptions/%")
-            ).order_by(Document.upload_date.desc()).limit(limit).all()
+            ).order_by(Document.created_at.desc()).limit(limit).all()
 
             return [{
                 "id": doc.id,
                 "title": doc.title,
-                "date": doc.upload_date,
+                "date": doc.created_at,
                 "category": doc.category,
-                "text": doc.extracted_text[:200] + "..." if len(doc.extracted_text or "") > 200 else doc.extracted_text
+                "text": doc.ocr_text[:200] + "..." if len(doc.ocr_text or "") > 200 else doc.ocr_text
             } for doc in docs]
         finally:
             session.close()
