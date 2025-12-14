@@ -26,12 +26,13 @@ settings = get_settings()
 st.title("⚙️ Einstellungen")
 
 # Tabs
-tab_api, tab_email, tab_security, tab_bank, tab_calendar, tab_ui = st.tabs([
+tab_api, tab_email, tab_security, tab_bank, tab_calendar, tab_cloud, tab_ui = st.tabs([
     "🔑 API-Keys",
     "📧 E-Mail",
     "🔒 Sicherheit",
     "🏦 Bankkonten",
     "📅 Kalender-Sync",
+    "☁️ Cloud-Sync",
     "🎨 Oberfläche"
 ])
 
@@ -716,6 +717,203 @@ with tab_bank:
 
     else:
         st.warning("⚠️ GoCardless API nicht konfiguriert. Tragen Sie oben Ihre API-Credentials ein.")
+
+
+with tab_cloud:
+    st.subheader("☁️ Cloud-Synchronisation")
+    st.markdown("Verbinden Sie Dropbox oder Google Drive für automatischen Dokumentenimport.")
+
+    # Import Cloud-Sync Service
+    try:
+        from services.cloud_sync_service import CloudSyncService, CloudProvider, SyncStatus
+        CLOUD_AVAILABLE = True
+    except ImportError:
+        CLOUD_AVAILABLE = False
+
+    if not CLOUD_AVAILABLE:
+        st.error("Cloud-Sync Module nicht verfügbar.")
+    else:
+        cloud_service = CloudSyncService(user_id)
+
+        # Aktive Verbindungen anzeigen
+        st.markdown("### 🔗 Aktive Sync-Verbindungen")
+
+        connections = cloud_service.get_connections()
+        active_connections = [c for c in connections if c.is_active]
+
+        if active_connections:
+            for conn in active_connections:
+                provider_icon = "📦" if conn.provider == CloudProvider.DROPBOX else "🔵"
+                provider_name = "Dropbox" if conn.provider == CloudProvider.DROPBOX else "Google Drive"
+                status_icon = "🟢" if conn.sync_status == SyncStatus.COMPLETED else "🟡" if conn.sync_status == SyncStatus.SYNCING else "🔴"
+
+                with st.container():
+                    col_icon, col_info, col_actions = st.columns([0.5, 3, 1.5])
+
+                    with col_icon:
+                        st.markdown(f"<div style='font-size: 2rem; text-align: center;'>{provider_icon}</div>", unsafe_allow_html=True)
+
+                    with col_info:
+                        sync_type = "Dauerhaft" if conn.sync_interval_minutes else "Einmalig"
+                        interval_text = f" (alle {conn.sync_interval_minutes} Min.)" if conn.sync_interval_minutes else ""
+                        st.markdown(f"**{provider_name}** {status_icon}")
+                        st.caption(f"Ordner: {conn.folder_path or conn.folder_id}")
+                        st.caption(f"Typ: {sync_type}{interval_text}")
+                        if conn.last_sync:
+                            st.caption(f"Letzte Sync: {conn.last_sync.strftime('%d.%m.%Y %H:%M')}")
+
+                    with col_actions:
+                        action_cols = st.columns(2)
+                        with action_cols[0]:
+                            if st.button("🔄", key=f"sync_cloud_{conn.id}", help="Jetzt synchronisieren"):
+                                with st.spinner("Synchronisiere..."):
+                                    result = cloud_service.sync_connection(conn.id)
+                                    if result.get("success"):
+                                        st.success(f"✅ {result.get('new_files', 0)} neue Dateien importiert")
+                                        st.rerun()
+                                    else:
+                                        st.error(result.get("error", "Fehler"))
+
+                        with action_cols[1]:
+                            if st.button("🗑️", key=f"del_cloud_{conn.id}", help="Verbindung löschen"):
+                                cloud_service.delete_connection(conn.id)
+                                st.success("Verbindung gelöscht!")
+                                st.rerun()
+
+                    st.divider()
+        else:
+            st.info("Keine aktiven Cloud-Verbindungen. Fügen Sie unten eine neue Verbindung hinzu.")
+
+        st.markdown("---")
+
+        # Neue Verbindung hinzufügen
+        st.markdown("### ➕ Neue Cloud-Verbindung hinzufügen")
+
+        with st.form("cloud_sync_form"):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                cloud_provider = st.selectbox(
+                    "Cloud-Dienst",
+                    options=["dropbox", "google_drive"],
+                    format_func=lambda x: "📦 Dropbox" if x == "dropbox" else "🔵 Google Drive"
+                )
+
+                folder_link = st.text_input(
+                    "Ordner-Link",
+                    placeholder="https://www.dropbox.com/scl/fo/... oder https://drive.google.com/drive/folders/...",
+                    help="Kopieren Sie den Link zu Ihrem Cloud-Ordner"
+                )
+
+            with col2:
+                sync_mode = st.radio(
+                    "Sync-Modus",
+                    options=["once", "interval", "continuous"],
+                    format_func=lambda x: {
+                        "once": "🔂 Einmalig (nur jetzt importieren)",
+                        "interval": "⏱️ Intervall (regelmäßig synchronisieren)",
+                        "continuous": "♾️ Dauerhaft (bis Abbruch)"
+                    }.get(x),
+                    horizontal=False
+                )
+
+                if sync_mode == "interval":
+                    sync_interval = st.selectbox(
+                        "Intervall",
+                        options=[5, 15, 30, 60, 120, 360, 720, 1440],
+                        format_func=lambda x: {
+                            5: "5 Minuten",
+                            15: "15 Minuten",
+                            30: "30 Minuten",
+                            60: "1 Stunde",
+                            120: "2 Stunden",
+                            360: "6 Stunden",
+                            720: "12 Stunden",
+                            1440: "24 Stunden"
+                        }.get(x),
+                        index=2
+                    )
+                else:
+                    sync_interval = None
+
+            st.markdown("---")
+
+            # API-Konfiguration (Expander)
+            with st.expander("🔑 API-Konfiguration (optional)"):
+                st.info("""
+                **Für Dropbox:**
+                - [Dropbox App Console](https://www.dropbox.com/developers/apps) besuchen
+                - App erstellen und Access Token generieren
+
+                **Für Google Drive:**
+                - [Google Cloud Console](https://console.cloud.google.com) besuchen
+                - Projekt erstellen, Drive API aktivieren
+                - OAuth2 Credentials oder Service Account erstellen
+                """)
+
+                if cloud_provider == "dropbox":
+                    dropbox_token = st.text_input(
+                        "Dropbox Access Token",
+                        value=settings.dropbox_access_token if hasattr(settings, 'dropbox_access_token') else "",
+                        type="password"
+                    )
+                else:
+                    google_creds = st.text_area(
+                        "Google Service Account JSON",
+                        value=settings.google_drive_credentials if hasattr(settings, 'google_drive_credentials') else "",
+                        height=100
+                    )
+
+            submitted = st.form_submit_button("☁️ Verbindung erstellen", type="primary")
+
+            if submitted:
+                if not folder_link:
+                    st.error("Bitte geben Sie einen Ordner-Link ein.")
+                else:
+                    # Ordner-ID/Pfad aus Link extrahieren
+                    folder_id = folder_link  # Service wird Link parsen
+
+                    # Intervall setzen
+                    interval_minutes = None
+                    if sync_mode == "interval":
+                        interval_minutes = sync_interval
+                    elif sync_mode == "continuous":
+                        interval_minutes = 5  # Kontinuierlich = alle 5 Minuten
+
+                    try:
+                        conn = cloud_service.create_connection(
+                            provider=CloudProvider.DROPBOX if cloud_provider == "dropbox" else CloudProvider.GOOGLE_DRIVE,
+                            folder_id=folder_id,
+                            folder_path=folder_link,
+                            sync_interval_minutes=interval_minutes
+                        )
+
+                        st.success(f"✅ Cloud-Verbindung erstellt!")
+
+                        # Bei einmalig sofort synchronisieren
+                        if sync_mode == "once":
+                            with st.spinner("Importiere Dateien..."):
+                                result = cloud_service.sync_connection(conn.id)
+                                if result.get("success"):
+                                    st.success(f"✅ {result.get('new_files', 0)} Dateien importiert!")
+                                else:
+                                    st.warning(f"Import-Hinweis: {result.get('error', 'Bitte API-Token konfigurieren')}")
+
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fehler: {e}")
+
+        # Sync-Logs anzeigen
+        st.markdown("---")
+        st.markdown("### 📋 Sync-Protokoll")
+
+        logs = cloud_service.get_sync_logs(limit=10)
+        if logs:
+            for log in logs:
+                status_icon = "✅" if log.status == "completed" else "❌" if log.status == "failed" else "🔄"
+                st.caption(f"{status_icon} {log.created_at.strftime('%d.%m.%Y %H:%M')} - {log.files_synced or 0} Dateien, {log.files_skipped or 0} übersprungen")
+        else:
+            st.caption("Noch keine Sync-Aktivitäten.")
 
 
 with tab_calendar:

@@ -177,7 +177,7 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
 
 
 # Tabs für verschiedene Upload-Optionen
-tab_upload, tab_multi, tab_process = st.tabs(["📤 Einzelupload", "📑 Mehrere Dokumente", "⚙️ Verarbeitung"])
+tab_upload, tab_multi, tab_cloud, tab_process = st.tabs(["📤 Einzelupload", "📑 Mehrere Dokumente", "☁️ Cloud-Import", "⚙️ Verarbeitung"])
 
 
 def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
@@ -674,6 +674,159 @@ with tab_multi:
                         st.write(f"- Dokument {doc_info['num']}: **{doc_info['folder']}** *(neu erstellt)*")
                     else:
                         st.write(f"- Dokument {doc_info['num']}: **{doc_info['folder']}**")
+
+
+with tab_cloud:
+    st.subheader("☁️ Cloud-Import")
+    st.markdown("Importieren Sie Dokumente direkt aus Dropbox oder Google Drive.")
+
+    # Import Cloud-Sync Service
+    try:
+        from services.cloud_sync_service import CloudSyncService, CloudProvider, SyncStatus
+        CLOUD_IMPORT_AVAILABLE = True
+    except ImportError:
+        CLOUD_IMPORT_AVAILABLE = False
+
+    if not CLOUD_IMPORT_AVAILABLE:
+        st.error("Cloud-Import Module nicht verfügbar.")
+    else:
+        user_id = get_current_user_id()
+        cloud_service = CloudSyncService(user_id)
+
+        # Aktive Sync-Verbindungen anzeigen
+        connections = cloud_service.get_connections()
+        active_connections = [c for c in connections if c.is_active and c.sync_interval_minutes]
+
+        if active_connections:
+            st.markdown("### 🔗 Aktive dauerhafte Sync-Verbindungen")
+            for conn in active_connections:
+                provider_icon = "📦" if conn.provider == CloudProvider.DROPBOX else "🔵"
+                provider_name = "Dropbox" if conn.provider == CloudProvider.DROPBOX else "Google Drive"
+                st.info(f"{provider_icon} **{provider_name}** - Ordner: {conn.folder_path or conn.folder_id} (alle {conn.sync_interval_minutes} Min.)")
+            st.markdown("---")
+
+        # Schnell-Import Formular
+        st.markdown("### 📥 Schnell-Import aus Cloud-Ordner")
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            cloud_link = st.text_input(
+                "Cloud-Link einfügen",
+                placeholder="https://www.dropbox.com/scl/fo/... oder https://drive.google.com/drive/folders/...",
+                help="Fügen Sie hier den Link zu einem Dropbox- oder Google Drive-Ordner ein"
+            )
+
+        with col2:
+            # Automatische Erkennung des Providers
+            detected_provider = None
+            if cloud_link:
+                if "dropbox.com" in cloud_link.lower():
+                    detected_provider = "dropbox"
+                    st.success("📦 Dropbox erkannt")
+                elif "drive.google.com" in cloud_link.lower():
+                    detected_provider = "google_drive"
+                    st.success("🔵 Google Drive erkannt")
+                else:
+                    st.warning("⚠️ Unbekannter Link")
+
+        # Sync-Optionen
+        st.markdown("#### Sync-Optionen")
+        col_opt1, col_opt2 = st.columns(2)
+
+        with col_opt1:
+            import_mode = st.radio(
+                "Import-Modus",
+                options=["once", "interval", "continuous"],
+                format_func=lambda x: {
+                    "once": "🔂 Einmalig - Nur jetzt importieren",
+                    "interval": "⏱️ Intervall - Regelmäßig synchronisieren",
+                    "continuous": "♾️ Dauerhaft - Bis ich stoppe"
+                }.get(x),
+                horizontal=False
+            )
+
+        with col_opt2:
+            if import_mode == "interval":
+                sync_interval = st.selectbox(
+                    "Sync-Intervall",
+                    options=[5, 15, 30, 60, 120, 360, 720, 1440],
+                    format_func=lambda x: {
+                        5: "Alle 5 Minuten",
+                        15: "Alle 15 Minuten",
+                        30: "Alle 30 Minuten",
+                        60: "Jede Stunde",
+                        120: "Alle 2 Stunden",
+                        360: "Alle 6 Stunden",
+                        720: "Alle 12 Stunden",
+                        1440: "Täglich"
+                    }.get(x),
+                    index=2
+                )
+            elif import_mode == "continuous":
+                st.info("♾️ Dauerhaft: Ordner wird kontinuierlich überwacht (alle 5 Min.)")
+                sync_interval = 5
+            else:
+                st.info("🔂 Einmalig: Dateien werden nur jetzt importiert")
+                sync_interval = None
+
+        # Import starten
+        if st.button("☁️ Import starten", type="primary", disabled=not cloud_link or not detected_provider):
+            if cloud_link and detected_provider:
+                with st.spinner("Erstelle Cloud-Verbindung..."):
+                    try:
+                        # Verbindung erstellen
+                        conn = cloud_service.create_connection(
+                            provider=CloudProvider.DROPBOX if detected_provider == "dropbox" else CloudProvider.GOOGLE_DRIVE,
+                            folder_id=cloud_link,
+                            folder_path=cloud_link,
+                            sync_interval_minutes=sync_interval
+                        )
+
+                        st.success("✅ Cloud-Verbindung erstellt!")
+
+                        # Sofort synchronisieren
+                        with st.spinner("Importiere Dateien aus Cloud..."):
+                            result = cloud_service.sync_connection(conn.id)
+
+                            if result.get("success"):
+                                new_files = result.get("new_files", 0)
+                                skipped = result.get("skipped_files", 0)
+
+                                if new_files > 0:
+                                    st.success(f"✅ **{new_files} Dateien importiert!**")
+                                    st.info(f"📁 Dateien wurden im Posteingang abgelegt und werden verarbeitet.")
+
+                                    # Hinweis auf Verarbeitung
+                                    st.markdown("---")
+                                    st.markdown("### 📋 Nächste Schritte")
+                                    st.write("1. Gehen Sie zum Tab **'⚙️ Verarbeitung'** um die importierten Dokumente zu verarbeiten")
+                                    st.write("2. Oder besuchen Sie **'📁 Dokumente'** um die neuen Dokumente zu sehen")
+
+                                if skipped > 0:
+                                    st.caption(f"ℹ️ {skipped} Dateien übersprungen (bereits vorhanden oder nicht unterstützt)")
+                            else:
+                                error_msg = result.get("error", "Unbekannter Fehler")
+                                if "token" in error_msg.lower() or "auth" in error_msg.lower():
+                                    st.warning(f"⚠️ API-Authentifizierung erforderlich. Bitte konfigurieren Sie Ihre Cloud-API unter **Einstellungen → Cloud-Sync**.")
+                                else:
+                                    st.error(f"❌ Import fehlgeschlagen: {error_msg}")
+
+                        # Bei einmaligem Import Verbindung deaktivieren
+                        if import_mode == "once":
+                            cloud_service.delete_connection(conn.id)
+                            st.caption("ℹ️ Einmaliger Import abgeschlossen. Verbindung wurde entfernt.")
+                        else:
+                            st.info(f"🔄 Dauerhafte Sync eingerichtet. Verwalten unter **Einstellungen → Cloud-Sync**.")
+
+                    except Exception as e:
+                        st.error(f"Fehler beim Import: {e}")
+            else:
+                st.error("Bitte geben Sie einen gültigen Cloud-Link ein.")
+
+        # Hinweis auf Einstellungen
+        st.markdown("---")
+        st.caption("💡 **Tipp:** Für erweiterte Cloud-Sync Optionen und API-Konfiguration besuchen Sie **Einstellungen → Cloud-Sync**.")
 
 
 with tab_process:
