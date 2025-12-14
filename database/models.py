@@ -15,6 +15,13 @@ import enum
 Base = declarative_base()
 
 
+# Re-export get_session für einfachere Imports
+def get_session():
+    """Wrapper für database.db.get_session()"""
+    from database.db import get_session as _get_session
+    return _get_session()
+
+
 class DocumentStatus(enum.Enum):
     """Status eines Dokuments"""
     PENDING = "pending"          # Noch nicht verarbeitet
@@ -804,4 +811,159 @@ class BankTransaction(Base):
         Index('idx_transaction_date', 'booking_date'),
         Index('idx_transaction_user', 'user_id'),
         Index('idx_transaction_connection', 'connection_id'),
+    )
+
+
+class TodoStatus(enum.Enum):
+    """Status einer Aufgabe"""
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class TodoPriority(enum.Enum):
+    """Priorität einer Aufgabe"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
+class Todo(Base):
+    """To-Do Aufgaben"""
+    __tablename__ = 'todos'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Inhalt
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+
+    # Status und Priorität
+    status = Column(SQLEnum(TodoStatus), default=TodoStatus.OPEN)
+    priority = Column(SQLEnum(TodoPriority), default=TodoPriority.MEDIUM)
+
+    # Termine
+    due_date = Column(DateTime)  # Fälligkeitsdatum
+    reminder_date = Column(DateTime)  # Erinnerung
+
+    # Kategorisierung
+    category = Column(String(100))
+    tags = Column(JSON)  # Liste von Tags
+
+    # Verknüpfungen (optional)
+    document_id = Column(Integer, ForeignKey('documents.id'))
+    event_id = Column(Integer, ForeignKey('calendar_events.id'))
+
+    # Wiederholung
+    is_recurring = Column(Boolean, default=False)
+    recurrence_rule = Column(String(255))  # iCal RRULE
+
+    # Erstellung per Sprache
+    created_by_voice = Column(Boolean, default=False)
+    original_voice_text = Column(Text)  # Original-Transkription
+
+    # Zeitstempel
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    user = relationship("User")
+    document = relationship("Document")
+    event = relationship("CalendarEvent")
+
+    __table_args__ = (
+        Index('idx_todo_user', 'user_id'),
+        Index('idx_todo_status', 'status'),
+        Index('idx_todo_due', 'due_date'),
+    )
+
+
+class AlarmType(enum.Enum):
+    """Typ eines Alarms"""
+    ALARM = "alarm"        # Wecker
+    TIMER = "timer"        # Countdown-Timer
+    REMINDER = "reminder"  # Erinnerung
+
+
+class Alarm(Base):
+    """Wecker und Timer"""
+    __tablename__ = 'alarms'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Typ und Inhalt
+    alarm_type = Column(SQLEnum(AlarmType), default=AlarmType.ALARM)
+    title = Column(String(255))
+    message = Column(Text)
+
+    # Zeitpunkt
+    trigger_time = Column(DateTime, nullable=False)  # Wann soll der Alarm ausgelöst werden
+    duration_seconds = Column(Integer)  # Für Timer: ursprüngliche Dauer
+
+    # Wiederholung (für Wecker)
+    is_recurring = Column(Boolean, default=False)
+    recurrence_days = Column(JSON)  # [0,1,2,3,4,5,6] für Wochentage (0=Montag)
+
+    # Sound
+    sound = Column(String(100), default="default")  # Alarmton
+
+    # Status
+    is_active = Column(Boolean, default=True)
+    is_triggered = Column(Boolean, default=False)
+    triggered_at = Column(DateTime)
+    snoozed_until = Column(DateTime)  # Schlummerfunktion
+
+    # Erstellung per Sprache
+    created_by_voice = Column(Boolean, default=False)
+    original_voice_text = Column(Text)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehung
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_alarm_user', 'user_id'),
+        Index('idx_alarm_trigger', 'trigger_time'),
+        Index('idx_alarm_active', 'is_active'),
+    )
+
+
+class VoiceCommand(Base):
+    """Protokoll aller Sprachbefehle"""
+    __tablename__ = 'voice_commands'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Original-Text
+    transcribed_text = Column(Text, nullable=False)
+
+    # Erkannter Befehl
+    command_type = Column(String(50))  # calendar, reminder, alarm, timer, todo
+    parsed_data = Column(JSON)  # Extrahierte Daten
+
+    # Ergebnis
+    was_successful = Column(Boolean, default=False)
+    result_message = Column(Text)
+    created_entity_type = Column(String(50))  # Welcher Typ wurde erstellt
+    created_entity_id = Column(Integer)  # ID der erstellten Entität
+
+    # Fehler
+    error_message = Column(Text)
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehung
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_voice_cmd_user', 'user_id'),
+        Index('idx_voice_cmd_type', 'command_type'),
     )
