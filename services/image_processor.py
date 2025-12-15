@@ -156,6 +156,8 @@ class ImageProcessor:
 
         if document_contour is None:
             # Fallback: Versuche rechteckige Bounding Box
+            if not contours:
+                return None  # Keine Konturen gefunden
             largest_contour = contours[0]
             area = cv2.contourArea(largest_contour)
 

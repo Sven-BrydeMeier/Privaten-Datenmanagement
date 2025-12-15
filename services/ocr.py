@@ -259,22 +259,44 @@ Der Text ist auf Deutsch."""
 
             # Erst versuchen, eingebetteten Text zu extrahieren
             reader = PdfReader(io.BytesIO(pdf_bytes))
+
+            # Prüfen ob PDF verschlüsselt ist
+            if reader.is_encrypted:
+                try:
+                    # Versuche mit leerem Passwort zu entschlüsseln
+                    reader.decrypt("")
+                except Exception:
+                    # Verschlüsseltes PDF - versuche OCR auf Bilder
+                    st.info("📄 Verschlüsseltes PDF - verwende Bildverarbeitung...")
+                    results = self._ocr_pdf_images(pdf_bytes)
+                    return results if results else []
+
             for page in reader.pages:
-                text = page.extract_text()
-                if text and len(text.strip()) > 50:
-                    # Eingebetteter Text gefunden
-                    results.append((text, 1.0))
-                else:
-                    # Kein Text - OCR nötig
+                try:
+                    text = page.extract_text()
+                    if text and len(text.strip()) > 50:
+                        # Eingebetteter Text gefunden
+                        results.append((text, 1.0))
+                    else:
+                        # Kein Text - OCR nötig
+                        results.append(("", 0.0))
+                except Exception:
                     results.append(("", 0.0))
 
             # Wenn zu wenig Text gefunden, OCR auf Bilder anwenden
-            if all(conf < 0.5 for _, conf in results):
+            if all(conf < 0.5 for _, conf in results) or not results:
                 results = self._ocr_pdf_images(pdf_bytes)
 
         except Exception as e:
-            st.error(f"PDF-Verarbeitungsfehler: {e}")
-            results = []
+            # Bei jedem Fehler versuche OCR auf Bilder
+            error_msg = str(e).lower()
+            if "pycryptodome" in error_msg or "aes" in error_msg or "encrypt" in error_msg:
+                st.info("📄 PDF erfordert spezielle Verarbeitung - verwende Bildverarbeitung...")
+                results = self._ocr_pdf_images(pdf_bytes)
+            else:
+                st.warning(f"PDF-Verarbeitungsfehler: {e}")
+                # Fallback: Versuche trotzdem OCR
+                results = self._ocr_pdf_images(pdf_bytes)
 
         return results
 
