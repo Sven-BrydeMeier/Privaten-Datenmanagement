@@ -169,8 +169,16 @@ with col_folders:
 
     st.divider()
 
-    # Ordner anzeigen
+    # Ordner anzeigen - NUR ORDNER MIT DOKUMENTEN (außer Systemordner)
     for folder in folder_data:
+        # Systemordner immer anzeigen, andere nur wenn sie Dokumente haben
+        is_system = folder['name'] in ["Posteingang", "Papierkorb", "Archiv"]
+        total_count = folder['count'] + sum(sub['count'] for sub in folder['subfolders'])
+
+        # Ordner überspringen wenn leer und kein Systemordner
+        if not is_system and total_count == 0:
+            continue
+
         icon = "📥" if folder['name'] == "Posteingang" else "📂"
         if folder['name'] == "Papierkorb":
             icon = "🗑️"
@@ -185,8 +193,10 @@ with col_folders:
             st.session_state.current_folder_id = folder['id']
             st.rerun()
 
-        # Unterordner
+        # Unterordner - nur anzeigen wenn sie Dokumente haben
         for sub in folder['subfolders']:
+            if sub['count'] == 0:
+                continue  # Leere Unterordner überspringen
             if st.button(f"  └ {sub['name']} ({sub['count']})",
                         use_container_width=True,
                         key=f"folder_{sub['id']}"):
@@ -231,6 +241,36 @@ with col_folders:
 
 
 with col_docs:
+    # Breadcrumb-Navigation
+    if current_folder_id:
+        with get_db() as session:
+            # Pfad zum aktuellen Ordner aufbauen
+            breadcrumb_parts = []
+            folder = session.get(Folder, current_folder_id)
+            while folder:
+                breadcrumb_parts.insert(0, {'id': folder.id, 'name': folder.name})
+                folder = session.get(Folder, folder.parent_id) if folder.parent_id else None
+
+            # Breadcrumb anzeigen
+            bc_cols = st.columns([1] + [1] * len(breadcrumb_parts) + [4])
+
+            with bc_cols[0]:
+                if st.button("🏠", key="bc_home", help="Alle Dokumente"):
+                    st.session_state.current_folder_id = None
+                    st.rerun()
+
+            for i, part in enumerate(breadcrumb_parts):
+                with bc_cols[i + 1]:
+                    is_current = (i == len(breadcrumb_parts) - 1)
+                    if is_current:
+                        st.markdown(f"**📂 {part['name']}**")
+                    else:
+                        if st.button(f"📁 {part['name']}", key=f"bc_{part['id']}"):
+                            st.session_state.current_folder_id = part['id']
+                            st.rerun()
+
+            st.markdown("---")
+
     # Suchleiste
     search_col, filter_col = st.columns([3, 1])
 
