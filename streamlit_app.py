@@ -17,7 +17,7 @@ from database.models import (
 )
 from config.settings import get_settings
 from utils.components import render_sidebar_cart, apply_custom_css
-from utils.helpers import format_currency, format_date, calculate_days_until
+from utils.helpers import format_currency, format_date, calculate_days_until, get_local_now
 
 # Seitenkonfiguration
 st.set_page_config(

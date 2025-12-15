@@ -4,9 +4,51 @@ Allgemeine Hilfsfunktionen
 import re
 import uuid
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import streamlit as st
+
+
+def get_local_now() -> datetime:
+    """
+    Gibt die aktuelle Zeit in der deutschen Zeitzone zurück.
+    Verwendet UTC+1 (Winterzeit) oder UTC+2 (Sommerzeit).
+    """
+    try:
+        # Versuche pytz zu verwenden wenn verfügbar
+        import pytz
+        berlin_tz = pytz.timezone('Europe/Berlin')
+        return datetime.now(berlin_tz).replace(tzinfo=None)
+    except ImportError:
+        pass
+
+    # Fallback: Manuelle Berechnung für deutsche Zeitzone
+    utc_now = datetime.now(timezone.utc)
+    year = utc_now.year
+
+    # Sommerzeit: letzter Sonntag im März bis letzter Sonntag im Oktober
+    # März: Tag 31 - (Wochentag von 31. März)
+    march_last = datetime(year, 3, 31, 2, 0, tzinfo=timezone.utc)
+    march_last_sunday = march_last - timedelta(days=march_last.weekday() + 1)
+    if march_last.weekday() == 6:  # Sonntag
+        march_last_sunday = march_last
+
+    # Oktober: Tag 31 - (Wochentag von 31. Oktober)
+    oct_last = datetime(year, 10, 31, 3, 0, tzinfo=timezone.utc)
+    oct_last_sunday = oct_last - timedelta(days=oct_last.weekday() + 1)
+    if oct_last.weekday() == 6:  # Sonntag
+        oct_last_sunday = oct_last
+
+    # Ist Sommerzeit?
+    if march_last_sunday <= utc_now < oct_last_sunday:
+        # Sommerzeit: UTC+2
+        offset = timedelta(hours=2)
+    else:
+        # Winterzeit: UTC+1
+        offset = timedelta(hours=1)
+
+    local_time = utc_now + offset
+    return local_time.replace(tzinfo=None)
 
 
 def format_currency(amount: float, currency: str = "EUR") -> str:
