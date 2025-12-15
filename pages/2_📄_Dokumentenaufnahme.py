@@ -57,14 +57,14 @@ def check_for_duplicate(file_data: bytes, user_id: int) -> dict | None:
             folder_name = "Kein Ordner"
             folder_path = ""
             if existing.folder_id:
-                folder = session.query(Folder).get(existing.folder_id)
+                folder = session.get(Folder, existing.folder_id)
                 if folder:
                     folder_name = folder.name
                     # Pfad aufbauen
                     path_parts = [folder.name]
                     parent = folder.parent_id
                     while parent:
-                        parent_folder = session.query(Folder).get(parent)
+                        parent_folder = session.get(Folder, parent)
                         if parent_folder:
                             path_parts.insert(0, parent_folder.name)
                             parent = parent_folder.parent_id
@@ -132,7 +132,7 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
                     encrypted_data = f.read()
 
                 with get_db() as session:
-                    doc = session.query(Document).get(existing_doc['id'])
+                    doc = session.get(Document, existing_doc['id'])
                     if doc and doc.encryption_iv:
                         decrypted_data = encryption.decrypt_file(encrypted_data, doc.encryption_iv)
 
@@ -241,7 +241,7 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
     result = {'folder_name': None, 'folder_created': False, 'sender': None}
 
     with get_db() as session:
-        document = session.query(Document).get(document_id)
+        document = session.get(Document, document_id)
         if not document:
             return result
 
@@ -358,7 +358,7 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
 
             # Prüfen ob ein intelligenter Ordner gefunden wurde (nicht nur Posteingang)
             if folder_id:
-                folder = session.query(Folder).get(folder_id)
+                folder = session.get(Folder, folder_id)
                 if folder and folder.name != 'Posteingang':
                     # Intelligenter Ordner gefunden
                     document.folder_id = folder_id
@@ -506,7 +506,7 @@ with tab_upload:
 
                             # Ergebnisse anzeigen
                             with get_db() as session:
-                                doc = session.query(Document).get(doc_id)
+                                doc = session.get(Document, doc_id)
                                 if doc:
                                     st.markdown("---")
                                     st.markdown("## 📋 Extrahierte Dokumentdaten")

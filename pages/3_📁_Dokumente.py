@@ -251,7 +251,7 @@ with col_docs:
         # Gelöschte Dokumente ausschließen (außer im Papierkorb-Modus)
         is_trash_view = False
         if current_folder_id:
-            folder = session.query(Folder).get(current_folder_id)
+            folder = session.get(Folder, current_folder_id)
             if folder and folder.name == "Papierkorb":
                 is_trash_view = True
                 # Im Papierkorb: nur gelöschte Dokumente zeigen
@@ -286,7 +286,7 @@ with col_docs:
 
         # Aktuellen Ordnernamen anzeigen
         if current_folder_id:
-            folder = session.query(Folder).get(current_folder_id)
+            folder = session.get(Folder, current_folder_id)
             st.subheader(f"📂 {folder.name}" if folder else "Dokumente")
         else:
             st.subheader("📄 Alle Dokumente")
@@ -364,7 +364,7 @@ if 'view_document_id' in st.session_state:
     doc_id = st.session_state.view_document_id
 
     with get_db() as session:
-        doc = session.query(Document).get(doc_id)
+        doc = session.get(Document, doc_id)
         if doc:
             # Dokumentdaten in Dict extrahieren (für Verwendung außerhalb der Session)
             doc_data = {
@@ -549,7 +549,7 @@ if 'view_document_id' in st.session_state:
 
             if st.form_submit_button("💾 Speichern", type="primary"):
                 with get_db() as session:
-                    doc = session.query(Document).get(doc_id)
+                    doc = session.get(Document, doc_id)
                     if doc:
                         doc.sender = edit_sender or None
                         doc.sender_address = edit_sender_address or None
@@ -652,7 +652,7 @@ if 'view_document_id' in st.session_state:
             with col_mv:
                 if st.button("📂 Verschieben", use_container_width=True):
                     with get_db() as session:
-                        doc = session.query(Document).get(doc_id)
+                        doc = session.get(Document, doc_id)
                         if doc:
                             doc.folder_id = move_folder
                             session.commit()
@@ -709,10 +709,10 @@ if 'move_document_id' in st.session_state:
             folder_tree = build_folder_tree(session, user_id)
 
             # Aktuellen Ordner des Dokuments ermitteln
-            doc = session.query(Document).get(doc_id)
+            doc = session.get(Document, doc_id)
             current_folder_name = ""
             if doc and doc.folder_id:
-                current_folder = session.query(Folder).get(doc.folder_id)
+                current_folder = session.get(Folder, doc.folder_id)
                 if current_folder:
                     current_folder_name = current_folder.name
 
@@ -734,7 +734,7 @@ if 'move_document_id' in st.session_state:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Verschieben", type="primary"):
-                    doc = session.query(Document).get(doc_id)
+                    doc = session.get(Document, doc_id)
                     if doc:
                         old_folder_id = doc.folder_id
                         doc.folder_id = target_folder
@@ -762,7 +762,7 @@ if 'delete_document_id' in st.session_state:
 
         # Prüfen ob Dokument bereits im Papierkorb ist
         with get_db() as session:
-            doc = session.query(Document).get(doc_id)
+            doc = session.get(Document, doc_id)
             is_already_deleted = doc.is_deleted if doc else False
             doc_title = doc.title or doc.filename if doc else "Dokument"
 

@@ -201,7 +201,7 @@ with tab_security:
     st.markdown("### Passwort ändern")
 
     with get_db() as session:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
 
         current_pw = st.text_input("Aktuelles Passwort", type="password")
         new_pw = st.text_input("Neues Passwort", type="password")

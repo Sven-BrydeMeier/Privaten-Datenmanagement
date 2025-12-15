@@ -374,7 +374,7 @@ with tab_request:
                 with get_db() as session:
                     doc_names = []
                     for doc_id in found_docs:
-                        doc = session.query(Document).get(doc_id)
+                        doc = session.get(Document, doc_id)
                         if doc:
                             doc_names.append(doc.title or doc.filename)
 

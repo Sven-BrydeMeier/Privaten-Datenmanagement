@@ -290,7 +290,7 @@ class NordigenService:
             Dict mit Sync-Ergebnis
         """
         with get_db() as session:
-            connection = session.query(BankConnection).get(connection_id)
+            connection = session.get(BankConnection, connection_id)
 
             if not connection:
                 return {"error": "Verbindung nicht gefunden"}

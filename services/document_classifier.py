@@ -165,7 +165,7 @@ class DocumentClassifier:
             target_folder_id: ID des Zielordners
         """
         with get_db() as session:
-            document = session.query(Document).get(document_id)
+            document = session.get(Document, document_id)
             if not document:
                 return
 
@@ -221,7 +221,7 @@ class DocumentClassifier:
         suggestions = []
 
         with get_db() as session:
-            document = session.query(Document).get(document_id)
+            document = session.get(Document, document_id)
             if not document:
                 return suggestions
 
@@ -238,7 +238,7 @@ class DocumentClassifier:
             for rule in rules:
                 score = self._match_rule(rule, document.ocr_text or '', metadata)
                 if score > 0.3:
-                    folder = session.query(Folder).get(rule.target_folder_id)
+                    folder = session.get(Folder, rule.target_folder_id)
                     if folder:
                         suggestions.append({
                             'folder_id': folder.id,

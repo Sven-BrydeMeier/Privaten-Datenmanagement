@@ -388,7 +388,7 @@ with tab_groups:
             group_id = st.session_state.selected_group
 
             with get_db() as session:
-                group = session.query(ReceiptGroup).get(group_id)
+                group = session.get(ReceiptGroup, group_id)
                 members = session.query(ReceiptGroupMember).filter(
                     ReceiptGroupMember.group_id == group_id
                 ).all()
@@ -417,7 +417,7 @@ with tab_groups:
                         st.write(format_currency(receipt.total_amount))
                     with col3:
                         if receipt.paid_by_member_id:
-                            payer = session.query(ReceiptGroupMember).get(receipt.paid_by_member_id)
+                            payer = session.get(ReceiptGroupMember, receipt.paid_by_member_id)
                             st.caption(f"von {payer.name}" if payer else "")
                     total += receipt.total_amount
 
@@ -931,7 +931,7 @@ with tab_transactions:
                 total_available = sum(c.balance_available or 0 for c in connections)
                 st.metric("💰 Verfügbar (gesamt)", format_currency(total_available))
             else:
-                conn = session.query(BankConnection).get(int(selected_account))
+                conn = session.get(BankConnection, int(selected_account))
                 if conn and conn.balance_available is not None:
                     col_bal1, col_bal2 = st.columns(2)
                     with col_bal1:

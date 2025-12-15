@@ -121,7 +121,7 @@ else:
         # E-Mail-Detailansicht
         if 'view_email_id' in st.session_state:
             with get_db() as session:
-                email = session.query(Email).get(st.session_state.view_email_id)
+                email = session.get(Email, st.session_state.view_email_id)
                 if email:
                     st.divider()
                     st.subheader(email.subject or "(Kein Betreff)")
@@ -194,7 +194,7 @@ else:
 
                     with get_db() as session:
                         for doc_id in cart_items:
-                            doc = session.query(Document).get(doc_id)
+                            doc = session.get(Document, doc_id)
                             if doc and doc.file_path:
                                 try:
                                     with open(doc.file_path, 'rb') as f:
