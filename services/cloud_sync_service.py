@@ -635,7 +635,7 @@ class CloudSyncService:
     def _collect_public_folder_recursive(self, folder_id: str, folder_path: str,
                                           connection: CloudSyncConnection,
                                           session, files: List[Dict],
-                                          depth: int = 0, max_depth: int = 10):
+                                          depth: int = 0, max_depth: int = 50):
         """
         Sammelt rekursiv Dateien aus öffentlichen Google Drive Ordnern.
 
@@ -646,10 +646,10 @@ class CloudSyncService:
             session: DB Session
             files: Liste zum Sammeln der Dateien
             depth: Aktuelle Rekursionstiefe
-            max_depth: Maximale Rekursionstiefe
+            max_depth: Maximale Rekursionstiefe (Standard: 50)
         """
         if depth > max_depth:
-            logger.warning(f"Maximale Ordnertiefe {max_depth} erreicht")
+            logger.debug(f"Ordnertiefe {depth} erreicht bei: {folder_path}")
             return
 
         logger.info(f"Durchsuche Ordner: {folder_path or 'Root'} (ID: {folder_id})")
