@@ -684,396 +684,102 @@ with tab_folder:
 
     user_id = get_current_user_id()
 
-    # Option 1: Drag & Drop für Ordner
-    st.markdown("### 🖱️ Ordner per Drag & Drop hochladen")
-
     import streamlit.components.v1 as components
     import base64
     import json
 
-    # Drag & Drop Zone mit JavaScript - mit Download-Button
-    drag_drop_html = """
-    <style>
-        .drop-zone {
-            border: 3px dashed #4CAF50;
-            border-radius: 15px;
-            padding: 30px;
-            text-align: center;
-            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
-            transition: all 0.3s ease;
-            cursor: pointer;
-            min-height: 150px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }
-        .drop-zone:hover, .drop-zone.drag-over {
-            border-color: #2196F3;
-            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-            transform: scale(1.01);
-        }
-        .drop-zone.processing {
-            border-color: #FF9800;
-            background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
-            cursor: wait;
-        }
-        .drop-zone.done {
-            border-color: #4CAF50;
-            background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
-            cursor: default;
-        }
-        .drop-zone h3 { color: #333; margin: 0 0 8px 0; font-size: 1.3em; }
-        .drop-zone p { color: #666; margin: 4px 0; font-size: 0.9em; }
-        .drop-zone .icon { font-size: 3em; margin-bottom: 8px; }
-        .file-list {
-            margin-top: 12px; text-align: left; max-height: 150px;
-            overflow-y: auto; width: 100%; font-size: 0.8em;
-        }
-        .file-item {
-            padding: 5px 8px; background: white; margin: 2px 0;
-            border-radius: 3px; border-left: 3px solid #4CAF50;
-        }
-        .folder-item { border-left-color: #2196F3; font-weight: bold; }
-        .progress-bar {
-            width: 100%; height: 6px; background: #ddd;
-            border-radius: 3px; margin: 6px 0; overflow: hidden;
-        }
-        .progress-fill {
-            height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A);
-            transition: width 0.3s;
-        }
-        .status-text { color: #666; font-size: 0.85em; margin-top: 6px; }
-        #folderInput { display: none; }
-        .download-btn {
-            display: inline-block;
-            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 8px;
-            text-decoration: none;
-            font-weight: bold;
-            font-size: 1em;
-            margin-top: 10px;
-            cursor: pointer;
-            border: none;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            transition: all 0.3s;
-        }
-        .download-btn:hover {
-            background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            transform: translateY(-1px);
-        }
-    </style>
+    # Direkter Ordner-Upload durch Modifikation des File-Uploaders
+    st.markdown("### 📂 Ordner direkt hochladen")
+    st.info("💡 Klicken Sie auf 'Browse files' und wählen Sie einen **Ordner** aus. Alle Dateien werden automatisch importiert.")
 
-    <div class="drop-zone" id="dropZone" onclick="if(!window.processingDone) document.getElementById('folderInput').click()">
-        <div class="icon" id="dropIcon">📂</div>
-        <h3 id="dropTitle">Ordner hierher ziehen</h3>
-        <p id="dropSubtitle">oder klicken um einen Ordner auszuwählen</p>
-        <p style="font-size: 0.7em; color: #888;">PDF, JPG, PNG, DOC, DOCX, XLS, XLSX, TXT</p>
-        <input type="file" id="folderInput" webkitdirectory directory multiple />
-        <div id="fileList" class="file-list" style="display: none;"></div>
-        <div id="progressContainer" style="display: none; width: 100%;">
-            <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width: 0%"></div></div>
-            <div class="status-text" id="statusText">Verarbeite...</div>
-        </div>
-        <div id="downloadContainer" style="display: none; margin-top: 15px;"></div>
-    </div>
-
+    # JavaScript um den File-Uploader zu einem Ordner-Uploader zu machen
+    folder_upload_js = """
     <script>
-        const dropZone = document.getElementById('dropZone');
-        const folderInput = document.getElementById('folderInput');
-        const fileList = document.getElementById('fileList');
-        const progressContainer = document.getElementById('progressContainer');
-        const progressFill = document.getElementById('progressFill');
-        const statusText = document.getElementById('statusText');
-        const downloadContainer = document.getElementById('downloadContainer');
-        const dropIcon = document.getElementById('dropIcon');
-        const dropTitle = document.getElementById('dropTitle');
-        const dropSubtitle = document.getElementById('dropSubtitle');
-        const supportedExt = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.doc', '.docx', '.xls', '.xlsx', '.txt'];
-        window.processingDone = false;
-
-        ['dragenter', 'dragover'].forEach(e => {
-            dropZone.addEventListener(e, (evt) => {
-                evt.preventDefault();
-                if (!window.processingDone) dropZone.classList.add('drag-over');
-            });
-        });
-        ['dragleave', 'drop'].forEach(e => {
-            dropZone.addEventListener(e, (evt) => { evt.preventDefault(); dropZone.classList.remove('drag-over'); });
-        });
-
-        dropZone.addEventListener('drop', async (e) => {
-            if (window.processingDone) return;
-            const items = e.dataTransfer.items;
-            if (items) {
-                const files = [];
-                for (let i = 0; i < items.length; i++) {
-                    const item = items[i].webkitGetAsEntry();
-                    if (item) await traverseFileTree(item, '', files);
+    // Warte bis der Uploader geladen ist und modifiziere ihn
+    function enableFolderUpload() {
+        const uploaders = window.parent.document.querySelectorAll('input[type="file"]');
+        uploaders.forEach(uploader => {
+            // Nur den richtigen Uploader modifizieren (der mit dem key "direct_folder_upload")
+            const container = uploader.closest('[data-testid="stFileUploader"]');
+            if (container) {
+                const label = container.querySelector('label');
+                if (label && label.textContent.includes('Ordner auswählen')) {
+                    if (!uploader.hasAttribute('webkitdirectory')) {
+                        uploader.setAttribute('webkitdirectory', '');
+                        uploader.setAttribute('directory', '');
+                        uploader.setAttribute('mozdirectory', '');
+                        console.log('Folder upload enabled!');
+                    }
                 }
-                processFiles(files);
             }
         });
+    }
 
-        folderInput.addEventListener('change', async (e) => {
-            if (window.processingDone) return;
-            const files = [];
-            for (let i = 0; i < e.target.files.length; i++) {
-                const file = e.target.files[i];
-                const path = file.webkitRelativePath || file.name;
-                const folder = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
-                files.push({ file: file, path: path, folder: folder, name: file.name });
-            }
-            processFiles(files);
-        });
+    // Mehrfach versuchen, da Streamlit dynamisch lädt
+    setTimeout(enableFolderUpload, 100);
+    setTimeout(enableFolderUpload, 500);
+    setTimeout(enableFolderUpload, 1000);
+    setTimeout(enableFolderUpload, 2000);
 
-        async function traverseFileTree(item, path, files) {
-            return new Promise((resolve) => {
-                if (item.isFile) {
-                    item.file((file) => {
-                        const ext = '.' + file.name.split('.').pop().toLowerCase();
-                        if (supportedExt.includes(ext)) {
-                            files.push({ file: file, path: path + file.name, folder: path.slice(0, -1), name: file.name });
-                        }
-                        resolve();
-                    });
-                } else if (item.isDirectory) {
-                    const dirReader = item.createReader();
-                    dirReader.readEntries(async (entries) => {
-                        for (let entry of entries) await traverseFileTree(entry, path + item.name + '/', files);
-                        resolve();
-                    });
-                } else { resolve(); }
-            });
-        }
-
-        async function processFiles(files) {
-            const validFiles = files.filter(f => {
-                const ext = '.' + f.name.split('.').pop().toLowerCase();
-                return supportedExt.includes(ext);
-            });
-            if (validFiles.length === 0) { alert('Keine unterstützten Dateien gefunden!'); return; }
-
-            dropZone.classList.add('processing');
-            progressContainer.style.display = 'block';
-            fileList.style.display = 'block';
-            fileList.innerHTML = '';
-            dropIcon.textContent = '⏳';
-            dropTitle.textContent = 'Dateien werden gelesen...';
-            dropSubtitle.style.display = 'none';
-
-            const folders = [...new Set(validFiles.map(f => f.folder).filter(f => f))];
-            folders.forEach(folder => { fileList.innerHTML += `<div class="file-item folder-item">📁 ${folder}</div>`; });
-
-            const result = [];
-            for (let i = 0; i < validFiles.length; i++) {
-                const f = validFiles[i];
-                progressFill.style.width = ((i + 1) / validFiles.length * 100) + '%';
-                statusText.textContent = `Lese ${i + 1}/${validFiles.length}: ${f.name}`;
-                try {
-                    const base64 = await readFileAsBase64(f.file);
-                    result.push({ name: f.name, folder: f.folder, path: f.path, data: base64, size: f.file.size });
-                    fileList.innerHTML += `<div class="file-item">📄 ${f.name} (${formatSize(f.file.size)})</div>`;
-                } catch (err) { console.error('Error:', f.name, err); }
-            }
-
-            progressFill.style.width = '100%';
-            dropZone.classList.remove('processing');
-            dropZone.classList.add('done');
-            window.processingDone = true;
-
-            // Download-Button mit Data-URI erstellen
-            const jsonStr = JSON.stringify(result);
-            const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonStr);
-            const fileName = 'ordner_upload_' + new Date().toISOString().slice(0,10) + '.json';
-
-            dropIcon.textContent = '✅';
-            dropTitle.textContent = result.length + ' Dateien bereit!';
-            statusText.innerHTML = '<strong>Klicken Sie auf den Button um die Import-Datei herunterzuladen:</strong>';
-
-            downloadContainer.style.display = 'block';
-            downloadContainer.innerHTML = `<a href="${dataUri}" download="${fileName}" class="download-btn" onclick="event.stopPropagation();">📥 Import-Datei herunterladen</a>`;
-        }
-
-        function readFileAsBase64(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result.split(',')[1]);
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
-            });
-        }
-        function formatSize(bytes) {
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-        }
+    // Bei Änderungen erneut prüfen
+    const observer = new MutationObserver(enableFolderUpload);
+    observer.observe(window.parent.document.body, { childList: true, subtree: true });
     </script>
     """
+    components.html(folder_upload_js, height=0)
 
-    # Render drag & drop component
-    components.html(drag_drop_html, height=380)
-
-    # JSON-Datei Upload für Import
-    st.markdown("#### 📤 Schritt 2: Import-Datei hochladen")
-    st.info("💡 Laden Sie die automatisch heruntergeladene JSON-Datei hier hoch um den Import abzuschließen.")
-
-    json_file_upload = st.file_uploader(
-        "JSON Import-Datei hochladen",
-        type=['json'],
-        key="json_folder_upload",
-        help="Die JSON-Datei, die nach dem Drag & Drop automatisch heruntergeladen wurde"
-    )
-
-    col_import1, col_import2 = st.columns(2)
-    with col_import1:
-        preserve_dd_structure = st.checkbox("Ordnerstruktur übernehmen", value=True, key="preserve_dd_struct")
-    with col_import2:
-        process_dd_ocr = st.checkbox("Mit OCR verarbeiten", value=True, key="process_dd_ocr")
-
-    if json_file_upload is not None:
-        if st.button("📥 Ordner importieren", type="primary", key="import_json_file"):
-            try:
-                # JSON parsen
-                files_data = json.loads(json_file_upload.read().decode('utf-8'))
-
-                if not files_data or len(files_data) == 0:
-                    st.error("Keine Dateien in der JSON-Datei gefunden.")
-                else:
-                    st.info(f"📂 Importiere {len(files_data)} Dateien...")
-
-                    progress_bar = st.progress(0, text="Starte Import...")
-                    imported = 0
-                    errors = 0
-                    created_folders = {}
-
-                    for idx, file_info in enumerate(files_data):
-                        progress_bar.progress((idx + 1) / len(files_data), text=f"Importiere {idx + 1}/{len(files_data)}...")
-
-                        try:
-                            # Base64 dekodieren
-                            file_data = base64.b64decode(file_info['data'])
-                            filename = file_info['name']
-                            folder_path = file_info.get('folder', '')
-
-                            # Ordner erstellen wenn nötig
-                            target_folder_id = None
-                            if preserve_dd_structure and folder_path:
-                                if folder_path not in created_folders:
-                                    with get_db() as session:
-                                        parent_id = None
-                                        for part in folder_path.replace('\\', '/').split('/'):
-                                            if not part:
-                                                continue
-                                            existing = session.query(Folder).filter(
-                                                Folder.user_id == user_id,
-                                                Folder.name == part,
-                                                Folder.parent_id == parent_id
-                                            ).first()
-
-                                            if existing:
-                                                parent_id = existing.id
-                                            else:
-                                                new_folder = Folder(
-                                                    user_id=user_id,
-                                                    name=part,
-                                                    parent_id=parent_id,
-                                                    color="#4CAF50"
-                                                )
-                                                session.add(new_folder)
-                                                session.flush()
-                                                parent_id = new_folder.id
-
-                                        created_folders[folder_path] = parent_id
-                                        session.commit()
-
-                                target_folder_id = created_folders.get(folder_path)
-
-                            # Dokument speichern
-                            doc_id = save_document(file_data, filename, user_id)
-
-                            # Ordner zuweisen
-                            if target_folder_id:
-                                with get_db() as session:
-                                    doc = session.get(Document, doc_id)
-                                    if doc:
-                                        doc.folder_id = target_folder_id
-                                        doc.notes = f"Drag & Drop Import aus: {folder_path}"
-                                        session.commit()
-
-                            # OCR verarbeiten
-                            if process_dd_ocr:
-                                try:
-                                    process_document(doc_id, file_data, user_id)
-                                except:
-                                    pass
-
-                            imported += 1
-
-                        except Exception as e:
-                            errors += 1
-                            st.warning(f"⚠️ Fehler: {str(e)[:50]}")
-
-                    progress_bar.progress(1.0, text="✅ Import abgeschlossen!")
-                    st.success(f"✅ **{imported} Dokumente** erfolgreich importiert!")
-                    if created_folders:
-                        st.info(f"📁 **{len(created_folders)} Ordner** wurden erstellt")
-                    if errors > 0:
-                        st.warning(f"⚠️ {errors} Fehler beim Import")
-
-            except json.JSONDecodeError as e:
-                st.error(f"❌ Ungültiges JSON-Format: {e}")
-            except Exception as e:
-                st.error(f"❌ Fehler beim Import: {e}")
-
-    # Datei-Upload als Fallback mit webkitdirectory
-    st.markdown("---")
-    st.markdown("### 📁 Alternative: Ordner über Browser auswählen")
-    st.info("💡 Klicken Sie auf 'Browse files' und wählen Sie einen Ordner aus. Der Browser zeigt alle Dateien im Ordner an.")
-
-    # File uploader mit accept_multiple_files für Ordner-Simulation
+    # Standard File-Uploader der durch JS zum Ordner-Uploader wird
     folder_files = st.file_uploader(
-        "Ordner auswählen (alle Dateien werden angezeigt)",
+        "Ordner auswählen (klicken Sie auf 'Browse files')",
         type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
         accept_multiple_files=True,
-        key="folder_drag_drop",
-        help="Wählen Sie alle Dateien eines Ordners aus (Strg+A)"
+        key="direct_folder_upload",
+        help="Wählen Sie einen Ordner aus - alle unterstützten Dateien werden hochgeladen"
     )
 
     if folder_files and len(folder_files) > 0:
-        st.success(f"✅ **{len(folder_files)} Dateien** ausgewählt")
+        # Ordnerstruktur aus den Dateinamen extrahieren
+        files_with_paths = []
+        for f in folder_files:
+            # webkitRelativePath ist im name enthalten wenn vorhanden
+            name = f.name
+            files_with_paths.append({
+                'file': f,
+                'name': name,
+                'folder': ''  # Streamlit gibt leider nicht den Pfad weiter
+            })
 
-        # Zielordner für Import
-        with get_db() as session:
-            folders_db = session.query(Folder).filter(
-                Folder.user_id == user_id
-            ).order_by(Folder.name).all()
-            folder_options = {"__posteingang__": "📥 Posteingang (Standard)"}
-            folder_options.update({str(f.id): f"📁 {f.name}" for f in folders_db})
+        st.success(f"✅ **{len(folder_files)} Dateien** aus dem Ordner ausgewählt")
 
+        # Optionen
         col_opt1, col_opt2 = st.columns(2)
         with col_opt1:
-            target_folder_select = st.selectbox(
+            # Zielordner auswählen
+            with get_db() as session:
+                folders_db = session.query(Folder).filter(
+                    Folder.user_id == user_id
+                ).order_by(Folder.name).all()
+                folder_options = {"__posteingang__": "📥 Posteingang (Standard)"}
+                folder_options.update({str(f.id): f"📁 {f.name}" for f in folders_db})
+
+            target_folder = st.selectbox(
                 "Zielordner",
                 options=list(folder_options.keys()),
                 format_func=lambda x: folder_options.get(x, "Posteingang"),
-                key="folder_dd_target"
+                key="direct_folder_target"
             )
         with col_opt2:
-            process_dd_docs = st.checkbox("Sofort verarbeiten (OCR)", value=True, key="process_dd_folder")
+            process_direct = st.checkbox("Mit OCR verarbeiten", value=True, key="process_direct_folder")
 
-        if st.button("📥 Dateien importieren", type="primary", key="import_dd_folder"):
+        if st.button("📥 Ordner importieren", type="primary", key="import_direct_folder"):
             progress_bar = st.progress(0, text="Starte Import...")
             imported = 0
             errors = 0
 
-            target_id = None if target_folder_select == "__posteingang__" else int(target_folder_select)
+            target_id = None if target_folder == "__posteingang__" else int(target_folder)
 
             for idx, file in enumerate(folder_files):
-                progress_bar.progress((idx + 1) / len(folder_files), text=f"Importiere {file.name}...")
+                progress_bar.progress((idx + 1) / len(folder_files), text=f"Importiere {idx + 1}/{len(folder_files)}: {file.name[:30]}...")
 
                 try:
                     file_data = file.read()
@@ -1087,27 +793,28 @@ with tab_folder:
                                 doc.folder_id = target_id
                                 session.commit()
 
-                    # Verarbeiten
-                    if process_dd_docs:
+                    # OCR verarbeiten
+                    if process_direct:
                         try:
                             process_document(doc_id, file_data, user_id)
                         except:
                             pass
 
                     imported += 1
+
                 except Exception as e:
                     errors += 1
                     st.warning(f"⚠️ Fehler bei {file.name}: {str(e)[:30]}")
 
-            progress_bar.progress(1.0, text="✅ Fertig!")
+            progress_bar.progress(1.0, text="✅ Import abgeschlossen!")
             st.success(f"✅ **{imported} Dateien** erfolgreich importiert!")
             if errors > 0:
-                st.warning(f"⚠️ {errors} Fehler")
+                st.warning(f"⚠️ {errors} Fehler beim Import")
 
-    # Option 2: ZIP-Upload
+    # Alternative: ZIP-Upload für Ordnerstruktur
     st.markdown("---")
-    st.markdown("### 📦 ZIP-Archiv hochladen")
-    st.info("💡 Alternativ: Ordner als ZIP komprimieren und hier hochladen.")
+    st.markdown("### 📦 Alternative: ZIP-Archiv mit Ordnerstruktur")
+    st.info("💡 Um die **Ordnerstruktur zu erhalten**, komprimieren Sie den Ordner als ZIP und laden Sie ihn hier hoch.")
 
     zip_file = st.file_uploader(
         "ZIP-Datei mit Ordnerstruktur",
