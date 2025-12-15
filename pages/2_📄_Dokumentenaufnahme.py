@@ -240,7 +240,16 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
     classifier = get_classifier(user_id)
     search = get_search_service(user_id)
 
-    result = {'folder_name': None, 'folder_created': False, 'sender': None}
+    result = {
+        'folder_name': None,
+        'folder_path': None,
+        'folder_created': False,
+        'sender': None,
+        'virtual_folders': [],
+        'property_name': None,
+        'category': None,
+        'subcategory': None
+    }
 
     with get_db() as session:
         document = session.get(Document, document_id)
@@ -348,15 +357,37 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                 except Exception as e:
                     st.warning(f"KI-Analyse teilweise fehlgeschlagen: {e}")
 
-            # Selbstlernende Klassifikation
-            folder_id, category, conf = classifier.classify(full_text, metadata)
+            # ============================================================
+            # INTELLIGENTE KLASSIFIKATION MIT KI-UNTERSTÜTZUNG
+            # ============================================================
+            # Verwende den erweiterten Klassifikator mit KI-Fallback
+            classification = classifier.classify_with_ai(full_text, metadata)
 
-            if not document.category and category:
-                document.category = category
+            # Kategorie und Unterkategorie zuweisen
+            if classification.get('category'):
+                document.category = classification['category']
+                result['category'] = classification['category']
+            if classification.get('subcategory'):
+                result['subcategory'] = classification['subcategory']
 
-            # Ordnerzuweisung mit Sender-Fallback
+            # Extrahierte Adresse speichern (für Immobilien-Zuordnung)
+            if classification.get('detected_address'):
+                document.property_address = classification['detected_address']
+
+            # Immobilien-Zuordnung
+            if classification.get('property_id'):
+                document.property_id = classification['property_id']
+                # Property-Name für Anzeige laden
+                from database.models import Property
+                prop = session.get(Property, classification['property_id'])
+                if prop:
+                    result['property_name'] = prop.name or prop.full_address
+
+            # Ordnerzuweisung aus Klassifikation
             assigned_folder_name = None
             folder_created = False
+            folder_id = classification.get('primary_folder_id')
+            folder_path = classification.get('primary_folder_path')
 
             # Prüfen ob ein intelligenter Ordner gefunden wurde (nicht nur Posteingang)
             if folder_id:
@@ -365,6 +396,9 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                     # Intelligenter Ordner gefunden
                     document.folder_id = folder_id
                     assigned_folder_name = folder.name
+                    result['folder_path'] = folder_path
+                    # Ordner wurde möglicherweise neu erstellt
+                    folder_created = classification.get('confidence', 0) > 0.7
                 else:
                     folder_id = None  # Posteingang zählt nicht als "gefunden"
 
@@ -397,6 +431,19 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
 
             result['folder_name'] = assigned_folder_name
             result['folder_created'] = folder_created
+
+            # ============================================================
+            # VIRTUELLE ORDNER-ZUORDNUNG (Dokument in mehreren Ordnern)
+            # ============================================================
+            virtual_folder_ids = classification.get('virtual_folder_ids', [])
+            if virtual_folder_ids:
+                # Virtuelle Ordner zuweisen
+                classifier.assign_to_virtual_folders(document_id, virtual_folder_ids)
+                # Namen der virtuellen Ordner für Anzeige sammeln
+                for vf_id in virtual_folder_ids:
+                    vf = session.get(Folder, vf_id)
+                    if vf:
+                        result['virtual_folders'].append(vf.name)
 
             # Fristen erkennen und Kalendereintrag erstellen
             for deadline in metadata.get('deadlines', []):
@@ -499,12 +546,28 @@ with tab_upload:
 
                             # Ordnerzuweisung anzeigen
                             if process_result.get('folder_name'):
+                                folder_info = process_result['folder_name']
+                                if process_result.get('folder_path'):
+                                    folder_info = process_result['folder_path']
                                 if process_result.get('folder_created'):
-                                    st.info(f"📁 **Neuer Ordner erstellt:** '{process_result['folder_name']}' (nach Absender)")
+                                    st.info(f"📁 **Neuer Ordner erstellt:** '{folder_info}'")
                                 else:
-                                    st.info(f"📁 **Eingeordnet in:** '{process_result['folder_name']}'")
+                                    st.info(f"📁 **Eingeordnet in:** '{folder_info}'")
                             else:
                                 st.warning("📁 Kein passender Ordner gefunden. Dokument bleibt im Posteingang.")
+
+                            # Kategorie und Unterkategorie anzeigen
+                            if process_result.get('subcategory'):
+                                st.info(f"🏷️ **Kategorie:** {process_result['category']} / {process_result['subcategory']}")
+
+                            # Immobilien-Zuordnung anzeigen
+                            if process_result.get('property_name'):
+                                st.success(f"🏠 **Immobilie erkannt:** {process_result['property_name']}")
+
+                            # Virtuelle Ordner-Zuordnungen anzeigen
+                            if process_result.get('virtual_folders'):
+                                vf_list = ", ".join(process_result['virtual_folders'])
+                                st.info(f"📂 **Auch verfügbar in:** {vf_list}")
 
                             # Ergebnisse anzeigen
                             with get_db() as session:

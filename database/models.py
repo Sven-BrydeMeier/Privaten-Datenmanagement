@@ -55,6 +55,71 @@ document_tags = Table(
     Column('tag_id', Integer, ForeignKey('tags.id'), primary_key=True)
 )
 
+# Assoziationstabelle für virtuelle Ordner-Zuordnungen (Dokument kann in mehreren Ordnern sein)
+document_virtual_folders = Table(
+    'document_virtual_folders',
+    Base.metadata,
+    Column('document_id', Integer, ForeignKey('documents.id'), primary_key=True),
+    Column('folder_id', Integer, ForeignKey('folders.id'), primary_key=True),
+    Column('is_primary', Boolean, default=False),  # Hauptordner
+    Column('created_at', DateTime, default=func.now())
+)
+
+
+class Property(Base):
+    """Immobilien-Modell für Zuordnung von Dokumenten zu Objekten"""
+    __tablename__ = 'properties'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Adressdaten
+    name = Column(String(255))  # Kurzname z.B. "Mietwohnung Berlin"
+    street = Column(String(255))
+    house_number = Column(String(20))
+    postal_code = Column(String(10))
+    city = Column(String(100))
+    country = Column(String(100), default="Deutschland")
+
+    # Typ
+    property_type = Column(String(50))  # Eigentum, Miete, Gewerbe
+    usage = Column(String(50))  # Selbstgenutzt, Vermietet
+
+    # Referenzen
+    owner = Column(String(255))  # Eigentümer/Vermieter
+    management = Column(String(255))  # Hausverwaltung
+
+    # Zeitraum
+    acquired_date = Column(DateTime)  # Kauf/Einzugsdatum
+    sold_date = Column(DateTime)  # Verkauf/Auszugsdatum
+
+    # Notizen
+    notes = Column(Text)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    documents = relationship("Document", back_populates="property")
+
+    @property
+    def full_address(self):
+        """Gibt die vollständige Adresse zurück"""
+        parts = []
+        if self.street:
+            addr = self.street
+            if self.house_number:
+                addr += f" {self.house_number}"
+            parts.append(addr)
+        if self.postal_code or self.city:
+            parts.append(f"{self.postal_code or ''} {self.city or ''}".strip())
+        return ", ".join(parts) if parts else self.name
+
+    __table_args__ = (
+        Index('idx_property_user', 'user_id'),
+        Index('idx_property_address', 'street', 'postal_code', 'city'),
+    )
+
 
 class User(Base):
     """Benutzermodell"""
@@ -175,9 +240,15 @@ class Document(Base):
     deleted_at = Column(DateTime)  # Wann wurde das Dokument gelöscht
     previous_folder_id = Column(Integer)  # Vorheriger Ordner vor Löschung
 
+    # Immobilien-Zuordnung
+    property_id = Column(Integer, ForeignKey('properties.id'))
+    property_address = Column(String(500))  # Extrahierte Adresse aus Dokument (Leistungsort)
+
     # Beziehungen
     user = relationship("User", back_populates="documents")
     folder = relationship("Folder", back_populates="documents")
+    property = relationship("Property", back_populates="documents")
+    virtual_folders = relationship("Folder", secondary=document_virtual_folders, backref="virtual_documents")
     tags = relationship("Tag", secondary=document_tags, back_populates="documents")
     calendar_events = relationship("CalendarEvent", back_populates="document")
     notes = relationship("DocumentNote", back_populates="document", cascade="all, delete-orphan")
