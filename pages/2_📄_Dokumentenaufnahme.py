@@ -691,18 +691,18 @@ with tab_folder:
     import base64
     import json
 
-    # Drag & Drop Zone mit JavaScript - automatischer Download
+    # Drag & Drop Zone mit JavaScript - mit Download-Button
     drag_drop_html = """
     <style>
         .drop-zone {
             border: 3px dashed #4CAF50;
             border-radius: 15px;
-            padding: 40px;
+            padding: 30px;
             text-align: center;
             background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
             transition: all 0.3s ease;
             cursor: pointer;
-            min-height: 180px;
+            min-height: 150px;
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -711,51 +711,74 @@ with tab_folder:
         .drop-zone:hover, .drop-zone.drag-over {
             border-color: #2196F3;
             background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-            transform: scale(1.02);
+            transform: scale(1.01);
         }
         .drop-zone.processing {
             border-color: #FF9800;
             background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+            cursor: wait;
         }
         .drop-zone.done {
             border-color: #4CAF50;
             background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+            cursor: default;
         }
-        .drop-zone h3 { color: #333; margin: 0 0 10px 0; font-size: 1.4em; }
-        .drop-zone p { color: #666; margin: 5px 0; }
-        .drop-zone .icon { font-size: 3.5em; margin-bottom: 10px; }
+        .drop-zone h3 { color: #333; margin: 0 0 8px 0; font-size: 1.3em; }
+        .drop-zone p { color: #666; margin: 4px 0; font-size: 0.9em; }
+        .drop-zone .icon { font-size: 3em; margin-bottom: 8px; }
         .file-list {
-            margin-top: 15px; text-align: left; max-height: 200px;
-            overflow-y: auto; width: 100%; font-size: 0.85em;
+            margin-top: 12px; text-align: left; max-height: 150px;
+            overflow-y: auto; width: 100%; font-size: 0.8em;
         }
         .file-item {
-            padding: 6px 10px; background: white; margin: 3px 0;
-            border-radius: 4px; border-left: 3px solid #4CAF50;
+            padding: 5px 8px; background: white; margin: 2px 0;
+            border-radius: 3px; border-left: 3px solid #4CAF50;
         }
         .folder-item { border-left-color: #2196F3; font-weight: bold; }
         .progress-bar {
-            width: 100%; height: 8px; background: #ddd;
-            border-radius: 4px; margin: 8px 0; overflow: hidden;
+            width: 100%; height: 6px; background: #ddd;
+            border-radius: 3px; margin: 6px 0; overflow: hidden;
         }
         .progress-fill {
             height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A);
             transition: width 0.3s;
         }
-        .status-text { color: #666; font-size: 0.9em; margin-top: 8px; }
+        .status-text { color: #666; font-size: 0.85em; margin-top: 6px; }
         #folderInput { display: none; }
+        .download-btn {
+            display: inline-block;
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 12px 25px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1em;
+            margin-top: 10px;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: all 0.3s;
+        }
+        .download-btn:hover {
+            background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            transform: translateY(-1px);
+        }
     </style>
 
-    <div class="drop-zone" id="dropZone" onclick="document.getElementById('folderInput').click()">
-        <div class="icon">📂</div>
-        <h3>Ordner hierher ziehen</h3>
-        <p>oder klicken um einen Ordner auszuwählen</p>
-        <p style="font-size: 0.75em; color: #888;">PDF, JPG, PNG, DOC, DOCX, XLS, XLSX, TXT</p>
+    <div class="drop-zone" id="dropZone" onclick="if(!window.processingDone) document.getElementById('folderInput').click()">
+        <div class="icon" id="dropIcon">📂</div>
+        <h3 id="dropTitle">Ordner hierher ziehen</h3>
+        <p id="dropSubtitle">oder klicken um einen Ordner auszuwählen</p>
+        <p style="font-size: 0.7em; color: #888;">PDF, JPG, PNG, DOC, DOCX, XLS, XLSX, TXT</p>
         <input type="file" id="folderInput" webkitdirectory directory multiple />
         <div id="fileList" class="file-list" style="display: none;"></div>
         <div id="progressContainer" style="display: none; width: 100%;">
             <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width: 0%"></div></div>
             <div class="status-text" id="statusText">Verarbeite...</div>
         </div>
+        <div id="downloadContainer" style="display: none; margin-top: 15px;"></div>
     </div>
 
     <script>
@@ -765,16 +788,25 @@ with tab_folder:
         const progressContainer = document.getElementById('progressContainer');
         const progressFill = document.getElementById('progressFill');
         const statusText = document.getElementById('statusText');
+        const downloadContainer = document.getElementById('downloadContainer');
+        const dropIcon = document.getElementById('dropIcon');
+        const dropTitle = document.getElementById('dropTitle');
+        const dropSubtitle = document.getElementById('dropSubtitle');
         const supportedExt = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.doc', '.docx', '.xls', '.xlsx', '.txt'];
+        window.processingDone = false;
 
         ['dragenter', 'dragover'].forEach(e => {
-            dropZone.addEventListener(e, (evt) => { evt.preventDefault(); dropZone.classList.add('drag-over'); });
+            dropZone.addEventListener(e, (evt) => {
+                evt.preventDefault();
+                if (!window.processingDone) dropZone.classList.add('drag-over');
+            });
         });
         ['dragleave', 'drop'].forEach(e => {
             dropZone.addEventListener(e, (evt) => { evt.preventDefault(); dropZone.classList.remove('drag-over'); });
         });
 
         dropZone.addEventListener('drop', async (e) => {
+            if (window.processingDone) return;
             const items = e.dataTransfer.items;
             if (items) {
                 const files = [];
@@ -787,6 +819,7 @@ with tab_folder:
         });
 
         folderInput.addEventListener('change', async (e) => {
+            if (window.processingDone) return;
             const files = [];
             for (let i = 0; i < e.target.files.length; i++) {
                 const file = e.target.files[i];
@@ -828,6 +861,9 @@ with tab_folder:
             progressContainer.style.display = 'block';
             fileList.style.display = 'block';
             fileList.innerHTML = '';
+            dropIcon.textContent = '⏳';
+            dropTitle.textContent = 'Dateien werden gelesen...';
+            dropSubtitle.style.display = 'none';
 
             const folders = [...new Set(validFiles.map(f => f.folder).filter(f => f))];
             folders.forEach(folder => { fileList.innerHTML += `<div class="file-item folder-item">📁 ${folder}</div>`; });
@@ -847,22 +883,19 @@ with tab_folder:
             progressFill.style.width = '100%';
             dropZone.classList.remove('processing');
             dropZone.classList.add('done');
+            window.processingDone = true;
 
-            // Automatischer Download der JSON-Datei
+            // Download-Button mit Data-URI erstellen
             const jsonStr = JSON.stringify(result);
-            const blob = new Blob([jsonStr], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'ordner_upload_' + new Date().toISOString().slice(0,10) + '.json';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonStr);
+            const fileName = 'ordner_upload_' + new Date().toISOString().slice(0,10) + '.json';
 
-            statusText.innerHTML = `<strong style="color: #4CAF50;">✅ ${result.length} Dateien bereit!</strong><br>` +
-                `<span style="font-size: 0.9em;">📥 JSON-Datei wurde heruntergeladen.<br>` +
-                `Laden Sie diese Datei unten hoch um den Import abzuschließen.</span>`;
+            dropIcon.textContent = '✅';
+            dropTitle.textContent = result.length + ' Dateien bereit!';
+            statusText.innerHTML = '<strong>Klicken Sie auf den Button um die Import-Datei herunterzuladen:</strong>';
+
+            downloadContainer.style.display = 'block';
+            downloadContainer.innerHTML = `<a href="${dataUri}" download="${fileName}" class="download-btn" onclick="event.stopPropagation();">📥 Import-Datei herunterladen</a>`;
         }
 
         function readFileAsBase64(file) {
