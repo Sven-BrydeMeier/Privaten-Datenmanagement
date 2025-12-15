@@ -1,7 +1,7 @@
 """
 Datenbankverbindung und Session-Management
 """
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text, inspect
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 import streamlit as st
@@ -30,9 +30,88 @@ engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_threa
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def run_migrations():
+    """Führt Datenbankmigrationen durch für neue Spalten und Tabellen"""
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+
+    with engine.connect() as conn:
+        # Migration 1: Neue Spalten zur documents-Tabelle hinzufügen
+        if 'documents' in existing_tables:
+            existing_columns = [col['name'] for col in inspector.get_columns('documents')]
+
+            # property_id Spalte hinzufügen
+            if 'property_id' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE documents ADD COLUMN property_id INTEGER REFERENCES properties(id)'))
+                    conn.commit()
+                except Exception:
+                    pass  # Spalte existiert bereits oder Fehler ignorieren
+
+            # property_address Spalte hinzufügen
+            if 'property_address' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE documents ADD COLUMN property_address VARCHAR(500)'))
+                    conn.commit()
+                except Exception:
+                    pass
+
+        # Migration 2: properties Tabelle erstellen (falls nicht existiert)
+        if 'properties' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS properties (
+                        id INTEGER PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        name VARCHAR(255),
+                        street VARCHAR(255),
+                        house_number VARCHAR(20),
+                        postal_code VARCHAR(10),
+                        city VARCHAR(100),
+                        country VARCHAR(100) DEFAULT 'Deutschland',
+                        property_type VARCHAR(50),
+                        usage VARCHAR(50),
+                        owner VARCHAR(255),
+                        management VARCHAR(255),
+                        acquired_date DATETIME,
+                        sold_date DATETIME,
+                        notes TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                '''))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_property_user ON properties(user_id)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_property_address ON properties(street, postal_code, city)'))
+                conn.commit()
+            except Exception:
+                pass
+
+        # Migration 3: document_virtual_folders Tabelle erstellen
+        if 'document_virtual_folders' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS document_virtual_folders (
+                        document_id INTEGER NOT NULL REFERENCES documents(id),
+                        folder_id INTEGER NOT NULL REFERENCES folders(id),
+                        is_primary BOOLEAN DEFAULT 0,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (document_id, folder_id)
+                    )
+                '''))
+                conn.commit()
+            except Exception:
+                pass
+
+
 def init_db():
     """Initialisiert die Datenbank und erstellt alle Tabellen"""
+    # Erst Basis-Tabellen erstellen
     Base.metadata.create_all(bind=engine)
+    # Dann Migrationen für neue Spalten/Tabellen ausführen
+    try:
+        run_migrations()
+    except Exception:
+        pass  # Migrationen fehlgeschlagen, aber App soll weiterlaufen
 
 
 def get_session() -> Session:
