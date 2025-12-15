@@ -389,40 +389,57 @@ class CloudSyncService:
             if response.status_code != 200:
                 return {"error": f"HTTP {response.status_code}: Ordner nicht zugänglich"}
 
-            # Prüfe ob Anmeldeseite zurückgegeben wurde
-            response_text = response.text.lower()
-            if any(indicator in response_text for indicator in [
-                'accounts.google.com',
-                'sign in',
-                'anmelden',
-                'signin',
-                'login',
-                'servicelogin'
-            ]):
+            response_text = response.text
+            response_text_lower = response_text.lower()
+
+            # Prüfe ob Ordner existiert
+            if 'sorry, the file you have requested does not exist' in response_text_lower:
+                return {"error": "Ordner nicht gefunden. Bitte prüfen Sie die URL."}
+
+            # Prüfe auf explizite Zugriffsverweigerung
+            if 'you need access' in response_text_lower or 'zugriff anfordern' in response_text_lower:
+                return {"error": "Keine Berechtigung. Bitte den Ordner öffentlich freigeben."}
+
+            # ZUERST versuchen, Dateien zu parsen - "sign in" kann auch auf öffentlichen Seiten erscheinen
+            files = self._parse_google_drive_folder_page(response_text)
+
+            if not files:
+                # Alternative Methode: Versuche JSON-Daten aus der Seite zu extrahieren
+                files = self._extract_drive_data_from_html(response_text)
+
+            # Wenn Dateien gefunden wurden, ist der Ordner zugänglich
+            if files:
+                return {"files": files, "success": True}
+
+            # Keine Dateien gefunden - jetzt prüfen ob es ein Zugriffsproblem ist
+            # Prüfe auf Weiterleitung zur Anmeldeseite (URL-basiert, nicht content-basiert)
+            if 'accounts.google.com' in response.url:
                 return {
                     "error": "Ordner erfordert Anmeldung. Bitte stellen Sie sicher, dass der Ordner öffentlich freigegeben ist: "
                              "Rechtsklick → Freigeben → 'Jeder mit dem Link' auswählen"
                 }
 
-            # Prüfe ob Ordner existiert
-            if 'sorry, the file you have requested does not exist' in response_text:
-                return {"error": "Ordner nicht gefunden. Bitte prüfen Sie die URL."}
+            # Prüfe auf spezifische Fehlermeldungen die auf private Ordner hindeuten
+            private_indicators = [
+                'request access',
+                'zugriff beantragen',
+                'not have permission',
+                'keine berechtigung',
+                'private folder',
+                'privater ordner'
+            ]
 
-            if 'you need access' in response_text or 'zugriff anfordern' in response_text:
-                return {"error": "Keine Berechtigung. Bitte den Ordner öffentlich freigeben."}
+            if any(indicator in response_text_lower for indicator in private_indicators):
+                return {
+                    "error": "Ordner ist privat. Bitte den Ordner öffentlich freigeben: "
+                             "Rechtsklick → Freigeben → 'Jeder mit dem Link' auswählen"
+                }
 
-            # Parse HTML und extrahiere Datei-Informationen
-            files = self._parse_google_drive_folder_page(response.text)
+            # Ordner scheint leer zu sein oder Format nicht erkannt
+            logger.warning(f"Keine Dateien gefunden in Ordner {folder_id}. "
+                          f"Möglicherweise ist der Ordner leer.")
 
-            if not files:
-                # Alternative Methode: Versuche JSON-Daten aus der Seite zu extrahieren
-                files = self._extract_drive_data_from_html(response.text)
-
-            if not files:
-                logger.warning(f"Keine Dateien gefunden in Ordner {folder_id}. "
-                              f"Möglicherweise ist der Ordner leer oder nicht öffentlich zugänglich.")
-
-            return {"files": files, "success": True}
+            return {"files": [], "success": True}
 
         except requests.exceptions.Timeout:
             return {"error": "Zeitüberschreitung beim Laden des Ordners"}
