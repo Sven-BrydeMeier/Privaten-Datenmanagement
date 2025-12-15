@@ -685,9 +685,194 @@ with tab_folder:
     Die Ordnerstruktur wird beibehalten und für die automatische Kategorisierung verwendet.
     """)
 
-    # Option 1: ZIP-Upload
-    st.markdown("### 📦 Option 1: ZIP-Archiv hochladen")
-    st.info("💡 **Tipp:** Zippen Sie Ihren Ordner und laden Sie die ZIP-Datei hoch. Die Ordnerstruktur bleibt erhalten.")
+    # Option 1: Native Ordner-Auswahl (mit webkitdirectory)
+    st.markdown("### 📁 Ordner auswählen")
+
+    import streamlit.components.v1 as components
+
+    # JavaScript/HTML für native Ordner-Auswahl
+    folder_upload_html = """
+    <style>
+        .folder-upload-container {
+            border: 2px dashed #4CAF50;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            margin: 10px 0;
+            transition: all 0.3s ease;
+        }
+        .folder-upload-container:hover {
+            border-color: #2E7D32;
+            background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+        }
+        .folder-upload-container input[type="file"] {
+            display: none;
+        }
+        .folder-upload-btn {
+            background: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .folder-upload-btn:hover {
+            background: #2E7D32;
+        }
+        .file-list {
+            max-height: 200px;
+            overflow-y: auto;
+            text-align: left;
+            margin-top: 15px;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            display: none;
+        }
+        .file-item {
+            padding: 3px 0;
+            font-size: 12px;
+            color: #333;
+        }
+        .folder-path {
+            color: #666;
+            font-size: 11px;
+        }
+        #upload-status {
+            margin-top: 15px;
+            font-weight: bold;
+        }
+    </style>
+    <div class="folder-upload-container" id="drop-zone">
+        <p style="font-size: 18px; margin-bottom: 15px;">📂 Ordner per Drag & Drop hierher ziehen</p>
+        <p style="color: #666; margin-bottom: 15px;">— oder —</p>
+        <label class="folder-upload-btn">
+            📁 Ordner auswählen
+            <input type="file" id="folder-input" webkitdirectory directory multiple />
+        </label>
+        <div id="upload-status"></div>
+        <div class="file-list" id="file-list"></div>
+    </div>
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const folderInput = document.getElementById('folder-input');
+        const fileList = document.getElementById('file-list');
+        const statusDiv = document.getElementById('upload-status');
+
+        // Drag & Drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#2E7D32';
+            dropZone.style.background = 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)';
+        });
+
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#4CAF50';
+            dropZone.style.background = 'linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%)';
+        });
+
+        dropZone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#4CAF50';
+
+            const items = e.dataTransfer.items;
+            const files = [];
+
+            for (let item of items) {
+                if (item.webkitGetAsEntry) {
+                    const entry = item.webkitGetAsEntry();
+                    if (entry) {
+                        await traverseFileTree(entry, '', files);
+                    }
+                }
+            }
+
+            processFiles(files);
+        });
+
+        async function traverseFileTree(entry, path, files) {
+            if (entry.isFile) {
+                const file = await new Promise(resolve => entry.file(resolve));
+                files.push({ file: file, path: path + file.name });
+            } else if (entry.isDirectory) {
+                const reader = entry.createReader();
+                const entries = await new Promise(resolve => reader.readEntries(resolve));
+                for (let e of entries) {
+                    await traverseFileTree(e, path + entry.name + '/', files);
+                }
+            }
+        }
+
+        folderInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files).map(f => ({
+                file: f,
+                path: f.webkitRelativePath || f.name
+            }));
+            processFiles(files);
+        });
+
+        function processFiles(files) {
+            // Filter für unterstützte Dateitypen
+            const supportedExt = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.doc', '.docx', '.xls', '.xlsx', '.txt'];
+            const validFiles = files.filter(f => {
+                const ext = f.path.toLowerCase().split('.').pop();
+                return supportedExt.some(e => e.slice(1) === ext);
+            });
+
+            if (validFiles.length === 0) {
+                statusDiv.innerHTML = '<span style="color: orange;">⚠️ Keine unterstützten Dateien gefunden</span>';
+                return;
+            }
+
+            // Ordner zählen
+            const folders = new Set(validFiles.map(f => {
+                const parts = f.path.split('/');
+                return parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+            }).filter(p => p));
+
+            statusDiv.innerHTML = `<span style="color: green;">✅ ${validFiles.length} Dateien in ${folders.size} Ordnern gefunden</span>`;
+
+            // Dateien anzeigen
+            fileList.style.display = 'block';
+            fileList.innerHTML = validFiles.slice(0, 20).map(f =>
+                `<div class="file-item">📄 ${f.path.split('/').pop()} <span class="folder-path">(${f.path.split('/').slice(0, -1).join('/')})</span></div>`
+            ).join('') + (validFiles.length > 20 ? `<div class="file-item">... und ${validFiles.length - 20} weitere</div>` : '');
+
+            // Daten an Streamlit senden
+            const fileData = validFiles.map(f => ({
+                name: f.file.name,
+                path: f.path,
+                size: f.file.size,
+                type: f.file.type
+            }));
+
+            // Speichere in sessionStorage für Streamlit
+            sessionStorage.setItem('folder_files', JSON.stringify(fileData));
+
+            // Sende Event an Streamlit
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                value: { files: fileData, count: validFiles.length, folders: folders.size }
+            }, '*');
+        }
+    </script>
+    """
+
+    # Zeige den Ordner-Upload-Bereich
+    folder_result = components.html(folder_upload_html, height=350)
+
+    st.caption("⚠️ **Hinweis:** Nach Auswahl eines Ordners erscheint der Import-Button unten.")
+
+    # Hinweis für Benutzer
+    st.markdown("---")
+
+    # Option 2: ZIP-Upload (Fallback)
+    st.markdown("### 📦 Alternative: ZIP-Archiv hochladen")
+    st.info("💡 Falls die Ordner-Auswahl nicht funktioniert: Ordner als ZIP komprimieren und hier hochladen.")
 
     zip_file = st.file_uploader(
         "ZIP-Datei mit Ordnerstruktur",
