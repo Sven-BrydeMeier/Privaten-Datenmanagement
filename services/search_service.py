@@ -2,11 +2,15 @@
 Volltext-Suchservice mit Whoosh
 """
 import os
+import warnings
 from typing import List, Dict, Optional
 from datetime import datetime
 import streamlit as st
 
 from config.settings import INDEX_DIR
+
+# Whoosh-Warnungen unterdrücken (Kompatibilitätsprobleme mit Python 3.13)
+warnings.filterwarnings('ignore', category=SyntaxWarning, module='whoosh')
 
 
 class SearchService:
@@ -16,39 +20,50 @@ class SearchService:
         self.user_id = user_id
         self.index_dir = INDEX_DIR / str(user_id)
         self._index = None
-        self._ensure_index()
+        self._index_available = True
+        try:
+            self._ensure_index()
+        except Exception as e:
+            self._index_available = False
+            # Stille Warnung - Suche ist optional
+            pass
 
     def _ensure_index(self):
         """Stellt sicher dass der Index existiert"""
-        os.makedirs(self.index_dir, exist_ok=True)
+        try:
+            os.makedirs(self.index_dir, exist_ok=True)
 
-        from whoosh.fields import Schema, TEXT, ID, NUMERIC, DATETIME, KEYWORD
-        from whoosh.index import create_in, open_dir, exists_in
+            from whoosh.fields import Schema, TEXT, ID, NUMERIC, DATETIME, KEYWORD
+            from whoosh.index import create_in, open_dir, exists_in
 
-        # Schema definieren
-        schema = Schema(
-            id=ID(stored=True, unique=True),
-            title=TEXT(stored=True),
-            content=TEXT(stored=True),
-            sender=TEXT(stored=True),
-            category=KEYWORD(stored=True),
-            folder_id=ID(stored=True),
-            document_date=DATETIME(stored=True),
-            amounts=TEXT(stored=True),  # Komma-getrennte Beträge
-            ibans=TEXT(stored=True),    # Komma-getrennte IBANs
-            contract_numbers=TEXT(stored=True),
-            created_at=DATETIME(stored=True)
-        )
+            # Schema definieren
+            schema = Schema(
+                id=ID(stored=True, unique=True),
+                title=TEXT(stored=True),
+                content=TEXT(stored=True),
+                sender=TEXT(stored=True),
+                category=KEYWORD(stored=True),
+                folder_id=ID(stored=True),
+                document_date=DATETIME(stored=True),
+                amounts=TEXT(stored=True),  # Komma-getrennte Beträge
+                ibans=TEXT(stored=True),    # Komma-getrennte IBANs
+                contract_numbers=TEXT(stored=True),
+                created_at=DATETIME(stored=True)
+            )
 
-        if exists_in(self.index_dir):
-            self._index = open_dir(self.index_dir)
-        else:
-            self._index = create_in(self.index_dir, schema)
+            if exists_in(self.index_dir):
+                self._index = open_dir(self.index_dir)
+            else:
+                self._index = create_in(self.index_dir, schema)
+            self._index_available = True
+        except Exception as e:
+            self._index_available = False
+            self._index = None
 
     @property
     def index(self):
         """Lazy-Loading des Index"""
-        if self._index is None:
+        if self._index is None and self._index_available:
             self._ensure_index()
         return self._index
 
@@ -60,38 +75,51 @@ class SearchService:
             document_id: Dokument-ID
             data: Dokumentdaten zum Indexieren
         """
-        from whoosh.writing import AsyncWriter
+        if not self._index_available or self._index is None:
+            return  # Stille Rückkehr wenn Index nicht verfügbar
 
-        writer = AsyncWriter(self.index)
+        try:
+            from whoosh.writing import AsyncWriter
 
-        # Beträge und IBANs als durchsuchbare Strings
-        amounts_str = ','.join(str(a) for a in data.get('amounts', []))
-        ibans_str = ','.join(data.get('ibans', []))
-        contracts_str = ','.join(data.get('contract_numbers', []))
+            writer = AsyncWriter(self.index)
 
-        writer.update_document(
-            id=str(document_id),
-            title=data.get('title', ''),
-            content=data.get('content', ''),
-            sender=data.get('sender', ''),
-            category=data.get('category', ''),
-            folder_id=str(data.get('folder_id', '')),
-            document_date=data.get('document_date'),
-            amounts=amounts_str,
-            ibans=ibans_str,
-            contract_numbers=contracts_str,
-            created_at=data.get('created_at', datetime.now())
-        )
+            # Beträge und IBANs als durchsuchbare Strings
+            amounts_str = ','.join(str(a) for a in data.get('amounts', []))
+            ibans_str = ','.join(data.get('ibans', []))
+            contracts_str = ','.join(data.get('contract_numbers', []))
 
-        writer.commit()
+            writer.update_document(
+                id=str(document_id),
+                title=data.get('title', ''),
+                content=data.get('content', ''),
+                sender=data.get('sender', ''),
+                category=data.get('category', ''),
+                folder_id=str(data.get('folder_id', '')),
+                document_date=data.get('document_date'),
+                amounts=amounts_str,
+                ibans=ibans_str,
+                contract_numbers=contracts_str,
+                created_at=data.get('created_at', datetime.now())
+            )
+
+            writer.commit()
+        except Exception:
+            # Indexierungsfehler ignorieren - Dokument wurde trotzdem gespeichert
+            pass
 
     def remove_document(self, document_id: int):
         """Entfernt ein Dokument aus dem Index"""
-        from whoosh.writing import AsyncWriter
+        if not self._index_available or self._index is None:
+            return
 
-        writer = AsyncWriter(self.index)
-        writer.delete_by_term('id', str(document_id))
-        writer.commit()
+        try:
+            from whoosh.writing import AsyncWriter
+
+            writer = AsyncWriter(self.index)
+            writer.delete_by_term('id', str(document_id))
+            writer.commit()
+        except Exception:
+            pass
 
     def search(
         self,
@@ -112,9 +140,6 @@ class SearchService:
         Returns:
             Dictionary mit Ergebnissen und Metadaten
         """
-        from whoosh.qparser import MultifieldParser, OrGroup
-        from whoosh.query import And, Term, DateRange
-
         results = {
             'items': [],
             'total': 0,
@@ -122,60 +147,70 @@ class SearchService:
             'pages': 0
         }
 
-        with self.index.searcher() as searcher:
-            # Multi-Feld-Parser für Freitextsuche
-            parser = MultifieldParser(
-                ['title', 'content', 'sender', 'amounts', 'ibans', 'contract_numbers'],
-                self.index.schema,
-                group=OrGroup
-            )
+        if not self._index_available or self._index is None:
+            return results
 
-            try:
-                q = parser.parse(query)
-            except Exception:
-                # Bei Parse-Fehlern als exakte Phrase suchen
-                q = parser.parse(f'"{query}"')
+        try:
+            from whoosh.qparser import MultifieldParser, OrGroup
+            from whoosh.query import And, Term, DateRange
 
-            # Filter anwenden
-            filter_queries = []
+            with self.index.searcher() as searcher:
+                # Multi-Feld-Parser für Freitextsuche
+                parser = MultifieldParser(
+                    ['title', 'content', 'sender', 'amounts', 'ibans', 'contract_numbers'],
+                    self.index.schema,
+                    group=OrGroup
+                )
 
-            if filters:
-                if filters.get('category'):
-                    filter_queries.append(Term('category', filters['category']))
+                try:
+                    q = parser.parse(query)
+                except Exception:
+                    # Bei Parse-Fehlern als exakte Phrase suchen
+                    q = parser.parse(f'"{query}"')
 
-                if filters.get('folder_id'):
-                    filter_queries.append(Term('folder_id', str(filters['folder_id'])))
+                # Filter anwenden
+                filter_queries = []
 
-                if filters.get('date_from') or filters.get('date_to'):
-                    filter_queries.append(DateRange(
-                        'document_date',
-                        start=filters.get('date_from'),
-                        end=filters.get('date_to')
-                    ))
+                if filters:
+                    if filters.get('category'):
+                        filter_queries.append(Term('category', filters['category']))
 
-            # Kombiniere Query mit Filtern
-            if filter_queries:
-                q = And([q] + filter_queries)
+                    if filters.get('folder_id'):
+                        filter_queries.append(Term('folder_id', str(filters['folder_id'])))
 
-            # Suche ausführen
-            offset = (page - 1) * limit
-            search_results = searcher.search(q, limit=None)
+                    if filters.get('date_from') or filters.get('date_to'):
+                        filter_queries.append(DateRange(
+                            'document_date',
+                            start=filters.get('date_from'),
+                            end=filters.get('date_to')
+                        ))
 
-            results['total'] = len(search_results)
-            results['pages'] = (results['total'] + limit - 1) // limit
+                # Kombiniere Query mit Filtern
+                if filter_queries:
+                    q = And([q] + filter_queries)
 
-            # Paginierte Ergebnisse
-            for hit in search_results[offset:offset + limit]:
-                results['items'].append({
-                    'id': int(hit['id']),
-                    'title': hit.get('title', ''),
-                    'sender': hit.get('sender', ''),
-                    'category': hit.get('category', ''),
-                    'folder_id': hit.get('folder_id'),
-                    'document_date': hit.get('document_date'),
-                    'score': hit.score,
-                    'highlights': hit.highlights('content', top=3)
-                })
+                # Suche ausführen
+                offset = (page - 1) * limit
+                search_results = searcher.search(q, limit=None)
+
+                results['total'] = len(search_results)
+                results['pages'] = (results['total'] + limit - 1) // limit
+
+                # Paginierte Ergebnisse
+                for hit in search_results[offset:offset + limit]:
+                    results['items'].append({
+                        'id': int(hit['id']),
+                        'title': hit.get('title', ''),
+                        'sender': hit.get('sender', ''),
+                        'category': hit.get('category', ''),
+                        'folder_id': hit.get('folder_id'),
+                        'document_date': hit.get('document_date'),
+                        'score': hit.score,
+                        'highlights': hit.highlights('content', top=3)
+                    })
+        except Exception:
+            # Suchfehler ignorieren - leere Ergebnisse zurückgeben
+            pass
 
         return results
 
