@@ -684,72 +684,23 @@ with tab_folder:
 
     user_id = get_current_user_id()
 
-    import streamlit.components.v1 as components
     import base64
     import json
 
-    # Direkter Ordner-Upload durch Modifikation des File-Uploaders
-    st.markdown("### 📂 Ordner direkt hochladen")
-    st.info("💡 Klicken Sie auf 'Browse files' und wählen Sie einen **Ordner** aus. Alle Dateien werden automatisch importiert.")
+    # Option 1: Mehrere Dateien auswählen
+    st.markdown("### 📄 Mehrere Dateien hochladen")
+    st.info("💡 Wählen Sie alle Dateien eines Ordners aus (im Datei-Dialog: **Strg+A** zum Auswählen aller Dateien)")
 
-    # JavaScript um den File-Uploader zu einem Ordner-Uploader zu machen
-    folder_upload_js = """
-    <script>
-    // Warte bis der Uploader geladen ist und modifiziere ihn
-    function enableFolderUpload() {
-        const uploaders = window.parent.document.querySelectorAll('input[type="file"]');
-        uploaders.forEach(uploader => {
-            // Nur den richtigen Uploader modifizieren (der mit dem key "direct_folder_upload")
-            const container = uploader.closest('[data-testid="stFileUploader"]');
-            if (container) {
-                const label = container.querySelector('label');
-                if (label && label.textContent.includes('Ordner auswählen')) {
-                    if (!uploader.hasAttribute('webkitdirectory')) {
-                        uploader.setAttribute('webkitdirectory', '');
-                        uploader.setAttribute('directory', '');
-                        uploader.setAttribute('mozdirectory', '');
-                        console.log('Folder upload enabled!');
-                    }
-                }
-            }
-        });
-    }
-
-    // Mehrfach versuchen, da Streamlit dynamisch lädt
-    setTimeout(enableFolderUpload, 100);
-    setTimeout(enableFolderUpload, 500);
-    setTimeout(enableFolderUpload, 1000);
-    setTimeout(enableFolderUpload, 2000);
-
-    // Bei Änderungen erneut prüfen
-    const observer = new MutationObserver(enableFolderUpload);
-    observer.observe(window.parent.document.body, { childList: true, subtree: true });
-    </script>
-    """
-    components.html(folder_upload_js, height=0)
-
-    # Standard File-Uploader der durch JS zum Ordner-Uploader wird
     folder_files = st.file_uploader(
-        "Ordner auswählen (klicken Sie auf 'Browse files')",
+        "Dateien auswählen",
         type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
         accept_multiple_files=True,
-        key="direct_folder_upload",
-        help="Wählen Sie einen Ordner aus - alle unterstützten Dateien werden hochgeladen"
+        key="multi_file_upload",
+        help="Halten Sie Strg gedrückt um mehrere Dateien auszuwählen, oder Strg+A für alle"
     )
 
     if folder_files and len(folder_files) > 0:
-        # Ordnerstruktur aus den Dateinamen extrahieren
-        files_with_paths = []
-        for f in folder_files:
-            # webkitRelativePath ist im name enthalten wenn vorhanden
-            name = f.name
-            files_with_paths.append({
-                'file': f,
-                'name': name,
-                'folder': ''  # Streamlit gibt leider nicht den Pfad weiter
-            })
-
-        st.success(f"✅ **{len(folder_files)} Dateien** aus dem Ordner ausgewählt")
+        st.success(f"✅ **{len(folder_files)} Dateien** ausgewählt")
 
         # Optionen
         col_opt1, col_opt2 = st.columns(2)
@@ -766,12 +717,12 @@ with tab_folder:
                 "Zielordner",
                 options=list(folder_options.keys()),
                 format_func=lambda x: folder_options.get(x, "Posteingang"),
-                key="direct_folder_target"
+                key="multi_file_target"
             )
         with col_opt2:
-            process_direct = st.checkbox("Mit OCR verarbeiten", value=True, key="process_direct_folder")
+            process_multi = st.checkbox("Mit OCR verarbeiten", value=True, key="process_multi_files")
 
-        if st.button("📥 Ordner importieren", type="primary", key="import_direct_folder"):
+        if st.button("📥 Dateien importieren", type="primary", key="import_multi_files"):
             progress_bar = st.progress(0, text="Starte Import...")
             imported = 0
             errors = 0
@@ -794,7 +745,7 @@ with tab_folder:
                                 session.commit()
 
                     # OCR verarbeiten
-                    if process_direct:
+                    if process_multi:
                         try:
                             process_document(doc_id, file_data, user_id)
                         except:
@@ -811,10 +762,10 @@ with tab_folder:
             if errors > 0:
                 st.warning(f"⚠️ {errors} Fehler beim Import")
 
-    # Alternative: ZIP-Upload für Ordnerstruktur
+    # Option 2: ZIP-Upload für Ordnerstruktur
     st.markdown("---")
-    st.markdown("### 📦 Alternative: ZIP-Archiv mit Ordnerstruktur")
-    st.info("💡 Um die **Ordnerstruktur zu erhalten**, komprimieren Sie den Ordner als ZIP und laden Sie ihn hier hoch.")
+    st.markdown("### 📦 ZIP-Archiv mit Ordnerstruktur")
+    st.info("💡 Um die **Unterordner-Struktur zu erhalten**: Ordner als ZIP komprimieren und hier hochladen.")
 
     zip_file = st.file_uploader(
         "ZIP-Datei mit Ordnerstruktur",
