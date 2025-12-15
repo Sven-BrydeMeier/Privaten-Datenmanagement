@@ -379,13 +379,37 @@ class CloudSyncService:
             # Versuche, die öffentliche Ordnerseite zu laden
             url = GOOGLE_DRIVE_FOLDER_URL.format(folder_id=folder_id)
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
             }
 
-            response = requests.get(url, headers=headers, timeout=30)
+            response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
 
             if response.status_code != 200:
                 return {"error": f"HTTP {response.status_code}: Ordner nicht zugänglich"}
+
+            # Prüfe ob Anmeldeseite zurückgegeben wurde
+            response_text = response.text.lower()
+            if any(indicator in response_text for indicator in [
+                'accounts.google.com',
+                'sign in',
+                'anmelden',
+                'signin',
+                'login',
+                'servicelogin'
+            ]):
+                return {
+                    "error": "Ordner erfordert Anmeldung. Bitte stellen Sie sicher, dass der Ordner öffentlich freigegeben ist: "
+                             "Rechtsklick → Freigeben → 'Jeder mit dem Link' auswählen"
+                }
+
+            # Prüfe ob Ordner existiert
+            if 'sorry, the file you have requested does not exist' in response_text:
+                return {"error": "Ordner nicht gefunden. Bitte prüfen Sie die URL."}
+
+            if 'you need access' in response_text or 'zugriff anfordern' in response_text:
+                return {"error": "Keine Berechtigung. Bitte den Ordner öffentlich freigeben."}
 
             # Parse HTML und extrahiere Datei-Informationen
             files = self._parse_google_drive_folder_page(response.text)
@@ -393,6 +417,10 @@ class CloudSyncService:
             if not files:
                 # Alternative Methode: Versuche JSON-Daten aus der Seite zu extrahieren
                 files = self._extract_drive_data_from_html(response.text)
+
+            if not files:
+                logger.warning(f"Keine Dateien gefunden in Ordner {folder_id}. "
+                              f"Möglicherweise ist der Ordner leer oder nicht öffentlich zugänglich.")
 
             return {"files": files, "success": True}
 
