@@ -177,7 +177,9 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
 
 
 # Tabs für verschiedene Upload-Optionen
-tab_upload, tab_multi, tab_cloud, tab_process = st.tabs(["📤 Einzelupload", "📑 Mehrere Dokumente", "☁️ Cloud-Import", "⚙️ Verarbeitung"])
+tab_upload, tab_multi, tab_folder, tab_cloud, tab_process = st.tabs([
+    "📤 Einzelupload", "📑 Mehrere Dokumente", "📂 Ordner-Upload", "☁️ Cloud-Import", "⚙️ Verarbeitung"
+])
 
 
 def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
@@ -674,6 +676,231 @@ with tab_multi:
                         st.write(f"- Dokument {doc_info['num']}: **{doc_info['folder']}** *(neu erstellt)*")
                     else:
                         st.write(f"- Dokument {doc_info['num']}: **{doc_info['folder']}**")
+
+
+with tab_folder:
+    st.subheader("📂 Ordner-Upload")
+    st.markdown("""
+    Laden Sie einen kompletten Ordner mit Unterordnern hoch.
+    Die Ordnerstruktur wird beibehalten und für die automatische Kategorisierung verwendet.
+    """)
+
+    # Option 1: ZIP-Upload
+    st.markdown("### 📦 Option 1: ZIP-Archiv hochladen")
+    st.info("💡 **Tipp:** Zippen Sie Ihren Ordner und laden Sie die ZIP-Datei hoch. Die Ordnerstruktur bleibt erhalten.")
+
+    zip_file = st.file_uploader(
+        "ZIP-Datei mit Ordnerstruktur",
+        type=['zip'],
+        key="folder_zip_upload",
+        help="ZIP-Archiv mit Dokumenten und Unterordnern"
+    )
+
+    if zip_file:
+        import zipfile
+        from io import BytesIO
+
+        user_id = get_current_user_id()
+
+        # ZIP-Inhalt analysieren
+        try:
+            zip_buffer = BytesIO(zip_file.read())
+            with zipfile.ZipFile(zip_buffer, 'r') as zf:
+                # Alle Dateien im ZIP auflisten
+                all_files = [f for f in zf.namelist() if not f.endswith('/')]
+
+                # Nur unterstützte Dateitypen
+                supported_ext = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.doc', '.docx', '.xls', '.xlsx', '.txt']
+                valid_files = [f for f in all_files if any(f.lower().endswith(ext) for ext in supported_ext)]
+
+                # Ordnerstruktur anzeigen
+                folders = set()
+                for f in valid_files:
+                    parts = f.split('/')
+                    if len(parts) > 1:
+                        folders.add('/'.join(parts[:-1]))
+
+                st.success(f"✅ ZIP-Datei erkannt: **{len(valid_files)} Dokumente** in **{len(folders)} Ordnern**")
+
+                if folders:
+                    with st.expander("📁 Gefundene Ordnerstruktur", expanded=False):
+                        for folder in sorted(folders):
+                            file_count = len([f for f in valid_files if f.startswith(folder + '/')])
+                            st.write(f"📂 `{folder}` ({file_count} Dateien)")
+
+                # Verarbeitungsoptionen
+                col1, col2 = st.columns(2)
+                with col1:
+                    preserve_structure = st.checkbox("Ordnerstruktur in App übernehmen", value=True,
+                                                    help="Erstellt die Ordner automatisch in der App")
+                with col2:
+                    process_docs = st.checkbox("Dokumente sofort verarbeiten (OCR)", value=True)
+
+                if st.button("📥 Ordner importieren", type="primary", key="import_zip"):
+                    progress_bar = st.progress(0, text="Starte Import...")
+                    status_text = st.empty()
+
+                    imported_count = 0
+                    error_count = 0
+                    created_folders = {}
+
+                    for idx, file_path in enumerate(valid_files):
+                        progress = (idx + 1) / len(valid_files)
+                        progress_bar.progress(progress, text=f"Importiere {idx + 1}/{len(valid_files)}...")
+
+                        filename = file_path.split('/')[-1]
+                        folder_path = '/'.join(file_path.split('/')[:-1]) if '/' in file_path else ""
+
+                        status_text.markdown(f"📄 **{filename}**" + (f" (aus `{folder_path}`)" if folder_path else ""))
+
+                        try:
+                            # Datei aus ZIP extrahieren
+                            file_data = zf.read(file_path)
+
+                            # Ordner erstellen wenn nötig
+                            target_folder_id = None
+                            if preserve_structure and folder_path:
+                                if folder_path not in created_folders:
+                                    # Ordnerstruktur erstellen
+                                    with get_db() as session:
+                                        parent_id = None
+                                        for part in folder_path.split('/'):
+                                            if not part:
+                                                continue
+                                            # Prüfen ob Ordner existiert
+                                            existing = session.query(Folder).filter(
+                                                Folder.user_id == user_id,
+                                                Folder.name == part,
+                                                Folder.parent_id == parent_id
+                                            ).first()
+
+                                            if existing:
+                                                parent_id = existing.id
+                                            else:
+                                                # Neuen Ordner erstellen
+                                                new_folder = Folder(
+                                                    user_id=user_id,
+                                                    name=part,
+                                                    parent_id=parent_id,
+                                                    color="#4CAF50"
+                                                )
+                                                session.add(new_folder)
+                                                session.flush()
+                                                parent_id = new_folder.id
+
+                                        created_folders[folder_path] = parent_id
+                                        session.commit()
+
+                                target_folder_id = created_folders.get(folder_path)
+
+                            # Dokument speichern
+                            doc_id = save_document(file_data, filename, user_id)
+
+                            # Ordner zuweisen wenn erstellt
+                            if target_folder_id:
+                                with get_db() as session:
+                                    doc = session.get(Document, doc_id)
+                                    if doc:
+                                        doc.folder_id = target_folder_id
+                                        # Speichere Quellpfad für spätere Analyse
+                                        doc.notes = f"Importiert aus: {folder_path}"
+                                        session.commit()
+
+                            # OCR verarbeiten wenn gewünscht
+                            if process_docs:
+                                try:
+                                    process_document(doc_id, file_data, user_id)
+                                except Exception as e:
+                                    pass  # Fehler bei Verarbeitung ignorieren
+
+                            imported_count += 1
+
+                        except Exception as e:
+                            error_count += 1
+                            st.warning(f"⚠️ Fehler bei {filename}: {str(e)[:50]}")
+
+                    progress_bar.progress(1.0, text="✅ Import abgeschlossen!")
+                    status_text.empty()
+
+                    # Ergebnis
+                    st.success(f"✅ **{imported_count} Dokumente erfolgreich importiert!**")
+                    if created_folders:
+                        st.info(f"📁 **{len(created_folders)} Ordner** wurden erstellt")
+                    if error_count > 0:
+                        st.warning(f"⚠️ {error_count} Fehler beim Import")
+
+        except zipfile.BadZipFile:
+            st.error("❌ Ungültige ZIP-Datei. Bitte prüfen Sie das Archiv.")
+        except Exception as e:
+            st.error(f"❌ Fehler beim Lesen der ZIP-Datei: {e}")
+
+    # Option 2: Mehrere Dateien per Drag & Drop
+    st.markdown("---")
+    st.markdown("### 📎 Option 2: Mehrere Dateien hochladen")
+    st.info("💡 Wählen Sie mehrere Dateien aus einem Ordner aus (Strg+A zum Auswählen aller Dateien)")
+
+    multi_files = st.file_uploader(
+        "Dateien auswählen (Mehrfachauswahl möglich)",
+        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
+        accept_multiple_files=True,
+        key="folder_multi_upload",
+        help="Halten Sie Strg/Cmd gedrückt um mehrere Dateien auszuwählen"
+    )
+
+    if multi_files and len(multi_files) > 0:
+        st.success(f"✅ **{len(multi_files)} Dateien** ausgewählt")
+
+        user_id = get_current_user_id()
+
+        # Zielordner auswählen
+        with get_db() as session:
+            folders = session.query(Folder).filter(
+                Folder.user_id == user_id
+            ).order_by(Folder.name).all()
+            folder_options = {f.id: f.name for f in folders}
+            folder_options[None] = "📥 Posteingang"
+
+        target_folder = st.selectbox(
+            "Zielordner",
+            options=list(folder_options.keys()),
+            format_func=lambda x: folder_options.get(x, "Posteingang"),
+            key="multi_target_folder"
+        )
+
+        process_multi = st.checkbox("Dokumente sofort verarbeiten (OCR)", value=True, key="process_multi_files")
+
+        if st.button("📥 Alle Dateien importieren", type="primary", key="import_multi"):
+            progress_bar = st.progress(0, text="Starte Import...")
+
+            imported = 0
+            for idx, file in enumerate(multi_files):
+                progress_bar.progress((idx + 1) / len(multi_files), text=f"Importiere {file.name}...")
+
+                try:
+                    file_data = file.read()
+                    doc_id = save_document(file_data, file.name, user_id)
+
+                    # Zielordner setzen
+                    if target_folder:
+                        with get_db() as session:
+                            doc = session.get(Document, doc_id)
+                            if doc:
+                                doc.folder_id = target_folder
+                                session.commit()
+
+                    # Verarbeiten
+                    if process_multi:
+                        try:
+                            process_document(doc_id, file_data, user_id)
+                        except:
+                            pass
+
+                    imported += 1
+                except Exception as e:
+                    st.warning(f"⚠️ Fehler bei {file.name}: {e}")
+
+            progress_bar.progress(1.0, text="✅ Fertig!")
+            st.success(f"✅ **{imported} Dateien** erfolgreich importiert!")
 
 
 with tab_cloud:
