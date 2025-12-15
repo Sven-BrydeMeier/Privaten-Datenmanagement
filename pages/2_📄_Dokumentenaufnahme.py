@@ -691,7 +691,7 @@ with tab_folder:
     import base64
     import json
 
-    # Drag & Drop Zone mit JavaScript
+    # Drag & Drop Zone mit JavaScript - automatischer Download
     drag_drop_html = """
     <style>
         .drop-zone {
@@ -702,7 +702,7 @@ with tab_folder:
             background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
             transition: all 0.3s ease;
             cursor: pointer;
-            min-height: 200px;
+            min-height: 180px;
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -717,80 +717,39 @@ with tab_folder:
             border-color: #FF9800;
             background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
         }
-        .drop-zone h3 {
-            color: #333;
-            margin: 0 0 10px 0;
-            font-size: 1.5em;
+        .drop-zone.done {
+            border-color: #4CAF50;
+            background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
         }
-        .drop-zone p {
-            color: #666;
-            margin: 5px 0;
-        }
-        .drop-zone .icon {
-            font-size: 4em;
-            margin-bottom: 15px;
-        }
+        .drop-zone h3 { color: #333; margin: 0 0 10px 0; font-size: 1.4em; }
+        .drop-zone p { color: #666; margin: 5px 0; }
+        .drop-zone .icon { font-size: 3.5em; margin-bottom: 10px; }
         .file-list {
-            margin-top: 20px;
-            text-align: left;
-            max-height: 300px;
-            overflow-y: auto;
-            width: 100%;
+            margin-top: 15px; text-align: left; max-height: 200px;
+            overflow-y: auto; width: 100%; font-size: 0.85em;
         }
         .file-item {
-            padding: 8px 12px;
-            background: white;
-            margin: 5px 0;
-            border-radius: 5px;
-            border-left: 4px solid #4CAF50;
-            font-size: 0.9em;
+            padding: 6px 10px; background: white; margin: 3px 0;
+            border-radius: 4px; border-left: 3px solid #4CAF50;
         }
-        .folder-item {
-            border-left-color: #2196F3;
-            font-weight: bold;
-        }
+        .folder-item { border-left-color: #2196F3; font-weight: bold; }
         .progress-bar {
-            width: 100%;
-            height: 10px;
-            background: #ddd;
-            border-radius: 5px;
-            margin: 10px 0;
-            overflow: hidden;
+            width: 100%; height: 8px; background: #ddd;
+            border-radius: 4px; margin: 8px 0; overflow: hidden;
         }
         .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A);
             transition: width 0.3s;
         }
-        .status-text {
-            color: #666;
-            font-size: 0.9em;
-            margin-top: 10px;
-        }
-        #folderInput {
-            display: none;
-        }
-        .btn-select {
-            background: #4CAF50;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 1em;
-            margin-top: 15px;
-            transition: background 0.3s;
-        }
-        .btn-select:hover {
-            background: #45a049;
-        }
+        .status-text { color: #666; font-size: 0.9em; margin-top: 8px; }
+        #folderInput { display: none; }
     </style>
 
     <div class="drop-zone" id="dropZone" onclick="document.getElementById('folderInput').click()">
         <div class="icon">📂</div>
         <h3>Ordner hierher ziehen</h3>
         <p>oder klicken um einen Ordner auszuwählen</p>
-        <p style="font-size: 0.8em; color: #888;">Unterstützt: PDF, JPG, PNG, DOC, DOCX, XLS, XLSX, TXT</p>
+        <p style="font-size: 0.75em; color: #888;">PDF, JPG, PNG, DOC, DOCX, XLS, XLSX, TXT</p>
         <input type="file" id="folderInput" webkitdirectory directory multiple />
         <div id="fileList" class="file-list" style="display: none;"></div>
         <div id="progressContainer" style="display: none; width: 100%;">
@@ -806,183 +765,114 @@ with tab_folder:
         const progressContainer = document.getElementById('progressContainer');
         const progressFill = document.getElementById('progressFill');
         const statusText = document.getElementById('statusText');
-
         const supportedExt = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.doc', '.docx', '.xls', '.xlsx', '.txt'];
 
-        // Drag & Drop Events
         ['dragenter', 'dragover'].forEach(e => {
-            dropZone.addEventListener(e, (evt) => {
-                evt.preventDefault();
-                dropZone.classList.add('drag-over');
-            });
+            dropZone.addEventListener(e, (evt) => { evt.preventDefault(); dropZone.classList.add('drag-over'); });
         });
-
         ['dragleave', 'drop'].forEach(e => {
-            dropZone.addEventListener(e, (evt) => {
-                evt.preventDefault();
-                dropZone.classList.remove('drag-over');
-            });
+            dropZone.addEventListener(e, (evt) => { evt.preventDefault(); dropZone.classList.remove('drag-over'); });
         });
 
-        // Handle drop
         dropZone.addEventListener('drop', async (e) => {
             const items = e.dataTransfer.items;
             if (items) {
                 const files = [];
                 for (let i = 0; i < items.length; i++) {
                     const item = items[i].webkitGetAsEntry();
-                    if (item) {
-                        await traverseFileTree(item, '', files);
-                    }
+                    if (item) await traverseFileTree(item, '', files);
                 }
                 processFiles(files);
             }
         });
 
-        // Handle folder selection
         folderInput.addEventListener('change', async (e) => {
             const files = [];
             for (let i = 0; i < e.target.files.length; i++) {
                 const file = e.target.files[i];
                 const path = file.webkitRelativePath || file.name;
                 const folder = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : '';
-                files.push({
-                    file: file,
-                    path: path,
-                    folder: folder,
-                    name: file.name
-                });
+                files.push({ file: file, path: path, folder: folder, name: file.name });
             }
             processFiles(files);
         });
 
-        // Traverse file tree for drag & drop
         async function traverseFileTree(item, path, files) {
             return new Promise((resolve) => {
                 if (item.isFile) {
                     item.file((file) => {
                         const ext = '.' + file.name.split('.').pop().toLowerCase();
                         if (supportedExt.includes(ext)) {
-                            files.push({
-                                file: file,
-                                path: path + file.name,
-                                folder: path.slice(0, -1),
-                                name: file.name
-                            });
+                            files.push({ file: file, path: path + file.name, folder: path.slice(0, -1), name: file.name });
                         }
                         resolve();
                     });
                 } else if (item.isDirectory) {
                     const dirReader = item.createReader();
                     dirReader.readEntries(async (entries) => {
-                        for (let entry of entries) {
-                            await traverseFileTree(entry, path + item.name + '/', files);
-                        }
+                        for (let entry of entries) await traverseFileTree(entry, path + item.name + '/', files);
                         resolve();
                     });
-                } else {
-                    resolve();
-                }
+                } else { resolve(); }
             });
         }
 
-        // Process and encode files
         async function processFiles(files) {
-            // Filter supported files
             const validFiles = files.filter(f => {
                 const ext = '.' + f.name.split('.').pop().toLowerCase();
                 return supportedExt.includes(ext);
             });
-
-            if (validFiles.length === 0) {
-                alert('Keine unterstützten Dateien gefunden!');
-                return;
-            }
+            if (validFiles.length === 0) { alert('Keine unterstützten Dateien gefunden!'); return; }
 
             dropZone.classList.add('processing');
             progressContainer.style.display = 'block';
             fileList.style.display = 'block';
             fileList.innerHTML = '';
 
-            // Show folders
             const folders = [...new Set(validFiles.map(f => f.folder).filter(f => f))];
-            folders.forEach(folder => {
-                fileList.innerHTML += `<div class="file-item folder-item">📁 ${folder}</div>`;
-            });
+            folders.forEach(folder => { fileList.innerHTML += `<div class="file-item folder-item">📁 ${folder}</div>`; });
 
             const result = [];
             for (let i = 0; i < validFiles.length; i++) {
                 const f = validFiles[i];
-                const progress = ((i + 1) / validFiles.length * 100);
-                progressFill.style.width = progress + '%';
+                progressFill.style.width = ((i + 1) / validFiles.length * 100) + '%';
                 statusText.textContent = `Lese ${i + 1}/${validFiles.length}: ${f.name}`;
-
                 try {
                     const base64 = await readFileAsBase64(f.file);
-                    result.push({
-                        name: f.name,
-                        folder: f.folder,
-                        path: f.path,
-                        data: base64,
-                        size: f.file.size
-                    });
+                    result.push({ name: f.name, folder: f.folder, path: f.path, data: base64, size: f.file.size });
                     fileList.innerHTML += `<div class="file-item">📄 ${f.name} (${formatSize(f.file.size)})</div>`;
-                } catch (err) {
-                    console.error('Error reading file:', f.name, err);
-                }
+                } catch (err) { console.error('Error:', f.name, err); }
             }
 
             progressFill.style.width = '100%';
-            // Store data and create copy button
-            const jsonStr = JSON.stringify(result);
-
-            // Auto-copy to clipboard
-            try {
-                navigator.clipboard.writeText(jsonStr).then(() => {
-                    statusText.innerHTML = `✅ <strong>${result.length} Dateien bereit!</strong><br>` +
-                        `<span style="color: #4CAF50; font-weight: bold;">📋 Automatisch in Zwischenablage kopiert!</span><br>` +
-                        `<span style="font-size: 0.85em;">Fügen Sie die Daten unten ein (Strg+V) und klicken Sie auf "Importieren"</span>`;
-                }).catch(() => {
-                    showManualCopy(jsonStr, result.length);
-                });
-            } catch (e) {
-                showManualCopy(jsonStr, result.length);
-            }
-
             dropZone.classList.remove('processing');
-        }
+            dropZone.classList.add('done');
 
-        function showManualCopy(jsonStr, fileCount) {
-            statusText.innerHTML = `✅ <strong>${fileCount} Dateien bereit!</strong><br>` +
-                `<button onclick="copyData()" style="background: #4CAF50; color: white; border: none; ` +
-                `padding: 10px 20px; border-radius: 5px; cursor: pointer; margin-top: 10px; font-size: 1em;">` +
-                `📋 Daten kopieren</button>`;
+            // Automatischer Download der JSON-Datei
+            const jsonStr = JSON.stringify(result);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ordner_upload_' + new Date().toISOString().slice(0,10) + '.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
 
-            window.copyData = () => {
-                const textarea = document.createElement('textarea');
-                textarea.value = jsonStr;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-                statusText.innerHTML = `✅ <strong>${fileCount} Dateien bereit!</strong><br>` +
-                    `<span style="color: #4CAF50; font-weight: bold;">📋 Kopiert!</span><br>` +
-                    `<span style="font-size: 0.85em;">Fügen Sie die Daten unten ein (Strg+V)</span>`;
-            };
+            statusText.innerHTML = `<strong style="color: #4CAF50;">✅ ${result.length} Dateien bereit!</strong><br>` +
+                `<span style="font-size: 0.9em;">📥 JSON-Datei wurde heruntergeladen.<br>` +
+                `Laden Sie diese Datei unten hoch um den Import abzuschließen.</span>`;
         }
 
         function readFileAsBase64(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
-                reader.onload = () => {
-                    const base64 = reader.result.split(',')[1];
-                    resolve(base64);
-                };
+                reader.onload = () => resolve(reader.result.split(',')[1]);
                 reader.onerror = reject;
                 reader.readAsDataURL(file);
             });
         }
-
         function formatSize(bytes) {
             if (bytes < 1024) return bytes + ' B';
             if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -992,23 +882,17 @@ with tab_folder:
     """
 
     # Render drag & drop component
-    components.html(drag_drop_html, height=450)
+    components.html(drag_drop_html, height=380)
 
-    # Session State für Drag & Drop Daten
-    if 'dd_folder_data' not in st.session_state:
-        st.session_state.dd_folder_data = None
+    # JSON-Datei Upload für Import
+    st.markdown("#### 📤 Schritt 2: Import-Datei hochladen")
+    st.info("💡 Laden Sie die automatisch heruntergeladene JSON-Datei hier hoch um den Import abzuschließen.")
 
-    # Text-Input für JSON-Daten vom JavaScript (hidden workaround)
-    st.markdown("#### Dateien importieren")
-    st.info("💡 **So funktioniert's:** Ziehen Sie einen Ordner in die Box oben oder klicken Sie darauf um einen Ordner auszuwählen. Nachdem die Dateien geladen wurden, fügen Sie die Daten unten ein und klicken Sie auf 'Importieren'.")
-
-    # Textarea für JSON-Daten
-    json_data_input = st.text_area(
-        "JSON-Daten einfügen (aus Browser-Konsole kopieren)",
-        height=100,
-        placeholder='Nach dem Drag & Drop: Öffnen Sie die Browser-Konsole (F12), geben Sie "localStorage.getItem(\'folderUploadData\')" ein und fügen Sie das Ergebnis hier ein...',
-        key="dd_json_input",
-        help="Die Dateien werden im Browser als JSON gespeichert. Kopieren Sie die Daten hierher."
+    json_file_upload = st.file_uploader(
+        "JSON Import-Datei hochladen",
+        type=['json'],
+        key="json_folder_upload",
+        help="Die JSON-Datei, die nach dem Drag & Drop automatisch heruntergeladen wurde"
     )
 
     col_import1, col_import2 = st.columns(2)
@@ -1017,14 +901,14 @@ with tab_folder:
     with col_import2:
         process_dd_ocr = st.checkbox("Mit OCR verarbeiten", value=True, key="process_dd_ocr")
 
-    if st.button("📥 Drag & Drop Dateien importieren", type="primary", key="import_dd_json"):
-        if json_data_input and json_data_input.strip():
+    if json_file_upload is not None:
+        if st.button("📥 Ordner importieren", type="primary", key="import_json_file"):
             try:
                 # JSON parsen
-                files_data = json.loads(json_data_input.strip())
+                files_data = json.loads(json_file_upload.read().decode('utf-8'))
 
                 if not files_data or len(files_data) == 0:
-                    st.error("Keine Dateien in den JSON-Daten gefunden.")
+                    st.error("Keine Dateien in der JSON-Datei gefunden.")
                 else:
                     st.info(f"📂 Importiere {len(files_data)} Dateien...")
 
@@ -1111,8 +995,6 @@ with tab_folder:
                 st.error(f"❌ Ungültiges JSON-Format: {e}")
             except Exception as e:
                 st.error(f"❌ Fehler beim Import: {e}")
-        else:
-            st.warning("⚠️ Bitte fügen Sie die JSON-Daten aus dem Browser ein.")
 
     # Datei-Upload als Fallback mit webkitdirectory
     st.markdown("---")
