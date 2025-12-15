@@ -102,6 +102,28 @@ def run_migrations():
             except Exception:
                 pass
 
+        # Migration 4: folder_keywords Tabelle für benutzerdefinierte Zuordnungen
+        if 'folder_keywords' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS folder_keywords (
+                        id INTEGER PRIMARY KEY,
+                        folder_id INTEGER NOT NULL REFERENCES folders(id),
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        keyword VARCHAR(255) NOT NULL,
+                        weight REAL DEFAULT 1.0,
+                        is_negative BOOLEAN DEFAULT 0,
+                        category VARCHAR(100),
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(folder_id, keyword)
+                    )
+                '''))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_folder_keyword ON folder_keywords(keyword)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_folder_keyword_folder ON folder_keywords(folder_id)'))
+                conn.commit()
+            except Exception:
+                pass
+
 
 def init_db():
     """Initialisiert die Datenbank und erstellt alle Tabellen"""

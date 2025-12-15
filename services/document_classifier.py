@@ -13,7 +13,49 @@ from config.settings import DOCUMENT_CATEGORIES
 
 
 # Erweiterte Kategorie-Patterns mit Untertypen
+# WICHTIG: Reihenfolge bestimmt Priorität - spezifischere Kategorien zuerst!
 CATEGORY_PATTERNS = {
+    # ============================================================
+    # HÖCHSTE PRIORITÄT: Sehr spezifische Dokumenttypen
+    # ============================================================
+    'BWA': {
+        'keywords': ['bwa', 'betriebswirtschaftliche auswertung', 'summen- und saldenliste',
+                     'gewinn- und verlustrechnung', 'g+v', 'guv', 'bilanz', 'jahresabschluss',
+                     'einnahmen-überschuss', 'eür', 'buchführung', 'fibu', 'sachkontenliste',
+                     'offene posten', 'debitorenliste', 'kreditorenliste', 'kostenstellenrechnung'],
+        'subtypes': {},
+        'priority': 100,  # Höchste Priorität
+        'folder': 'Buchhaltung/BWA'
+    },
+    'Buchhaltung': {
+        'keywords': ['buchungsbeleg', 'buchungssatz', 'steuerkonto', 'umsatzsteuer-voranmeldung',
+                     'ust-va', 'zusammenfassende meldung', 'dauerfristverlängerung',
+                     'abschreibung', 'afa', 'anlagenspiegel', 'kassenbuch', 'rechnungseingang',
+                     'rechnungsausgang', 'buchhalter', 'steuerberater'],
+        'subtypes': {
+            'USt': ['umsatzsteuer', 'vorsteuer', 'ust-id', 'mehrwertsteuer'],
+            'Lohn': ['lohnbuchhaltung', 'lohnjournal', 'sv-meldung', 'beitragsnachweis'],
+        },
+        'priority': 95,
+        'folder': 'Buchhaltung'
+    },
+    'Angebot': {
+        'keywords': ['angebot', 'kostenvoranschlag', 'preisangebot', 'offerte',
+                     'angebotsnummer', 'gültig bis', 'unverbindlich'],
+        'subtypes': {},
+        'priority': 80,
+        'folder': 'Geschäftlich/Angebote'
+    },
+    'Lieferschein': {
+        'keywords': ['lieferschein', 'lieferung', 'wareneingang', 'warenausgang',
+                     'packzettel', 'versandbestätigung', 'sendungsnummer'],
+        'subtypes': {},
+        'priority': 75,
+        'folder': 'Geschäftlich/Lieferscheine'
+    },
+    # ============================================================
+    # MITTLERE PRIORITÄT: Standard-Dokumenttypen
+    # ============================================================
     'Rechnung': {
         'keywords': ['rechnung', 'invoice', 'zahlungsziel', 'fällig bis', 'rechnungsnummer',
                      'rechnungsbetrag', 'nettobetrag', 'bruttobetrag', 'zahlbar bis'],
@@ -26,7 +68,8 @@ CATEGORY_PATTERNS = {
             'Miete': ['miete', 'kaltmiete', 'warmmiete', 'mietvertrag'],
             'Nebenkosten': ['nebenkosten', 'betriebskosten', 'hausgeld', 'nebenkostenabrechnung'],
             'Handwerker': ['handwerker', 'reparatur', 'montage', 'installation', 'wartung'],
-        }
+        },
+        'priority': 50
     },
     'Versicherung': {
         'keywords': ['versicherung', 'police', 'versicherungsnummer', 'versicherungsschein',
@@ -37,12 +80,13 @@ CATEGORY_PATTERNS = {
             'Haftpflicht': ['haftpflicht', 'privathaftpflicht', 'haftpflichtversicherung'],
             'Hausrat': ['hausrat', 'hausratversicherung', 'einbruch', 'diebstahl'],
             'Wohngebäude': ['wohngebäude', 'gebäudeversicherung', 'feuer', 'leitungswasser'],
-            'KFZ': ['kfz', 'autoversicherung', 'kasko', 'vollkasko', 'teilkasko', 'fahrzeug'],
+            'KFZ': ['kfz-versicherung', 'autoversicherung', 'kasko', 'vollkasko', 'teilkasko', 'kfz-haftpflicht'],
             'Leben': ['lebensversicherung', 'kapitallebensversicherung', 'risikoleben'],
             'Rente': ['rentenversicherung', 'altersvorsorge', 'riester', 'rürup'],
             'Rechtsschutz': ['rechtsschutz', 'rechtsschutzversicherung', 'anwalt'],
             'Unfall': ['unfallversicherung', 'invalidität', 'unfall'],
-        }
+        },
+        'priority': 50
     },
     'Vertrag': {
         'keywords': ['vertrag', 'vereinbarung', 'unterzeichnung', 'vertragspartner',
@@ -187,20 +231,28 @@ class DocumentClassifier:
         sender = self._detect_sender(text_lower, metadata)
         result['detected_sender'] = sender
 
-        # 2. Bekannte Absender prüfen
+        # 2. HÖCHSTE PRIORITÄT: Benutzerdefinierte Ordner-Keywords prüfen
+        keyword_match = self._match_folder_keywords(text_lower)
+        if keyword_match and keyword_match['confidence'] > 0.3:
+            result['primary_folder_id'] = keyword_match['folder_id']
+            result['confidence'] = keyword_match['confidence']
+            result['reasons'].append(f"Benutzer-Keywords: {', '.join(keyword_match['matches'][:3])}")
+
+        # 3. Bekannte Absender prüfen
         sender_match = self._match_known_sender(sender, text_lower)
-        if sender_match:
+        if sender_match and result['confidence'] < 0.8:
             result['category'] = sender_match['category']
             result['suggested_subfolders'].append(sender_match['folder'])
-            result['confidence'] = 0.8
+            result['confidence'] = max(result['confidence'], 0.8)
             result['reasons'].append(f"Bekannter Absender: {sender}")
 
-        # 3. Kategorie und Unterkategorie bestimmen
+        # 4. Kategorie und Unterkategorie bestimmen (mit Prioritätssystem)
         category, subcategory, cat_confidence = self._determine_category(text_lower)
-        if cat_confidence > result['confidence']:
+        if cat_confidence > result['confidence'] or not result.get('category') or result['category'] == 'Sonstiges':
             result['category'] = category
             result['subcategory'] = subcategory
-            result['confidence'] = cat_confidence
+            if not result['primary_folder_id']:  # Nur wenn noch kein Ordner durch Keywords gefunden
+                result['confidence'] = max(result['confidence'], cat_confidence)
 
         # 4. Adresse/Immobilie erkennen
         address = self._extract_address(text)
@@ -262,20 +314,36 @@ class DocumentClassifier:
         return None
 
     def _determine_category(self, text_lower: str) -> Tuple[str, Optional[str], float]:
-        """Bestimmt Kategorie und Unterkategorie"""
+        """Bestimmt Kategorie und Unterkategorie mit Prioritätssystem"""
         best_category = 'Sonstiges'
         best_subcategory = None
         best_score = 0
+        best_priority = 0
 
-        for category, info in CATEGORY_PATTERNS.items():
+        # Sortiere Kategorien nach Priorität (höchste zuerst)
+        sorted_categories = sorted(
+            CATEGORY_PATTERNS.items(),
+            key=lambda x: x[1].get('priority', 50),
+            reverse=True
+        )
+
+        for category, info in sorted_categories:
+            priority = info.get('priority', 50)
+
             # Hauptkategorie-Keywords prüfen
             category_score = 0
+            matched_keywords = []
             for keyword in info['keywords']:
                 if keyword in text_lower:
                     category_score += 1
+                    matched_keywords.append(keyword)
 
             if category_score > 0:
-                score = category_score / len(info['keywords'])
+                # Score normalisieren
+                base_score = category_score / len(info['keywords'])
+
+                # Prioritäts-Bonus: Hochprioritäre Kategorien gewinnen bei gleichem Score
+                priority_bonus = priority / 1000  # max 0.1 Bonus
 
                 # Unterkategorie prüfen
                 subcategory = None
@@ -283,18 +351,78 @@ class DocumentClassifier:
                     for kw in sub_keywords:
                         if kw in text_lower:
                             subcategory = subcat
-                            score += 0.2  # Bonus für Unterkategorie
+                            base_score += 0.2  # Bonus für Unterkategorie
                             break
                     if subcategory:
                         break
 
-                if score > best_score:
-                    best_score = score
+                final_score = base_score + priority_bonus
+
+                # Bei höherer Priorität oder besserem Score: Update
+                if final_score > best_score or (priority > best_priority and category_score >= 2):
+                    best_score = final_score
+                    best_priority = priority
                     best_category = category
                     best_subcategory = subcategory
 
         confidence = min(0.95, best_score) if best_score > 0 else 0.1
         return best_category, best_subcategory, confidence
+
+    def _match_folder_keywords(self, text_lower: str) -> Optional[Dict]:
+        """Prüft benutzerdefinierte Ordner-Keywords aus der Datenbank"""
+        try:
+            from database.models import FolderKeyword
+        except ImportError:
+            return None
+
+        with get_db() as session:
+            # Alle Keywords des Benutzers laden
+            keywords = session.query(FolderKeyword).filter(
+                FolderKeyword.user_id == self.user_id
+            ).all()
+
+            if not keywords:
+                return None
+
+            # Scores pro Ordner sammeln
+            folder_scores = {}
+
+            for kw in keywords:
+                if kw.keyword.lower() in text_lower:
+                    folder_id = kw.folder_id
+                    if folder_id not in folder_scores:
+                        folder_scores[folder_id] = {'score': 0, 'matches': [], 'negative': 0}
+
+                    if kw.is_negative:
+                        folder_scores[folder_id]['negative'] += kw.weight
+                    else:
+                        folder_scores[folder_id]['score'] += kw.weight
+                        folder_scores[folder_id]['matches'].append(kw.keyword)
+
+            if not folder_scores:
+                return None
+
+            # Beste Übereinstimmung finden (Score minus negative)
+            best_folder = None
+            best_score = 0
+
+            for folder_id, data in folder_scores.items():
+                net_score = data['score'] - data['negative']
+                if net_score > best_score:
+                    best_score = net_score
+                    best_folder = folder_id
+
+            if best_folder and best_score >= 1.0:  # Mindestens 1 Match
+                folder = session.get(Folder, best_folder)
+                if folder:
+                    return {
+                        'folder_id': best_folder,
+                        'folder_name': folder.name,
+                        'confidence': min(0.95, best_score / 3),  # Normalisieren
+                        'matches': folder_scores[best_folder]['matches']
+                    }
+
+        return None
 
     def _extract_address(self, text: str) -> Optional[str]:
         """Extrahiert Adresse aus dem Text (Leistungsort)"""

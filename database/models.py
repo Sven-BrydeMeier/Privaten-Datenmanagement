@@ -540,6 +540,35 @@ class ClassificationRule(Base):
     )
 
 
+class FolderKeyword(Base):
+    """Benutzerdefinierte Keywords für Ordner-Zuordnung"""
+    __tablename__ = 'folder_keywords'
+
+    id = Column(Integer, primary_key=True)
+    folder_id = Column(Integer, ForeignKey('folders.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Keyword und Gewichtung
+    keyword = Column(String(255), nullable=False)  # Das Stichwort
+    weight = Column(Float, default=1.0)  # Gewichtung (höher = wichtiger)
+    is_negative = Column(Boolean, default=False)  # Wenn True: Keyword schließt Ordner aus
+
+    # Optional: Kategorie für zusätzliche Filterung
+    category = Column(String(100))
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    folder = relationship("Folder")
+    user = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint('folder_id', 'keyword', name='unique_folder_keyword'),
+        Index('idx_folder_keyword', 'keyword'),
+        Index('idx_folder_keyword_folder', 'folder_id'),
+    )
+
+
 class SearchIndex(Base):
     """Volltextindex für Dokumente (zusätzlich zu Whoosh)"""
     __tablename__ = 'search_index'
