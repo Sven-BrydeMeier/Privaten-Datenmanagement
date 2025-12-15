@@ -19,3 +19,6 @@ whoosh>=2.7.4
 numpy>=1.24.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
+pdf2image>=1.16.0
+pycryptodome>=3.19.0
+pytesseract>=0.3.10
