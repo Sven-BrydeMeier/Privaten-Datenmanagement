@@ -484,15 +484,27 @@ class CloudSyncService:
                     })
 
             # Methode 2: Suche nach Links mit folders/ (Unterordner)
+            # Ignoriere Navigation/UI-Links
+            ignore_names = ['anmelden', 'sign in', 'login', 'signin', 'abmelden',
+                           'sign out', 'logout', 'hilfe', 'help', 'support',
+                           'drive', 'google', 'home', 'settings', 'einstellungen']
+
             folder_links = soup.find_all('a', href=re.compile(r'folders/'))
             for link in folder_links:
                 href = link.get('href', '')
                 match = re.search(r'folders/([a-zA-Z0-9_-]+)', href)
                 if match:
                     folder_id = match.group(1)
+                    # Google Drive IDs sind typischerweise 25+ Zeichen lang
+                    if len(folder_id) < 20:
+                        continue
                     if folder_id not in [f.get('id') for f in files]:
                         name = link.get_text(strip=True) or f"folder_{folder_id}"
-                        # Nur hinzufügen wenn es nach einem Ordnernamen aussieht
+                        # Filtere UI/Navigation-Elemente aus
+                        name_lower = name.lower()
+                        if any(ignore in name_lower for ignore in ignore_names):
+                            continue
+                        # Nur hinzufügen wenn es nach einem echten Ordnernamen aussieht
                         if name and len(name) > 1 and not name.startswith('folder_'):
                             files.append({
                                 "id": folder_id,
@@ -505,8 +517,15 @@ class CloudSyncService:
             elements_with_data_id = soup.find_all(attrs={"data-id": True})
             for elem in elements_with_data_id:
                 file_id = elem.get('data-id')
-                if file_id and file_id not in [f.get('id') for f in files]:
+                # Validiere ID-Länge (Google IDs sind 20+ Zeichen)
+                if not file_id or len(file_id) < 20:
+                    continue
+                if file_id not in [f.get('id') for f in files]:
                     name = elem.get_text(strip=True) or elem.get('data-tooltip', '') or f"item_{file_id}"
+                    # Filtere UI-Elemente
+                    name_lower = name.lower()
+                    if any(ignore in name_lower for ignore in ignore_names):
+                        continue
                     # Bestimme ob Ordner oder Datei
                     is_folder = 'folder' in elem.get('class', []) or not '.' in name
                     files.append({
