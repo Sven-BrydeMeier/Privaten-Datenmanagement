@@ -695,14 +695,31 @@ with tab_cloud:
 
         # Aktive Sync-Verbindungen anzeigen
         connections = cloud_service.get_connections()
-        active_connections = [c for c in connections if c.is_active and c.sync_interval_minutes]
+        active_connections = [c for c in connections if c.is_active]
 
         if active_connections:
-            st.markdown("### 🔗 Aktive dauerhafte Sync-Verbindungen")
+            st.markdown("### 🔗 Gespeicherte Cloud-Verbindungen")
+
             for conn in active_connections:
                 provider_icon = "📦" if conn.provider == CloudProvider.DROPBOX else "🔵"
                 provider_name = "Dropbox" if conn.provider == CloudProvider.DROPBOX else "Google Drive"
-                st.info(f"{provider_icon} **{provider_name}** - Ordner: {conn.folder_path or conn.folder_id} (alle {conn.sync_interval_minutes} Min.)")
+
+                col_info, col_actions = st.columns([3, 1])
+
+                with col_info:
+                    interval_text = f" (alle {conn.sync_interval_minutes} Min.)" if conn.sync_interval_minutes else " (einmalig)"
+                    folder_display = conn.folder_path or conn.folder_id or "Unbekannt"
+                    # Kürze lange URLs
+                    if len(folder_display) > 60:
+                        folder_display = folder_display[:57] + "..."
+                    st.info(f"{provider_icon} **{provider_name}**{interval_text}\n\n`{folder_display}`")
+
+                with col_actions:
+                    if st.button("🗑️ Löschen", key=f"delete_conn_{conn.id}", help="Verbindung löschen"):
+                        cloud_service.delete_connection(conn.id)
+                        st.success("Verbindung gelöscht!")
+                        st.rerun()
+
             st.markdown("---")
 
         # Schnell-Import Formular
@@ -916,7 +933,33 @@ with tab_cloud:
                                 st.write("2. Oder besuchen Sie **'📁 Dokumente'** um die neuen Dokumente zu sehen")
 
                             elif final_result.get("files_total", 0) == 0:
-                                st.info("📭 Keine neuen Dateien zum Importieren gefunden.")
+                                st.warning("📭 **Keine Dateien gefunden!**")
+
+                                # Zeige den verwendeten Link zur Kontrolle
+                                st.markdown(f"**Verwendeter Link:** `{cloud_link}`")
+
+                                # Hilfreiche Tipps anzeigen
+                                with st.expander("🔍 Mögliche Ursachen & Lösungen", expanded=True):
+                                    st.markdown("""
+**1. Ordner ist nicht öffentlich freigegeben:**
+   - Öffnen Sie den Ordner in Google Drive
+   - Rechtsklick → **Freigeben**
+   - Klicken Sie auf "Zugriff beschränkt" → **"Jeder mit dem Link"**
+   - Stellen Sie sicher, dass "Betrachter" ausgewählt ist
+
+**2. Link ist falsch:**
+   - Der Link muss auf einen **Ordner** zeigen (nicht auf eine einzelne Datei)
+   - Format: `https://drive.google.com/drive/folders/ORDNER_ID`
+
+**3. Ordner ist leer:**
+   - Prüfen Sie, ob der Ordner tatsächlich Dateien enthält
+
+**4. Unterstützte Dateitypen:**
+   - PDF, JPG, JPEG, PNG, GIF, DOC, DOCX, XLS, XLSX, TXT
+                                    """)
+
+                                # Button zum Testen des Links
+                                st.markdown(f"[🔗 Link im Browser öffnen]({cloud_link})")
 
                             if skipped > 0:
                                 st.caption(f"ℹ️ {skipped} Dateien übersprungen (bereits vorhanden oder nicht unterstützt)")
