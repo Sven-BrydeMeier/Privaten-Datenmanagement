@@ -124,6 +124,145 @@ def run_migrations():
             except Exception:
                 pass
 
+        # Migration 5: entities Tabelle für Personen, Fahrzeuge, Lieferanten etc.
+        if 'entities' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS entities (
+                        id INTEGER PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        entity_type VARCHAR(50) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        display_name VARCHAR(255),
+                        aliases JSON,
+                        meta JSON,
+                        parent_entity_id INTEGER REFERENCES entities(id),
+                        folder_id INTEGER REFERENCES folders(id),
+                        is_active BOOLEAN DEFAULT 1,
+                        document_count INTEGER DEFAULT 0,
+                        last_document_date DATETIME,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                '''))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_entity_user ON entities(user_id)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_entity_type ON entities(entity_type)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_entity_name ON entities(name)'))
+                conn.commit()
+            except Exception:
+                pass
+
+        # Migration 6: document_entities Assoziationstabelle
+        if 'document_entities' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS document_entities (
+                        document_id INTEGER NOT NULL REFERENCES documents(id),
+                        entity_id INTEGER NOT NULL REFERENCES entities(id),
+                        relation_type VARCHAR(50),
+                        confidence REAL DEFAULT 1.0,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (document_id, entity_id)
+                    )
+                '''))
+                conn.commit()
+            except Exception:
+                pass
+
+        # Migration 7: feedback_events Tabelle für KI-Lernsystem
+        if 'feedback_events' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS feedback_events (
+                        id INTEGER PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        document_id INTEGER NOT NULL REFERENCES documents(id),
+                        event_type VARCHAR(50) NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        old_value JSON,
+                        new_value JSON,
+                        document_text_snippet TEXT,
+                        document_sender VARCHAR(500),
+                        document_category VARCHAR(100),
+                        processed_for_learning BOOLEAN DEFAULT 0,
+                        processed_at DATETIME
+                    )
+                '''))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback_events(user_id)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_feedback_document ON feedback_events(document_id)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_feedback_type ON feedback_events(event_type)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_feedback_processed ON feedback_events(processed_for_learning)'))
+                conn.commit()
+            except Exception:
+                pass
+
+        # Migration 8: classification_explanations Tabelle für Explainability
+        if 'classification_explanations' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS classification_explanations (
+                        id INTEGER PRIMARY KEY,
+                        document_id INTEGER NOT NULL UNIQUE REFERENCES documents(id),
+                        decision_factors JSON NOT NULL,
+                        summary TEXT,
+                        final_category VARCHAR(100),
+                        final_folder_id INTEGER REFERENCES folders(id),
+                        final_confidence REAL,
+                        alternatives JSON,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                '''))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_explanation_document ON classification_explanations(document_id)'))
+                conn.commit()
+            except Exception:
+                pass
+
+        # Migration 9: smart_folders Spalten erweitern
+        if 'smart_folders' in existing_tables:
+            existing_columns = [col['name'] for col in inspector.get_columns('smart_folders')]
+
+            if 'query_json' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE smart_folders ADD COLUMN query_json JSON'))
+                    conn.commit()
+                except Exception:
+                    pass
+
+            if 'entity_id' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE smart_folders ADD COLUMN entity_id INTEGER REFERENCES entities(id)'))
+                    conn.commit()
+                except Exception:
+                    pass
+
+            if 'show_aggregations' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE smart_folders ADD COLUMN show_aggregations BOOLEAN DEFAULT 0'))
+                    conn.commit()
+                except Exception:
+                    pass
+
+            if 'aggregation_fields' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE smart_folders ADD COLUMN aggregation_fields JSON'))
+                    conn.commit()
+                except Exception:
+                    pass
+
+            if 'cached_count' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE smart_folders ADD COLUMN cached_count INTEGER'))
+                    conn.commit()
+                except Exception:
+                    pass
+
+            if 'cache_updated_at' not in existing_columns:
+                try:
+                    conn.execute(text('ALTER TABLE smart_folders ADD COLUMN cache_updated_at DATETIME'))
+                    conn.commit()
+                except Exception:
+                    pass
+
 
 def init_db():
     """Initialisiert die Datenbank und erstellt alle Tabellen"""

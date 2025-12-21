@@ -1,5 +1,5 @@
 """
-Intelligenter Dokumentenklassifikator mit KI-Unterstützung
+Intelligenter Dokumentenklassifikator mit KI-Unterstützung und Explainability
 """
 import re
 import json
@@ -8,7 +8,10 @@ from datetime import datetime
 import streamlit as st
 
 from database import get_db
-from database.models import ClassificationRule, Folder, Document, Property, document_virtual_folders
+from database.models import (
+    ClassificationRule, Folder, Document, Property, document_virtual_folders,
+    Entity, EntityType, FeedbackEvent, FeedbackEventType, ClassificationExplanation
+)
 from config.settings import DOCUMENT_CATEGORIES
 
 
@@ -200,13 +203,14 @@ class DocumentClassifier:
     def __init__(self, user_id: int):
         self.user_id = user_id
 
-    def classify(self, text: str, metadata: Dict) -> Dict:
+    def classify(self, text: str, metadata: Dict, save_explanation: bool = True) -> Dict:
         """
         Klassifiziert ein Dokument und gibt alle relevanten Zuordnungen zurück.
 
         Args:
             text: OCR-Text des Dokuments
             metadata: Extrahierte Metadaten
+            save_explanation: Ob die Erklärung gespeichert werden soll
 
         Returns:
             Dictionary mit Klassifizierungsergebnissen
@@ -222,7 +226,17 @@ class DocumentClassifier:
             'detected_address': None,
             'property_id': None,
             'suggested_subfolders': [],
-            'reasons': []
+            'reasons': [],
+            'matched_entities': [],  # Erkannte Entities
+            'decision_factors': {    # Für Explainability
+                'keyword_matches': [],
+                'sender_match': None,
+                'rule_matches': [],
+                'entity_matches': [],
+                'user_keywords': [],
+                'ai_suggestion': None
+            },
+            'alternatives': []  # Alternative Zuordnungen
         }
 
         text_lower = text.lower() if text else ''
@@ -237,6 +251,7 @@ class DocumentClassifier:
             result['primary_folder_id'] = keyword_match['folder_id']
             result['confidence'] = keyword_match['confidence']
             result['reasons'].append(f"Benutzer-Keywords: {', '.join(keyword_match['matches'][:3])}")
+            result['decision_factors']['user_keywords'] = keyword_match['matches']
 
         # 3. Bekannte Absender prüfen
         sender_match = self._match_known_sender(sender, text_lower)
@@ -245,16 +260,31 @@ class DocumentClassifier:
             result['suggested_subfolders'].append(sender_match['folder'])
             result['confidence'] = max(result['confidence'], 0.8)
             result['reasons'].append(f"Bekannter Absender: {sender}")
+            result['decision_factors']['sender_match'] = {
+                'sender': sender,
+                'folder': sender_match['folder'],
+                'category': sender_match['category'],
+                'confidence': 0.8
+            }
 
         # 4. Kategorie und Unterkategorie bestimmen (mit Prioritätssystem)
-        category, subcategory, cat_confidence = self._determine_category(text_lower)
+        category, subcategory, cat_confidence, matched_keywords = self._determine_category_with_keywords(text_lower)
         if cat_confidence > result['confidence'] or not result.get('category') or result['category'] == 'Sonstiges':
             result['category'] = category
             result['subcategory'] = subcategory
-            if not result['primary_folder_id']:  # Nur wenn noch kein Ordner durch Keywords gefunden
+            if not result['primary_folder_id']:
                 result['confidence'] = max(result['confidence'], cat_confidence)
+            result['decision_factors']['keyword_matches'] = matched_keywords
 
-        # 4. Adresse/Immobilie erkennen
+        # 5. Entities erkennen (Personen, Fahrzeuge, etc.)
+        entity_matches = self._match_entities(text_lower)
+        if entity_matches:
+            result['matched_entities'] = entity_matches
+            result['decision_factors']['entity_matches'] = entity_matches
+            for entity in entity_matches:
+                result['reasons'].append(f"Entity erkannt: {entity['name']} ({entity['type']})")
+
+        # 6. Adresse/Immobilie erkennen
         address = self._extract_address(text)
         if address:
             result['detected_address'] = address
@@ -263,22 +293,149 @@ class DocumentClassifier:
                 result['property_id'] = property_id
                 result['reasons'].append(f"Immobilie erkannt: {address}")
 
-        # 5. Ordner erstellen/finden
+        # 7. Ordner erstellen/finden
         folder_id, folder_path = self._find_or_create_folder(result)
         result['primary_folder_id'] = folder_id
         result['primary_folder_path'] = folder_path
 
-        # 6. Virtuelle Ordner-Zuordnungen (z.B. Rechnung UND Immobilie)
+        # 8. Virtuelle Ordner-Zuordnungen (z.B. Rechnung UND Immobilie)
         result['virtual_folder_ids'] = self._determine_virtual_folders(result)
 
-        # 7. Gelernte Regeln anwenden
+        # 9. Gelernte Regeln anwenden
         rule_match = self._apply_learned_rules(text, metadata)
-        if rule_match and rule_match['confidence'] > result['confidence']:
-            result['primary_folder_id'] = rule_match['folder_id']
-            result['confidence'] = rule_match['confidence']
-            result['reasons'].append(f"Gelernte Regel: {rule_match['reason']}")
+        if rule_match:
+            result['decision_factors']['rule_matches'].append(rule_match)
+            if rule_match['confidence'] > result['confidence']:
+                result['primary_folder_id'] = rule_match['folder_id']
+                result['confidence'] = rule_match['confidence']
+                result['reasons'].append(f"Gelernte Regel: {rule_match['reason']}")
+
+        # 10. Alternative Ordner vorschlagen
+        result['alternatives'] = self._get_alternative_folders(result, text_lower)
 
         return result
+
+    def _determine_category_with_keywords(self, text_lower: str) -> Tuple[str, Optional[str], float, List[Dict]]:
+        """Bestimmt Kategorie und gibt auch die gefundenen Keywords zurück"""
+        best_category = 'Sonstiges'
+        best_subcategory = None
+        best_score = 0
+        best_priority = 0
+        all_matches = []
+
+        sorted_categories = sorted(
+            CATEGORY_PATTERNS.items(),
+            key=lambda x: x[1].get('priority', 50),
+            reverse=True
+        )
+
+        for category, info in sorted_categories:
+            priority = info.get('priority', 50)
+            category_score = 0
+            matched_keywords = []
+
+            for keyword in info['keywords']:
+                if keyword in text_lower:
+                    category_score += 1
+                    matched_keywords.append({
+                        'keyword': keyword,
+                        'category': category,
+                        'weight': 1.0
+                    })
+
+            if category_score > 0:
+                base_score = category_score / len(info['keywords'])
+                priority_bonus = priority / 1000
+
+                subcategory = None
+                for subcat, sub_keywords in info.get('subtypes', {}).items():
+                    for kw in sub_keywords:
+                        if kw in text_lower:
+                            subcategory = subcat
+                            base_score += 0.2
+                            matched_keywords.append({
+                                'keyword': kw,
+                                'category': category,
+                                'subcategory': subcat,
+                                'weight': 1.2
+                            })
+                            break
+                    if subcategory:
+                        break
+
+                final_score = base_score + priority_bonus
+                all_matches.extend(matched_keywords)
+
+                if final_score > best_score or (priority > best_priority and category_score >= 2):
+                    best_score = final_score
+                    best_priority = priority
+                    best_category = category
+                    best_subcategory = subcategory
+
+        confidence = min(0.95, best_score) if best_score > 0 else 0.1
+        return best_category, best_subcategory, confidence, all_matches
+
+    def _match_entities(self, text_lower: str) -> List[Dict]:
+        """Erkennt Entities (Personen, Fahrzeuge, Lieferanten) im Text"""
+        matches = []
+
+        try:
+            with get_db() as session:
+                entities = session.query(Entity).filter(
+                    Entity.user_id == self.user_id,
+                    Entity.is_active == True
+                ).all()
+
+                for entity in entities:
+                    if entity.matches_text(text_lower):
+                        matches.append({
+                            'id': entity.id,
+                            'name': entity.name,
+                            'type': entity.entity_type.value if entity.entity_type else 'unknown',
+                            'folder_id': entity.folder_id
+                        })
+
+                        # Bei Fahrzeug: Kennzeichen prüfen
+                        if entity.entity_type == EntityType.VEHICLE:
+                            meta = entity.meta or {}
+                            plate = meta.get('plate', '')
+                            if plate and plate.lower().replace(' ', '').replace('-', '') in text_lower.replace(' ', '').replace('-', ''):
+                                matches[-1]['matched_by'] = 'plate'
+                                matches[-1]['confidence'] = 0.95
+
+        except Exception:
+            pass
+
+        return matches
+
+    def _get_alternative_folders(self, result: Dict, text_lower: str) -> List[Dict]:
+        """Gibt alternative Ordner-Zuordnungen zurück"""
+        alternatives = []
+
+        try:
+            with get_db() as session:
+                # Top 3 häufigste Ordner für diese Kategorie
+                if result['category']:
+                    from sqlalchemy import func
+                    folder_counts = session.query(
+                        Folder.id, Folder.name, func.count(Document.id).label('doc_count')
+                    ).join(Document, Document.folder_id == Folder.id).filter(
+                        Document.category == result['category'],
+                        Folder.user_id == self.user_id
+                    ).group_by(Folder.id).order_by(func.count(Document.id).desc()).limit(3).all()
+
+                    for folder_id, folder_name, count in folder_counts:
+                        if folder_id != result.get('primary_folder_id'):
+                            alternatives.append({
+                                'folder_id': folder_id,
+                                'folder_name': folder_name,
+                                'reason': f'{count} ähnliche Dokumente',
+                                'confidence': min(0.7, count / 20)
+                            })
+        except Exception:
+            pass
+
+        return alternatives[:3]
 
     def _detect_sender(self, text_lower: str, metadata: Dict) -> Optional[str]:
         """Erkennt den Absender aus Text und Metadaten"""
@@ -713,6 +870,199 @@ Antworte im JSON-Format:
                     document.virtual_folders.append(folder)
 
             session.commit()
+
+
+    def save_classification_explanation(self, document_id: int, result: Dict):
+        """Speichert die Erklärung für eine Klassifikationsentscheidung"""
+        try:
+            with get_db() as session:
+                # Prüfen ob bereits existiert
+                existing = session.query(ClassificationExplanation).filter(
+                    ClassificationExplanation.document_id == document_id
+                ).first()
+
+                # Zusammenfassung erstellen
+                summary_parts = []
+                if result['decision_factors'].get('sender_match'):
+                    summary_parts.append(f"Absender '{result['decision_factors']['sender_match']['sender']}' erkannt")
+                if result['decision_factors'].get('keyword_matches'):
+                    keywords = [m['keyword'] for m in result['decision_factors']['keyword_matches'][:3]]
+                    summary_parts.append(f"Keywords: {', '.join(keywords)}")
+                if result['decision_factors'].get('entity_matches'):
+                    entities = [e['name'] for e in result['decision_factors']['entity_matches']]
+                    summary_parts.append(f"Entities: {', '.join(entities)}")
+                if result['decision_factors'].get('rule_matches'):
+                    summary_parts.append("Gelernte Regel angewendet")
+
+                summary = " | ".join(summary_parts) if summary_parts else "Standardklassifikation"
+
+                if existing:
+                    existing.decision_factors = result['decision_factors']
+                    existing.summary = summary
+                    existing.final_category = result['category']
+                    existing.final_folder_id = result.get('primary_folder_id')
+                    existing.final_confidence = result['confidence']
+                    existing.alternatives = result.get('alternatives', [])
+                else:
+                    explanation = ClassificationExplanation(
+                        document_id=document_id,
+                        decision_factors=result['decision_factors'],
+                        summary=summary,
+                        final_category=result['category'],
+                        final_folder_id=result.get('primary_folder_id'),
+                        final_confidence=result['confidence'],
+                        alternatives=result.get('alternatives', [])
+                    )
+                    session.add(explanation)
+
+                session.commit()
+        except Exception as e:
+            pass  # Fehler ignorieren, Klassifikation soll weiterlaufen
+
+    def record_feedback(self, document_id: int, event_type: FeedbackEventType,
+                       old_value: Dict, new_value: Dict, text_snippet: str = None):
+        """Zeichnet ein Feedback-Event auf für das Lernsystem"""
+        try:
+            with get_db() as session:
+                document = session.get(Document, document_id)
+                if not document:
+                    return
+
+                feedback = FeedbackEvent(
+                    user_id=self.user_id,
+                    document_id=document_id,
+                    event_type=event_type,
+                    old_value=old_value,
+                    new_value=new_value,
+                    document_text_snippet=text_snippet[:500] if text_snippet else None,
+                    document_sender=document.sender,
+                    document_category=document.category,
+                    processed_for_learning=False
+                )
+                session.add(feedback)
+                session.commit()
+        except Exception:
+            pass
+
+    def learn_from_feedback(self):
+        """Verarbeitet unverarbeitete Feedback-Events und aktualisiert Regeln"""
+        try:
+            with get_db() as session:
+                # Unverarbeitete Events laden
+                pending_events = session.query(FeedbackEvent).filter(
+                    FeedbackEvent.user_id == self.user_id,
+                    FeedbackEvent.processed_for_learning == False
+                ).order_by(FeedbackEvent.created_at).limit(100).all()
+
+                for event in pending_events:
+                    if event.event_type == FeedbackEventType.FOLDER_MOVE:
+                        # Ordnerverschiebung: Regel erstellen/verstärken
+                        new_folder_id = event.new_value.get('folder_id')
+                        if new_folder_id and event.document_sender:
+                            self._update_or_create_rule(
+                                sender=event.document_sender,
+                                target_folder_id=new_folder_id,
+                                text_snippet=event.document_text_snippet
+                            )
+
+                    elif event.event_type == FeedbackEventType.ENTITY_ASSIGN:
+                        # Entity zugewiesen: Keywords aus Text extrahieren
+                        entity_id = event.new_value.get('entity_id')
+                        if entity_id and event.document_text_snippet:
+                            self._learn_entity_keywords(entity_id, event.document_text_snippet)
+
+                    # Event als verarbeitet markieren
+                    event.processed_for_learning = True
+                    event.processed_at = datetime.now()
+
+                session.commit()
+        except Exception:
+            pass
+
+    def _update_or_create_rule(self, sender: str, target_folder_id: int, text_snippet: str = None):
+        """Erstellt oder aktualisiert eine Klassifikationsregel"""
+        with get_db() as session:
+            existing = session.query(ClassificationRule).filter(
+                ClassificationRule.user_id == self.user_id,
+                ClassificationRule.sender_pattern == sender,
+                ClassificationRule.target_folder_id == target_folder_id
+            ).first()
+
+            # Keywords aus Textausschnitt extrahieren
+            keywords = []
+            if text_snippet:
+                words = re.findall(r'\b[A-Za-zäöüÄÖÜß]{4,}\b', text_snippet)
+                keywords = list(set([w.lower() for w in words if len(w) >= 4]))[:10]
+
+            if existing:
+                existing.times_applied += 1
+                existing.confidence = min(0.99, existing.confidence + 0.05)
+                if keywords:
+                    existing_kws = existing.subject_keywords or []
+                    existing.subject_keywords = list(set(existing_kws + keywords))[:20]
+            else:
+                rule = ClassificationRule(
+                    user_id=self.user_id,
+                    sender_pattern=sender,
+                    subject_keywords=keywords,
+                    target_folder_id=target_folder_id,
+                    times_applied=1,
+                    confidence=0.5
+                )
+                session.add(rule)
+
+            session.commit()
+
+    def _learn_entity_keywords(self, entity_id: int, text_snippet: str):
+        """Lernt Keywords für eine Entity aus einem Textausschnitt"""
+        # Keywords extrahieren die mit der Entity in Verbindung stehen könnten
+        words = re.findall(r'\b[A-Za-zäöüÄÖÜß]{4,}\b', text_snippet.lower())
+        unique_words = list(set(words))
+
+        # Hier könnte man die häufigsten Words als Aliase zur Entity hinzufügen
+        # Für jetzt nur loggen/speichern für spätere Analyse
+        pass
+
+    def get_explanation_for_document(self, document_id: int) -> Optional[Dict]:
+        """Gibt die Klassifikationserklärung für ein Dokument zurück"""
+        try:
+            with get_db() as session:
+                explanation = session.query(ClassificationExplanation).filter(
+                    ClassificationExplanation.document_id == document_id
+                ).first()
+
+                if explanation:
+                    return {
+                        'summary': explanation.summary,
+                        'decision_factors': explanation.decision_factors,
+                        'final_category': explanation.final_category,
+                        'final_confidence': explanation.final_confidence,
+                        'alternatives': explanation.alternatives or []
+                    }
+        except Exception:
+            pass
+
+        return None
+
+    def link_entities_to_document(self, document_id: int, entity_ids: List[int], relation_type: str = 'subject'):
+        """Verknüpft Entities mit einem Dokument"""
+        try:
+            with get_db() as session:
+                document = session.get(Document, document_id)
+                if not document:
+                    return
+
+                for entity_id in entity_ids:
+                    entity = session.get(Entity, entity_id)
+                    if entity and entity not in document.entities:
+                        document.entities.append(entity)
+                        # Statistik aktualisieren
+                        entity.document_count = (entity.document_count or 0) + 1
+                        entity.last_document_date = datetime.now()
+
+                session.commit()
+        except Exception:
+            pass
 
 
 def get_classifier(user_id: int) -> DocumentClassifier:

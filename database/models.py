@@ -371,7 +371,7 @@ class Email(Base):
 
 
 class SmartFolder(Base):
-    """Intelligente Ordner basierend auf Filterregeln"""
+    """Intelligente Ordner basierend auf Filterregeln (erweitert mit query_json)"""
     __tablename__ = 'smart_folders'
 
     id = Column(Integer, primary_key=True)
@@ -382,16 +382,44 @@ class SmartFolder(Base):
     icon = Column(String(50))
     color = Column(String(7))
 
-    # Filterregeln als JSON
+    # Alte Filterregeln (Rückwärtskompatibilität)
     # Format: {"category": "Rechnung", "invoice_status": "open", "date_range": {...}}
     filter_rules = Column(JSON, nullable=False)
+
+    # Neue erweiterte Query (JSON-basierte Abfragesprache)
+    # Format: {
+    #   "operator": "AND",
+    #   "conditions": [
+    #     {"field": "category", "op": "=", "value": "Rechnung"},
+    #     {"field": "invoice_status", "op": "IN", "value": ["open", "overdue"]},
+    #     {"field": "document_date", "op": ">=", "value": "2024-01-01"},
+    #     {"field": "entity_id", "op": "=", "value": 5},  # Entity-Filter
+    #     {"field": "sender", "op": "CONTAINS", "value": "telekom"}
+    #   ]
+    # }
+    query_json = Column(JSON)
+
+    # Entity-Verknüpfung (optional: SmartFolder für bestimmte Entity)
+    entity_id = Column(Integer, ForeignKey('entities.id'))
+
+    # Aggregationen anzeigen?
+    show_aggregations = Column(Boolean, default=False)
+    # Format: ["sum:invoice_amount", "count:category", "avg:ocr_confidence"]
+    aggregation_fields = Column(JSON)
 
     # Sortierung
     sort_by = Column(String(50), default="document_date")
     sort_order = Column(String(4), default="desc")
 
+    # Cache für Performance
+    cached_count = Column(Integer)
+    cache_updated_at = Column(DateTime)
+
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    entity = relationship("Entity")
 
 
 class Cart(Base):
@@ -1072,4 +1100,183 @@ class VoiceCommand(Base):
     __table_args__ = (
         Index('idx_voice_cmd_user', 'user_id'),
         Index('idx_voice_cmd_type', 'command_type'),
+    )
+
+
+# ============================================================
+# ENTITY-SYSTEM: Personen, Fahrzeuge, Lieferanten etc.
+# ============================================================
+
+class EntityType(enum.Enum):
+    """Typ einer Entität"""
+    PERSON = "person"           # Person (z.B. Familienmitglied)
+    VEHICLE = "vehicle"         # Fahrzeug
+    SUPPLIER = "supplier"       # Lieferant/Dienstleister
+    PROPERTY = "property"       # Immobilie (Link zu Property-Tabelle)
+    ORGANIZATION = "organization"  # Organisation/Verein
+    PROJECT = "project"         # Projekt
+    CONTRACT = "contract"       # Vertrag (Multi-Topic)
+
+
+# Assoziationstabelle für Dokument-Entity-Verknüpfungen
+document_entities = Table(
+    'document_entities',
+    Base.metadata,
+    Column('document_id', Integer, ForeignKey('documents.id'), primary_key=True),
+    Column('entity_id', Integer, ForeignKey('entities.id'), primary_key=True),
+    Column('relation_type', String(50)),  # owner, sender, subject, mentioned
+    Column('confidence', Float, default=1.0),
+    Column('created_at', DateTime, default=func.now())
+)
+
+
+class Entity(Base):
+    """Entität für intelligente Zuordnung (Person, Fahrzeug, Lieferant, etc.)"""
+    __tablename__ = 'entities'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Typ und Name
+    entity_type = Column(SQLEnum(EntityType), nullable=False)
+    name = Column(String(255), nullable=False)  # Hauptname
+    display_name = Column(String(255))  # Anzeigename (optional)
+
+    # Aliase für Erkennung (JSON-Array)
+    # z.B. ["Piet Meier", "P. Meier", "Piet"]
+    aliases = Column(JSON, default=list)
+
+    # Metadaten (flexibel je nach Typ)
+    # Person: {"birthday": "2015-03-15", "minor": true, "relation": "Sohn"}
+    # Vehicle: {"plate": "B-AB 1234", "brand": "VW", "model": "Golf", "vin": "..."}
+    # Supplier: {"category": "Handwerker", "industry": "Elektrik"}
+    meta = Column(JSON, default=dict)
+
+    # Verknüpfungen
+    parent_entity_id = Column(Integer, ForeignKey('entities.id'))  # z.B. Fahrzeug gehört zu Person
+    folder_id = Column(Integer, ForeignKey('folders.id'))  # Zugeordneter Ordner
+
+    # Status
+    is_active = Column(Boolean, default=True)
+
+    # Statistik
+    document_count = Column(Integer, default=0)  # Anzahl verknüpfter Dokumente
+    last_document_date = Column(DateTime)  # Datum des letzten Dokuments
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    user = relationship("User")
+    parent = relationship("Entity", remote_side=[id], backref="children")
+    folder = relationship("Folder")
+    documents = relationship("Document", secondary=document_entities, backref="entities")
+
+    def add_alias(self, alias: str):
+        """Fügt einen Alias hinzu"""
+        if self.aliases is None:
+            self.aliases = []
+        if alias and alias not in self.aliases:
+            self.aliases.append(alias)
+
+    def matches_text(self, text: str) -> bool:
+        """Prüft ob der Name oder ein Alias im Text vorkommt"""
+        text_lower = text.lower()
+        if self.name.lower() in text_lower:
+            return True
+        if self.aliases:
+            for alias in self.aliases:
+                if alias.lower() in text_lower:
+                    return True
+        return False
+
+    __table_args__ = (
+        Index('idx_entity_user', 'user_id'),
+        Index('idx_entity_type', 'entity_type'),
+        Index('idx_entity_name', 'name'),
+    )
+
+
+class FeedbackEventType(enum.Enum):
+    """Typ eines Feedback-Events"""
+    FOLDER_MOVE = "folder_move"         # Dokument in anderen Ordner verschoben
+    CATEGORY_CHANGE = "category_change"  # Kategorie geändert
+    ENTITY_ASSIGN = "entity_assign"      # Entity zugewiesen
+    ENTITY_REMOVE = "entity_remove"      # Entity entfernt
+    TAG_ADD = "tag_add"                  # Tag hinzugefügt
+    TAG_REMOVE = "tag_remove"            # Tag entfernt
+    METADATA_EDIT = "metadata_edit"      # Metadaten korrigiert
+    CLASSIFICATION_REJECT = "classification_reject"  # Klassifikation abgelehnt
+
+
+class FeedbackEvent(Base):
+    """Feedback-Event für KI-Lernsystem (speichert Nutzerkorrekturen)"""
+    __tablename__ = 'feedback_events'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)
+
+    # Event-Typ und Zeitpunkt
+    event_type = Column(SQLEnum(FeedbackEventType), nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
+    # Vorher/Nachher-Werte
+    old_value = Column(JSON)  # {"folder_id": 5, "folder_name": "Rechnungen"}
+    new_value = Column(JSON)  # {"folder_id": 12, "folder_name": "KFZ/Versicherung"}
+
+    # Kontext für Lernen
+    document_text_snippet = Column(Text)  # Relevanter Textausschnitt (max 500 Zeichen)
+    document_sender = Column(String(500))  # Absender zum Zeitpunkt des Events
+    document_category = Column(String(100))  # Kategorie zum Zeitpunkt des Events
+
+    # Wurde die Änderung für Lernen verwendet?
+    processed_for_learning = Column(Boolean, default=False)
+    processed_at = Column(DateTime)
+
+    # Beziehungen
+    user = relationship("User")
+    document = relationship("Document")
+
+    __table_args__ = (
+        Index('idx_feedback_user', 'user_id'),
+        Index('idx_feedback_document', 'document_id'),
+        Index('idx_feedback_type', 'event_type'),
+        Index('idx_feedback_processed', 'processed_for_learning'),
+    )
+
+
+class ClassificationExplanation(Base):
+    """Erklärung für Klassifikationsentscheidung (Explainability)"""
+    __tablename__ = 'classification_explanations'
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False, unique=True)
+
+    # Entscheidungsfaktoren (JSON)
+    # {"keyword_matches": [{"keyword": "rechnung", "weight": 0.8, "category": "Rechnung"}],
+    #  "sender_match": {"sender": "Telekom", "confidence": 0.9},
+    #  "rule_matches": [{"rule_id": 5, "confidence": 0.7}],
+    #  "ai_suggestion": {"category": "Vertrag", "confidence": 0.6}}
+    decision_factors = Column(JSON, nullable=False)
+
+    # Zusammenfassung für Benutzer
+    summary = Column(Text)  # "Eingeordnet wegen: Rechnung erkannt, Absender 'Telekom' bekannt"
+
+    # Finale Entscheidung
+    final_category = Column(String(100))
+    final_folder_id = Column(Integer, ForeignKey('folders.id'))
+    final_confidence = Column(Float)
+
+    # Alternative Vorschläge
+    alternatives = Column(JSON)  # [{"folder_id": 10, "name": "Verträge", "confidence": 0.4}]
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    document = relationship("Document")
+    final_folder = relationship("Folder")
+
+    __table_args__ = (
+        Index('idx_explanation_document', 'document_id'),
     )
