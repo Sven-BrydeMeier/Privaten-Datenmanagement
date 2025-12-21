@@ -16,7 +16,7 @@ from database.models import (
     Receipt, EventType, BankAccount
 )
 from config.settings import get_settings
-from utils.components import render_sidebar_cart, apply_custom_css
+from utils.components import render_sidebar_with_navigation, apply_custom_css
 from utils.helpers import format_currency, format_date, calculate_days_until, get_local_now
 
 # Seitenkonfiguration
@@ -850,7 +850,13 @@ def get_upcoming_birthdays(user_id: int, limit: int = 5) -> list:
 
 # Hauptanwendung
 def main():
-    render_sidebar_cart()
+    # Aktuelle Seite in Session speichern für Navigation-Highlighting
+    st.session_state['_current_page'] = 'streamlit_app.py'
+
+    # Neue smarte Navigation rendern
+    render_sidebar_with_navigation()
+
+    # Dashboard anzeigen
     render_dashboard()
 
 
