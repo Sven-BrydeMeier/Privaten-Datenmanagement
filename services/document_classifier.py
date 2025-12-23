@@ -665,71 +665,100 @@ class DocumentClassifier:
         """Erstellt Ordnerstruktur und gibt die ID des letzten Ordners zurück"""
         from sqlalchemy.exc import IntegrityError
 
-        parts = path.split('/')
+        parts = [p.strip() for p in path.split('/') if p.strip()]
+        if not parts:
+            return None
+
         parent_id = None
 
+        # Jeden Ordner einzeln in eigener Transaktion erstellen
+        for part in parts:
+            folder_id = self._get_or_create_single_folder(part, parent_id)
+            if folder_id is None:
+                return None
+            parent_id = folder_id
+
+        return parent_id
+
+    def _get_or_create_single_folder(self, name: str, parent_id: Optional[int]) -> Optional[int]:
+        """Erstellt oder findet einen einzelnen Ordner (atomare Operation)"""
+        from sqlalchemy.exc import IntegrityError
+
+        # Erst versuchen, existierenden Ordner zu finden
         try:
             with get_db() as session:
-                for part in parts:
-                    if not part.strip():
-                        continue
-
-                    # Ordner suchen
-                    folder = session.query(Folder).filter(
-                        Folder.user_id == self.user_id,
-                        Folder.name == part,
-                        Folder.parent_id == parent_id
-                    ).first()
-
-                    if not folder:
-                        try:
-                            # Ordner erstellen
-                            folder = Folder(
-                                user_id=self.user_id,
-                                name=part,
-                                parent_id=parent_id,
-                                color="#4CAF50"
-                            )
-                            session.add(folder)
-                            session.flush()
-                        except IntegrityError:
-                            # Ordner wurde zwischenzeitlich erstellt (Race Condition)
-                            session.rollback()
-                            folder = session.query(Folder).filter(
-                                Folder.user_id == self.user_id,
-                                Folder.name == part,
-                                Folder.parent_id == parent_id
-                            ).first()
-                            if not folder:
-                                return None
-
-                    parent_id = folder.id
-
-                session.commit()
-                return parent_id
+                folder = session.query(Folder).filter(
+                    Folder.user_id == self.user_id,
+                    Folder.name == name,
+                    Folder.parent_id == parent_id
+                ).first()
+                if folder:
+                    return folder.id
         except Exception:
-            return None
+            pass
+
+        # Ordner existiert nicht - versuchen zu erstellen
+        try:
+            with get_db() as session:
+                folder = Folder(
+                    user_id=self.user_id,
+                    name=name,
+                    parent_id=parent_id,
+                    color="#4CAF50"
+                )
+                session.add(folder)
+                session.commit()
+                return folder.id
+        except IntegrityError:
+            # Wurde zeitgleich von anderem Prozess erstellt - nochmal suchen
+            pass
+        except Exception:
+            pass
+
+        # Fallback: Nochmal suchen nach Race Condition
+        try:
+            with get_db() as session:
+                folder = session.query(Folder).filter(
+                    Folder.user_id == self.user_id,
+                    Folder.name == name,
+                    Folder.parent_id == parent_id
+                ).first()
+                if folder:
+                    return folder.id
+        except Exception:
+            pass
+
+        return None
 
     def _determine_virtual_folders(self, result: Dict) -> List[int]:
         """Bestimmt zusätzliche virtuelle Ordner-Zuordnungen"""
         virtual_ids = []
 
-        # Wenn Immobilie erkannt, auch in Immobilien-Ordner
-        if result.get('property_id'):
-            with get_db() as session:
-                prop = session.get(Property, result['property_id'])
-                if prop:
-                    # Ordner für diese Immobilie finden/erstellen
-                    folder_path = f"Immobilien/{prop.name or prop.city or 'Unbekannt'}"
-                    folder_id = self._get_or_create_folder_path(folder_path)
-                    if folder_id and folder_id != result.get('primary_folder_id'):
-                        virtual_ids.append(folder_id)
+        try:
+            # Wenn Immobilie erkannt, auch in Immobilien-Ordner
+            if result.get('property_id'):
+                try:
+                    with get_db() as session:
+                        prop = session.get(Property, result['property_id'])
+                        if prop:
+                            # Ordner für diese Immobilie finden/erstellen
+                            folder_path = f"Immobilien/{prop.name or prop.city or 'Unbekannt'}"
+                            folder_id = self._get_or_create_folder_path(folder_path)
+                            if folder_id and folder_id != result.get('primary_folder_id'):
+                                virtual_ids.append(folder_id)
+                except Exception:
+                    pass
 
-        # Rechnungen auch in Rechnungen-Ordner
-        if result['category'] == 'Rechnung' and result.get('primary_folder_id'):
-            rechnungen_id = self._get_or_create_folder_path('Rechnungen')
-            if rechnungen_id and rechnungen_id != result.get('primary_folder_id'):
-                virtual_ids.append(rechnungen_id)
+            # Rechnungen auch in Rechnungen-Ordner
+            if result.get('category') == 'Rechnung' and result.get('primary_folder_id'):
+                try:
+                    rechnungen_id = self._get_or_create_folder_path('Rechnungen')
+                    if rechnungen_id and rechnungen_id != result.get('primary_folder_id'):
+                        virtual_ids.append(rechnungen_id)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         return virtual_ids
 
