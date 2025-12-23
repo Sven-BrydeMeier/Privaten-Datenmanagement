@@ -107,6 +107,27 @@ class EncryptionService:
         aesgcm = AESGCM(self.master_key)
         return aesgcm.decrypt(nonce, ciphertext, associated_data)
 
+    def _normalize_filename_for_aad(self, filename: str) -> bytes:
+        """
+        Normalisiert einen Dateinamen für konsistente AAD-Verwendung.
+        Stellt sicher, dass Umlaute (ä, ö, ü) konsistent behandelt werden.
+        """
+        import unicodedata
+
+        # Sicherstellen, dass es ein String ist
+        if isinstance(filename, bytes):
+            try:
+                filename = filename.decode('utf-8')
+            except UnicodeDecodeError:
+                filename = filename.decode('latin-1')
+
+        # NFC-Normalisierung für konsistente Unicode-Darstellung
+        # Dies ist wichtig für Umlaute, die auf verschiedenen Systemen
+        # unterschiedlich kodiert sein können (precomposed vs decomposed)
+        normalized = unicodedata.normalize('NFC', filename)
+
+        return normalized.encode('utf-8')
+
     def encrypt_file(self, file_data: bytes, filename: str) -> Tuple[bytes, bytes]:
         """
         Verschlüsselt eine Datei.
@@ -118,8 +139,8 @@ class EncryptionService:
         Returns:
             Tuple aus (verschlüsselte Daten, Nonce)
         """
-        # Dateiname als zusätzliche authentifizierte Daten
-        aad = filename.encode('utf-8')
+        # Dateiname als zusätzliche authentifizierte Daten (mit Unicode-Normalisierung)
+        aad = self._normalize_filename_for_aad(filename)
         return self.encrypt(file_data, aad)
 
     def decrypt_file(self, ciphertext: bytes, nonce: bytes, filename: str) -> bytes:
@@ -134,7 +155,8 @@ class EncryptionService:
         Returns:
             Entschlüsselte Datei
         """
-        aad = filename.encode('utf-8')
+        # Gleiche Normalisierung wie bei Verschlüsselung
+        aad = self._normalize_filename_for_aad(filename)
         return self.decrypt(ciphertext, nonce, aad)
 
     @staticmethod

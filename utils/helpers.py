@@ -329,21 +329,62 @@ def truncate_text(text: str, max_length: int = 100, suffix: str = "...") -> str:
 
 
 def sanitize_filename(filename: str) -> str:
-    """Bereinigt einen Dateinamen"""
-    # Ungültige Zeichen entfernen
-    invalid_chars = '<>:"/\\|?*'
+    """
+    Bereinigt einen Dateinamen für sichere Speicherung.
+    Behält Umlaute (ä, ö, ü) und andere Unicode-Zeichen bei.
+    """
+    import unicodedata
+
+    # Stelle sicher, dass es ein String ist
+    if not isinstance(filename, str):
+        try:
+            filename = filename.decode('utf-8')
+        except (AttributeError, UnicodeDecodeError):
+            filename = str(filename)
+
+    # Normalisiere Unicode (NFC-Form für konsistente Darstellung von Umlauten)
+    # Dies stellt sicher, dass ä als ein Zeichen behandelt wird, nicht als a + ̈
+    filename = unicodedata.normalize('NFC', filename)
+
+    # Nur wirklich ungültige Zeichen für Dateisysteme entfernen
+    # Umlaute und andere Buchstaben bleiben erhalten!
+    invalid_chars = '<>:"/\\|?*\x00'
     for char in invalid_chars:
         filename = filename.replace(char, '_')
+
+    # Steuerzeichen entfernen (aber keine normalen Unicode-Zeichen wie Umlaute)
+    filename = ''.join(char for char in filename if ord(char) >= 32 or char in '\t\n')
 
     # Führende/nachfolgende Leerzeichen und Punkte entfernen
     filename = filename.strip('. ')
 
-    # Maximale Länge
+    # Maximale Länge (Zeichen, nicht Bytes)
     if len(filename) > 200:
         name, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
         filename = name[:200] + ('.' + ext if ext else '')
 
     return filename or 'unnamed'
+
+
+def safe_filename_for_encryption(filename: str) -> str:
+    """
+    Erstellt einen sicheren Dateinamen für die Verschlüsselung.
+    Normalisiert Unicode um konsistente AAD zu gewährleisten.
+    """
+    import unicodedata
+
+    if not filename:
+        return 'unnamed'
+
+    # Konvertiere zu String falls nötig
+    if isinstance(filename, bytes):
+        try:
+            filename = filename.decode('utf-8')
+        except UnicodeDecodeError:
+            filename = filename.decode('latin-1')
+
+    # NFC-Normalisierung für konsistente Verschlüsselung
+    return unicodedata.normalize('NFC', filename)
 
 
 def get_file_icon(mime_type: str) -> str:

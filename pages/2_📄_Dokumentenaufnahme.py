@@ -184,15 +184,27 @@ tab_upload, tab_multi, tab_folder, tab_cloud, tab_process = st.tabs([
 
 def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
     """Speichert ein Dokument verschlüsselt und erstellt DB-Eintrag"""
+    import unicodedata
+
     encryption = get_encryption_service()
+
+    # Dateiname normalisieren für konsistente Umlaut-Behandlung
+    if isinstance(filename, bytes):
+        try:
+            filename = filename.decode('utf-8')
+        except UnicodeDecodeError:
+            filename = filename.decode('latin-1', errors='replace')
+
+    # Unicode-Normalisierung (NFC) für konsistente Umlaute (ä, ö, ü)
+    filename = unicodedata.normalize('NFC', filename)
 
     # Content-Hash berechnen
     content_hash = calculate_content_hash(file_data)
 
-    # Datei verschlüsseln
+    # Datei verschlüsseln (verwendet intern auch NFC-Normalisierung)
     encrypted_data, nonce = encryption.encrypt_file(file_data, filename)
 
-    # Sicheren Dateinamen generieren
+    # Sicheren Dateinamen generieren (behält Umlaute bei)
     safe_filename = sanitize_filename(filename)
     timestamp = get_local_now().strftime("%Y%m%d_%H%M%S")
     stored_filename = f"{timestamp}_{safe_filename}.enc"
@@ -848,7 +860,30 @@ with tab_folder:
             zip_buffer = BytesIO(zip_file.read())
             with zipfile.ZipFile(zip_buffer, 'r') as zf:
                 # Alle Dateien im ZIP auflisten
-                all_files = [f for f in zf.namelist() if not f.endswith('/')]
+                # Dekodiere Dateinamen korrekt (ZIP kann CP437 oder UTF-8 verwenden)
+                def decode_zip_filename(name):
+                    """Dekodiert ZIP-Dateinamen mit Umlaut-Unterstützung"""
+                    import unicodedata
+                    try:
+                        # Versuche UTF-8 (moderne ZIPs)
+                        if isinstance(name, bytes):
+                            decoded = name.decode('utf-8')
+                        else:
+                            decoded = name
+                        # Normalisiere Unicode für konsistente Umlaute
+                        return unicodedata.normalize('NFC', decoded)
+                    except UnicodeDecodeError:
+                        try:
+                            # Fallback: CP437 (alte ZIP-Kodierung)
+                            return name.decode('cp437')
+                        except (UnicodeDecodeError, AttributeError):
+                            try:
+                                # Weiterer Fallback: Latin-1
+                                return name.decode('latin-1') if isinstance(name, bytes) else name
+                            except:
+                                return str(name)
+
+                all_files = [decode_zip_filename(f) for f in zf.namelist() if not f.endswith('/')]
 
                 # Nur unterstützte Dateitypen
                 supported_ext = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.doc', '.docx', '.xls', '.xlsx', '.txt']
