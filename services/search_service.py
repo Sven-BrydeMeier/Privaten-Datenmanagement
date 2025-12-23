@@ -3,14 +3,17 @@ Volltext-Suchservice mit Whoosh
 """
 import os
 import warnings
+
+# WICHTIG: Whoosh-Warnungen FRÜH unterdrücken (vor Import!)
+# Whoosh verwendet alte Regex-Syntax ohne Raw-Strings, was Python 3.13 warnt
+warnings.filterwarnings('ignore', category=SyntaxWarning, module='whoosh')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module='whoosh')
+
 from typing import List, Dict, Optional
 from datetime import datetime
 import streamlit as st
 
 from config.settings import INDEX_DIR
-
-# Whoosh-Warnungen unterdrücken (Kompatibilitätsprobleme mit Python 3.13)
-warnings.filterwarnings('ignore', category=SyntaxWarning, module='whoosh')
 
 
 class SearchService:
