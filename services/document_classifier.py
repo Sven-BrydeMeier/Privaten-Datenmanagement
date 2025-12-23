@@ -663,33 +663,52 @@ class DocumentClassifier:
 
     def _get_or_create_folder_path(self, path: str) -> Optional[int]:
         """Erstellt Ordnerstruktur und gibt die ID des letzten Ordners zurück"""
+        from sqlalchemy.exc import IntegrityError
+
         parts = path.split('/')
         parent_id = None
 
-        with get_db() as session:
-            for part in parts:
-                # Ordner suchen
-                folder = session.query(Folder).filter(
-                    Folder.user_id == self.user_id,
-                    Folder.name == part,
-                    Folder.parent_id == parent_id
-                ).first()
+        try:
+            with get_db() as session:
+                for part in parts:
+                    if not part.strip():
+                        continue
 
-                if not folder:
-                    # Ordner erstellen
-                    folder = Folder(
-                        user_id=self.user_id,
-                        name=part,
-                        parent_id=parent_id,
-                        color="#4CAF50"
-                    )
-                    session.add(folder)
-                    session.flush()
+                    # Ordner suchen
+                    folder = session.query(Folder).filter(
+                        Folder.user_id == self.user_id,
+                        Folder.name == part,
+                        Folder.parent_id == parent_id
+                    ).first()
 
-                parent_id = folder.id
+                    if not folder:
+                        try:
+                            # Ordner erstellen
+                            folder = Folder(
+                                user_id=self.user_id,
+                                name=part,
+                                parent_id=parent_id,
+                                color="#4CAF50"
+                            )
+                            session.add(folder)
+                            session.flush()
+                        except IntegrityError:
+                            # Ordner wurde zwischenzeitlich erstellt (Race Condition)
+                            session.rollback()
+                            folder = session.query(Folder).filter(
+                                Folder.user_id == self.user_id,
+                                Folder.name == part,
+                                Folder.parent_id == parent_id
+                            ).first()
+                            if not folder:
+                                return None
 
-            session.commit()
-            return parent_id
+                    parent_id = folder.id
+
+                session.commit()
+                return parent_id
+        except Exception:
+            return None
 
     def _determine_virtual_folders(self, result: Dict) -> List[int]:
         """Bestimmt zusätzliche virtuelle Ordner-Zuordnungen"""
@@ -859,17 +878,36 @@ Antworte im JSON-Format:
 
     def assign_to_virtual_folders(self, document_id: int, folder_ids: List[int]):
         """Weist ein Dokument mehreren virtuellen Ordnern zu"""
-        with get_db() as session:
-            document = session.get(Document, document_id)
-            if not document:
-                return
+        from sqlalchemy.exc import IntegrityError
 
-            for folder_id in folder_ids:
-                folder = session.get(Folder, folder_id)
-                if folder and folder not in document.virtual_folders:
-                    document.virtual_folders.append(folder)
+        for folder_id in folder_ids:
+            try:
+                with get_db() as session:
+                    document = session.get(Document, document_id)
+                    if not document:
+                        return
 
-            session.commit()
+                    folder = session.get(Folder, folder_id)
+                    if not folder:
+                        continue
+
+                    # Prüfen ob bereits verknüpft (via SQL statt Relationship)
+                    from sqlalchemy import select
+                    existing = session.execute(
+                        select(document_virtual_folders).where(
+                            document_virtual_folders.c.document_id == document_id,
+                            document_virtual_folders.c.folder_id == folder_id
+                        )
+                    ).first()
+
+                    if not existing:
+                        document.virtual_folders.append(folder)
+                        session.commit()
+            except IntegrityError:
+                # Duplikat-Eintrag ignorieren (bereits zugeordnet)
+                pass
+            except Exception:
+                pass
 
 
     def save_classification_explanation(self, document_id: int, result: Dict):
@@ -1046,23 +1084,39 @@ Antworte im JSON-Format:
 
     def link_entities_to_document(self, document_id: int, entity_ids: List[int], relation_type: str = 'subject'):
         """Verknüpft Entities mit einem Dokument"""
-        try:
-            with get_db() as session:
-                document = session.get(Document, document_id)
-                if not document:
-                    return
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy import select
 
-                for entity_id in entity_ids:
+        for entity_id in entity_ids:
+            try:
+                with get_db() as session:
+                    document = session.get(Document, document_id)
+                    if not document:
+                        return
+
                     entity = session.get(Entity, entity_id)
-                    if entity and entity not in document.entities:
+                    if not entity:
+                        continue
+
+                    # Prüfen ob bereits verknüpft (via SQL statt Relationship)
+                    existing = session.execute(
+                        select(document_entities).where(
+                            document_entities.c.document_id == document_id,
+                            document_entities.c.entity_id == entity_id
+                        )
+                    ).first()
+
+                    if not existing:
                         document.entities.append(entity)
                         # Statistik aktualisieren
                         entity.document_count = (entity.document_count or 0) + 1
                         entity.last_document_date = datetime.now()
-
-                session.commit()
-        except Exception:
-            pass
+                        session.commit()
+            except IntegrityError:
+                # Duplikat-Eintrag ignorieren (bereits zugeordnet)
+                pass
+            except Exception:
+                pass
 
 
 def get_classifier(user_id: int) -> DocumentClassifier:

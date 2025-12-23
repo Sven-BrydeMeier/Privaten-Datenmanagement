@@ -373,7 +373,20 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
             # INTELLIGENTE KLASSIFIKATION MIT KI-UNTERSTÜTZUNG
             # ============================================================
             # Verwende den erweiterten Klassifikator mit KI-Fallback
-            classification = classifier.classify_with_ai(full_text, metadata)
+            try:
+                classification = classifier.classify_with_ai(full_text, metadata)
+            except Exception as class_error:
+                # Bei Klassifikationsfehler: Standardwerte verwenden
+                classification = {
+                    'category': document.category or 'Sonstiges',
+                    'subcategory': None,
+                    'primary_folder_id': None,
+                    'primary_folder_path': None,
+                    'virtual_folder_ids': [],
+                    'property_id': None,
+                    'detected_address': None,
+                    'confidence': 0.0
+                }
 
             # Kategorie und Unterkategorie zuweisen
             if classification.get('category'):
@@ -449,13 +462,16 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
             # ============================================================
             virtual_folder_ids = classification.get('virtual_folder_ids', [])
             if virtual_folder_ids:
-                # Virtuelle Ordner zuweisen
-                classifier.assign_to_virtual_folders(document_id, virtual_folder_ids)
-                # Namen der virtuellen Ordner für Anzeige sammeln
-                for vf_id in virtual_folder_ids:
-                    vf = session.get(Folder, vf_id)
-                    if vf:
-                        result['virtual_folders'].append(vf.name)
+                try:
+                    # Virtuelle Ordner zuweisen
+                    classifier.assign_to_virtual_folders(document_id, virtual_folder_ids)
+                    # Namen der virtuellen Ordner für Anzeige sammeln
+                    for vf_id in virtual_folder_ids:
+                        vf = session.get(Folder, vf_id)
+                        if vf:
+                            result['virtual_folders'].append(vf.name)
+                except Exception:
+                    pass  # Fehler bei virtuellen Ordnern ignorieren
 
             # Fristen erkennen und Kalendereintrag erstellen
             for deadline in metadata.get('deadlines', []):

@@ -1,3 +1,11 @@
+# WICHTIG: Whoosh-Warnungen unterdrücken bevor irgendwelche Services importiert werden
+# Whoosh verwendet alte Regex-Syntax ohne Raw-Strings, was Python 3.13 warnt
+import warnings
+warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh\..*')
+warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh\..*')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh')
+
 from .encryption import EncryptionService
 from .ocr import OCRService
 from .ai_service import AIService

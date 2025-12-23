@@ -6,8 +6,11 @@ import warnings
 
 # WICHTIG: Whoosh-Warnungen FRÜH unterdrücken (vor Import!)
 # Whoosh verwendet alte Regex-Syntax ohne Raw-Strings, was Python 3.13 warnt
-warnings.filterwarnings('ignore', category=SyntaxWarning, module='whoosh')
-warnings.filterwarnings('ignore', category=DeprecationWarning, module='whoosh')
+# Regex-Pattern für alle Whoosh-Module (whoosh, whoosh.analysis, whoosh.qparser, etc.)
+warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh\..*')
+warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh\..*')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh')
 
 from typing import List, Dict, Optional
 from datetime import datetime

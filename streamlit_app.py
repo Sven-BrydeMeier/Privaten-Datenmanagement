@@ -5,8 +5,11 @@ Eine intelligente Dokumentenverwaltung mit KI-Unterstützung
 # WICHTIG: Warnungen für Whoosh FRÜH unterdrücken (vor allen anderen Imports!)
 # Whoosh ist nicht vollständig kompatibel mit Python 3.13 (verwendet alte Regex-Syntax)
 import warnings
-warnings.filterwarnings('ignore', category=SyntaxWarning, module='whoosh')
-warnings.filterwarnings('ignore', category=DeprecationWarning, module='whoosh')
+# Regex-Pattern für alle Whoosh-Module (whoosh, whoosh.analysis, whoosh.qparser, etc.)
+warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh\..*')
+warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh\..*')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh')
 
 import streamlit as st
 from pathlib import Path
