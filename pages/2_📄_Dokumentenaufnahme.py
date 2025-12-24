@@ -28,8 +28,53 @@ init_db()
 # Sidebar mit Aktentasche
 render_sidebar_cart()
 
+# Debug-Modus Toggle in der Sidebar
+with st.sidebar:
+    st.divider()
+    debug_mode = st.checkbox("🐛 Debug-Modus", value=st.session_state.get('debug_mode', False),
+                             help="Zeigt detaillierte Verarbeitungsschritte an")
+    st.session_state.debug_mode = debug_mode
+
 st.title("📄 Dokumentenaufnahme")
 st.markdown("Laden Sie Dokumente hoch oder scannen Sie sie ein")
+
+
+def debug_log(message: str, level: str = "info"):
+    """Fügt eine Debug-Nachricht zum Log hinzu"""
+    if 'debug_log' not in st.session_state:
+        st.session_state.debug_log = []
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    st.session_state.debug_log.append({
+        'time': timestamp,
+        'level': level,
+        'message': message
+    })
+
+
+def clear_debug_log():
+    """Löscht das Debug-Log"""
+    st.session_state.debug_log = []
+
+
+def show_debug_panel():
+    """Zeigt das Debug-Panel an"""
+    if not st.session_state.get('debug_mode', False):
+        return
+
+    if 'debug_log' not in st.session_state or not st.session_state.debug_log:
+        return
+
+    with st.expander("🐛 Debug-Log", expanded=True):
+        # Log anzeigen
+        for entry in st.session_state.debug_log:
+            icon = "ℹ️" if entry['level'] == "info" else "✅" if entry['level'] == "success" else "⚠️" if entry['level'] == "warning" else "❌"
+            color = "gray" if entry['level'] == "info" else "green" if entry['level'] == "success" else "orange" if entry['level'] == "warning" else "red"
+            st.markdown(f"<span style='color:{color}'>{icon} [{entry['time']}] {entry['message']}</span>",
+                       unsafe_allow_html=True)
+
+        if st.button("🗑️ Log löschen"):
+            clear_debug_log()
+            st.rerun()
 
 
 def calculate_content_hash(file_data: bytes) -> str:
@@ -265,10 +310,25 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
 
 def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
     """Verarbeitet ein Dokument mit OCR und KI. Gibt Info über zugewiesenen Ordner zurück."""
-    ocr = get_ocr_service()
-    ai = get_ai_service()
-    classifier = get_classifier(user_id)
-    search = get_search_service(user_id)
+    is_debug = st.session_state.get('debug_mode', False)
+
+    if is_debug:
+        debug_log(f"▶️ Starte Verarbeitung für Dokument ID: {document_id}", "info")
+        debug_log(f"📦 Dateigröße: {len(file_data)} Bytes", "info")
+
+    try:
+        if is_debug:
+            debug_log("🔧 Initialisiere Services...", "info")
+        ocr = get_ocr_service()
+        ai = get_ai_service()
+        classifier = get_classifier(user_id)
+        search = get_search_service(user_id)
+        if is_debug:
+            debug_log("✅ Services initialisiert", "success")
+    except Exception as e:
+        if is_debug:
+            debug_log(f"❌ Service-Initialisierung fehlgeschlagen: {str(e)[:200]}", "error")
+        return {'error': f"Service-Init fehlgeschlagen: {str(e)[:100]}"}
 
     result = {
         'folder_name': None,
@@ -281,264 +341,342 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
         'subcategory': None
     }
 
-    with get_db() as session:
-        document = session.get(Document, document_id)
-        if not document:
-            return result
+    try:
+        with get_db() as session:
+            if is_debug:
+                debug_log("🔍 Lade Dokument aus Datenbank...", "info")
 
-        document.status = DocumentStatus.PROCESSING
-        session.commit()
+            document = session.get(Document, document_id)
+            if not document:
+                if is_debug:
+                    debug_log(f"❌ Dokument {document_id} nicht gefunden!", "error")
+                return result
 
-        try:
-            # OCR durchführen
-            full_text = ""
-            confidence = 0.0
+            if is_debug:
+                debug_log(f"📄 Dokument geladen: {document.filename[:50]}...", "success")
+                debug_log(f"📋 MIME-Type: {document.mime_type}", "info")
 
-            if document.mime_type == "application/pdf":
-                results = ocr.extract_text_from_pdf(file_data)
-                if results:
-                    full_text = "\n\n".join(text for text, _ in results)
-                    confidence = sum(conf for _, conf in results) / len(results)
-            else:
-                # Bild
-                from PIL import Image
-                image = Image.open(io.BytesIO(file_data))
-                full_text, confidence = ocr.extract_text_from_image(image)
-
-            document.ocr_text = full_text
-            document.ocr_confidence = confidence
-
-            # Metadaten extrahieren
-            metadata = ocr.extract_metadata(full_text)
-
-            # Daten zuweisen
-            if metadata.get('dates'):
-                document.document_date = metadata['dates'][0]
-
-            if metadata.get('amounts'):
-                document.invoice_amount = max(metadata['amounts'])
-
-            if metadata.get('ibans'):
-                document.iban = metadata['ibans'][0]
-
-            if metadata.get('contract_numbers'):
-                document.contract_number = metadata['contract_numbers'][0]
-
-            # KI-basierte Klassifikation (wenn verfügbar)
-            if ai.any_ai_available:
-                try:
-                    structured_data = ai.extract_structured_data(full_text)
-
-                    # Absender-Informationen
-                    if structured_data.get('sender'):
-                        document.sender = structured_data['sender']
-                        result['sender'] = structured_data['sender']
-                    if structured_data.get('sender_address'):
-                        document.sender_address = structured_data['sender_address']
-
-                    # Betreff und Kategorie
-                    if structured_data.get('subject'):
-                        document.subject = structured_data['subject']
-                        document.title = structured_data['subject']
-                    if structured_data.get('category'):
-                        document.category = structured_data['category']
-
-                    # Zusammenfassung
-                    if structured_data.get('summary'):
-                        document.ai_summary = structured_data['summary']
-
-                    # Referenznummern
-                    if structured_data.get('reference_number'):
-                        document.reference_number = structured_data['reference_number']
-                    if structured_data.get('customer_number'):
-                        document.customer_number = structured_data['customer_number']
-                    if structured_data.get('insurance_number'):
-                        document.insurance_number = structured_data['insurance_number']
-                    if structured_data.get('processing_number'):
-                        document.processing_number = structured_data['processing_number']
-                    if structured_data.get('contract_number') and not document.contract_number:
-                        document.contract_number = structured_data['contract_number']
-
-                    # Rechnungsnummer
-                    if structured_data.get('invoice_number'):
-                        document.invoice_number = structured_data['invoice_number']
-
-                    # Finanzinformationen
-                    if structured_data.get('invoice_amount'):
-                        document.invoice_amount = float(structured_data['invoice_amount'])
-                    if structured_data.get('invoice_due_date'):
-                        from utils.helpers import parse_date_string
-                        due_date = parse_date_string(structured_data['invoice_due_date'])
-                        if due_date:
-                            document.invoice_due_date = due_date
-                    if structured_data.get('iban') and not document.iban:
-                        document.iban = structured_data['iban']
-                    if structured_data.get('bic'):
-                        document.bic = structured_data['bic']
-                    if structured_data.get('bank_name'):
-                        document.bank_name = structured_data['bank_name']
-
-                    # Automatische Rechnungserkennung - als OFFEN markieren
-                    is_invoice = structured_data.get('is_invoice', False)
-                    if is_invoice or structured_data.get('category') in ['Rechnung', 'Mahnung']:
-                        if document.invoice_amount and document.invoice_amount > 0:
-                            document.invoice_status = InvoiceStatus.OPEN
-
-                except Exception as e:
-                    st.warning(f"KI-Analyse teilweise fehlgeschlagen: {e}")
-
-            # ============================================================
-            # INTELLIGENTE KLASSIFIKATION MIT KI-UNTERSTÜTZUNG
-            # ============================================================
-            # Verwende den erweiterten Klassifikator mit KI-Fallback
-            try:
-                classification = classifier.classify_with_ai(full_text, metadata)
-            except Exception as class_error:
-                # Bei Klassifikationsfehler: Standardwerte verwenden
-                classification = {
-                    'category': document.category or 'Sonstiges',
-                    'subcategory': None,
-                    'primary_folder_id': None,
-                    'primary_folder_path': None,
-                    'virtual_folder_ids': [],
-                    'property_id': None,
-                    'detected_address': None,
-                    'confidence': 0.0
-                }
-
-            # Kategorie und Unterkategorie zuweisen
-            if classification.get('category'):
-                document.category = classification['category']
-                result['category'] = classification['category']
-            if classification.get('subcategory'):
-                result['subcategory'] = classification['subcategory']
-
-            # Extrahierte Adresse speichern (für Immobilien-Zuordnung)
-            if classification.get('detected_address'):
-                document.property_address = classification['detected_address']
-
-            # Immobilien-Zuordnung
-            if classification.get('property_id'):
-                document.property_id = classification['property_id']
-                # Property-Name für Anzeige laden
-                from database.models import Property
-                prop = session.get(Property, classification['property_id'])
-                if prop:
-                    result['property_name'] = prop.name or prop.full_address
-
-            # Ordnerzuweisung aus Klassifikation
-            assigned_folder_name = None
-            folder_created = False
-            folder_id = classification.get('primary_folder_id')
-            folder_path = classification.get('primary_folder_path')
-
-            # Prüfen ob ein intelligenter Ordner gefunden wurde (nicht nur Posteingang)
-            if folder_id:
-                folder = session.get(Folder, folder_id)
-                if folder and folder.name != 'Posteingang':
-                    # Intelligenter Ordner gefunden
-                    document.folder_id = folder_id
-                    assigned_folder_name = folder.name
-                    result['folder_path'] = folder_path
-                    # Ordner wurde möglicherweise neu erstellt
-                    folder_created = classification.get('confidence', 0) > 0.7
-                else:
-                    folder_id = None  # Posteingang zählt nicht als "gefunden"
-
-            # Wenn kein passender Ordner gefunden, Ordner nach Absender erstellen
-            if not folder_id and document.sender:
-                sender_name = document.sender.strip()
-                if sender_name:
-                    # Prüfen ob Absender-Ordner bereits existiert
-                    existing_folder = session.query(Folder).filter(
-                        Folder.user_id == user_id,
-                        Folder.name == sender_name
-                    ).first()
-
-                    if existing_folder:
-                        document.folder_id = existing_folder.id
-                        assigned_folder_name = existing_folder.name
-                    else:
-                        # Neuen Ordner nach Absender erstellen
-                        new_folder = Folder(
-                            user_id=user_id,
-                            name=sender_name,
-                            description=f"Automatisch erstellt für Dokumente von {sender_name}",
-                            color="#607D8B"  # Grau-Blau für auto-erstellte Ordner
-                        )
-                        session.add(new_folder)
-                        session.flush()  # ID generieren
-                        document.folder_id = new_folder.id
-                        assigned_folder_name = sender_name
-                        folder_created = True
-
-            result['folder_name'] = assigned_folder_name
-            result['folder_created'] = folder_created
-
-            # ============================================================
-            # VIRTUELLE ORDNER-ZUORDNUNG (Dokument in mehreren Ordnern)
-            # ============================================================
-            virtual_folder_ids = classification.get('virtual_folder_ids', [])
-            if virtual_folder_ids:
-                try:
-                    # Virtuelle Ordner zuweisen
-                    classifier.assign_to_virtual_folders(document_id, virtual_folder_ids)
-                    # Namen der virtuellen Ordner für Anzeige sammeln
-                    for vf_id in virtual_folder_ids:
-                        vf = session.get(Folder, vf_id)
-                        if vf:
-                            result['virtual_folders'].append(vf.name)
-                except Exception:
-                    pass  # Fehler bei virtuellen Ordnern ignorieren
-
-            # Fristen erkennen und Kalendereintrag erstellen
-            for deadline in metadata.get('deadlines', []):
-                deadline_date = None
-                # Versuche Datum zu parsen
-                from utils.helpers import parse_german_date
-                deadline_date = parse_german_date(deadline['date_str'])
-
-                if deadline_date:
-                    event = CalendarEvent(
-                        user_id=user_id,
-                        document_id=document.id,
-                        title=f"Frist: {document.title or document.filename}",
-                        description=f"Automatisch erkannte Frist aus Dokument",
-                        event_type=EventType.DEADLINE,
-                        start_date=deadline_date,
-                        all_day=True
-                    )
-                    session.add(event)
-
-            # Suchindex aktualisieren
-            search.index_document(document.id, {
-                'title': document.title or document.filename,
-                'content': full_text,
-                'sender': document.sender or '',
-                'category': document.category or '',
-                'folder_id': document.folder_id,
-                'document_date': document.document_date,
-                'amounts': metadata.get('amounts', []),
-                'ibans': metadata.get('ibans', []),
-                'contract_numbers': metadata.get('contract_numbers', []),
-                'created_at': document.created_at
-            })
-
-            document.status = DocumentStatus.COMPLETED
+            document.status = DocumentStatus.PROCESSING
             session.commit()
 
-            return result
-
-        except Exception as e:
-            document.status = DocumentStatus.ERROR
-            document.processing_error = str(e)[:500]  # Begrenze Fehlerlänge
             try:
+                # OCR durchführen
+                full_text = ""
+                confidence = 0.0
+
+                if is_debug:
+                    debug_log("🔤 Starte OCR-Extraktion...", "info")
+
+                if document.mime_type == "application/pdf":
+                    if is_debug:
+                        debug_log("📑 PDF erkannt - extrahiere Text...", "info")
+                    try:
+                        results = ocr.extract_text_from_pdf(file_data)
+                        if results:
+                            full_text = "\n\n".join(text for text, _ in results)
+                            confidence = sum(conf for _, conf in results) / len(results)
+                            if is_debug:
+                                debug_log(f"✅ OCR erfolgreich: {len(full_text)} Zeichen, Konfidenz: {confidence:.2f}", "success")
+                        else:
+                            if is_debug:
+                                debug_log("⚠️ Kein Text extrahiert (möglicherweise Bild-PDF)", "warning")
+                    except Exception as ocr_err:
+                        if is_debug:
+                            debug_log(f"❌ PDF-OCR Fehler: {str(ocr_err)[:200]}", "error")
+                        raise
+                else:
+                    # Bild
+                    if is_debug:
+                        debug_log("🖼️ Bild erkannt - starte Bild-OCR...", "info")
+                    try:
+                        from PIL import Image
+                        image = Image.open(io.BytesIO(file_data))
+                        if is_debug:
+                            debug_log(f"📐 Bildgröße: {image.size}", "info")
+                        full_text, confidence = ocr.extract_text_from_image(image)
+                        if is_debug:
+                            debug_log(f"✅ Bild-OCR erfolgreich: {len(full_text)} Zeichen", "success")
+                    except Exception as img_err:
+                        if is_debug:
+                            debug_log(f"❌ Bild-OCR Fehler: {str(img_err)[:200]}", "error")
+                        raise
+
+                document.ocr_text = full_text
+                document.ocr_confidence = confidence
+
+                # Metadaten extrahieren
+                if is_debug:
+                    debug_log("📊 Extrahiere Metadaten aus Text...", "info")
+
+                try:
+                    metadata = ocr.extract_metadata(full_text)
+                    if is_debug:
+                        debug_log(f"✅ Metadaten extrahiert: {len(metadata.get('dates', []))} Daten, {len(metadata.get('amounts', []))} Beträge", "success")
+                except Exception as meta_err:
+                    if is_debug:
+                        debug_log(f"⚠️ Metadaten-Extraktion Fehler: {str(meta_err)[:200]}", "warning")
+                    metadata = {}
+
+                # Daten zuweisen
+                if metadata.get('dates'):
+                    document.document_date = metadata['dates'][0]
+
+                if metadata.get('amounts'):
+                    document.invoice_amount = max(metadata['amounts'])
+
+                if metadata.get('ibans'):
+                    document.iban = metadata['ibans'][0]
+
+                if metadata.get('contract_numbers'):
+                    document.contract_number = metadata['contract_numbers'][0]
+
+                # KI-basierte Klassifikation (wenn verfügbar)
+                if is_debug:
+                    debug_log(f"🤖 KI verfügbar: {ai.any_ai_available}", "info")
+
+                if ai.any_ai_available:
+                    if is_debug:
+                        debug_log("🧠 Starte KI-Analyse...", "info")
+                    try:
+                        structured_data = ai.extract_structured_data(full_text)
+                        if is_debug:
+                            debug_log(f"✅ KI-Analyse abgeschlossen", "success")
+
+                        # Absender-Informationen
+                        if structured_data.get('sender'):
+                            document.sender = structured_data['sender']
+                            result['sender'] = structured_data['sender']
+                        if structured_data.get('sender_address'):
+                            document.sender_address = structured_data['sender_address']
+
+                        # Betreff und Kategorie
+                        if structured_data.get('subject'):
+                            document.subject = structured_data['subject']
+                            document.title = structured_data['subject']
+                        if structured_data.get('category'):
+                            document.category = structured_data['category']
+
+                        # Zusammenfassung
+                        if structured_data.get('summary'):
+                            document.ai_summary = structured_data['summary']
+
+                        # Referenznummern
+                        if structured_data.get('reference_number'):
+                            document.reference_number = structured_data['reference_number']
+                        if structured_data.get('customer_number'):
+                            document.customer_number = structured_data['customer_number']
+                        if structured_data.get('insurance_number'):
+                            document.insurance_number = structured_data['insurance_number']
+                        if structured_data.get('processing_number'):
+                            document.processing_number = structured_data['processing_number']
+                        if structured_data.get('contract_number') and not document.contract_number:
+                            document.contract_number = structured_data['contract_number']
+
+                        # Rechnungsnummer
+                        if structured_data.get('invoice_number'):
+                            document.invoice_number = structured_data['invoice_number']
+
+                        # Finanzinformationen
+                        if structured_data.get('invoice_amount'):
+                            document.invoice_amount = float(structured_data['invoice_amount'])
+                        if structured_data.get('invoice_due_date'):
+                            from utils.helpers import parse_date_string
+                            due_date = parse_date_string(structured_data['invoice_due_date'])
+                            if due_date:
+                                document.invoice_due_date = due_date
+                        if structured_data.get('iban') and not document.iban:
+                            document.iban = structured_data['iban']
+                        if structured_data.get('bic'):
+                            document.bic = structured_data['bic']
+                        if structured_data.get('bank_name'):
+                            document.bank_name = structured_data['bank_name']
+
+                        # Automatische Rechnungserkennung - als OFFEN markieren
+                        is_invoice = structured_data.get('is_invoice', False)
+                        if is_invoice or structured_data.get('category') in ['Rechnung', 'Mahnung']:
+                            if document.invoice_amount and document.invoice_amount > 0:
+                                document.invoice_status = InvoiceStatus.OPEN
+
+                    except Exception as e:
+                        if is_debug:
+                            debug_log(f"⚠️ KI-Analyse fehlgeschlagen: {str(e)[:200]}", "warning")
+                        st.warning(f"KI-Analyse teilweise fehlgeschlagen: {e}")
+
+                # ============================================================
+                # INTELLIGENTE KLASSIFIKATION MIT KI-UNTERSTÜTZUNG
+                # ============================================================
+                if is_debug:
+                    debug_log("📂 Starte Dokumenten-Klassifikation...", "info")
+
+                try:
+                    classification = classifier.classify_with_ai(full_text, metadata)
+                    if is_debug:
+                        debug_log(f"✅ Klassifikation abgeschlossen: Kategorie={classification.get('category')}, Ordner={classification.get('primary_folder_path')}", "success")
+                except Exception as class_error:
+                    if is_debug:
+                        debug_log(f"❌ Klassifikation fehlgeschlagen: {str(class_error)[:200]}", "error")
+                    # Bei Klassifikationsfehler: Standardwerte verwenden
+                    classification = {
+                        'category': document.category or 'Sonstiges',
+                        'subcategory': None,
+                        'primary_folder_id': None,
+                        'primary_folder_path': None,
+                        'virtual_folder_ids': [],
+                        'property_id': None,
+                        'detected_address': None,
+                        'confidence': 0.0
+                    }
+
+                # Kategorie und Unterkategorie zuweisen
+                if classification.get('category'):
+                    document.category = classification['category']
+                    result['category'] = classification['category']
+                if classification.get('subcategory'):
+                    result['subcategory'] = classification['subcategory']
+
+                # Extrahierte Adresse speichern (für Immobilien-Zuordnung)
+                if classification.get('detected_address'):
+                    document.property_address = classification['detected_address']
+
+                # Immobilien-Zuordnung
+                if classification.get('property_id'):
+                    document.property_id = classification['property_id']
+                    # Property-Name für Anzeige laden
+                    from database.models import Property
+                    prop = session.get(Property, classification['property_id'])
+                    if prop:
+                        result['property_name'] = prop.name or prop.full_address
+
+                # Ordnerzuweisung aus Klassifikation
+                assigned_folder_name = None
+                folder_created = False
+                folder_id = classification.get('primary_folder_id')
+                folder_path = classification.get('primary_folder_path')
+
+                # Prüfen ob ein intelligenter Ordner gefunden wurde (nicht nur Posteingang)
+                if folder_id:
+                    folder = session.get(Folder, folder_id)
+                    if folder and folder.name != 'Posteingang':
+                        # Intelligenter Ordner gefunden
+                        document.folder_id = folder_id
+                        assigned_folder_name = folder.name
+                        result['folder_path'] = folder_path
+                        # Ordner wurde möglicherweise neu erstellt
+                        folder_created = classification.get('confidence', 0) > 0.7
+                    else:
+                        folder_id = None  # Posteingang zählt nicht als "gefunden"
+
+                # Wenn kein passender Ordner gefunden, Ordner nach Absender erstellen
+                if not folder_id and document.sender:
+                    sender_name = document.sender.strip()
+                    if sender_name:
+                        # Prüfen ob Absender-Ordner bereits existiert
+                        existing_folder = session.query(Folder).filter(
+                            Folder.user_id == user_id,
+                            Folder.name == sender_name
+                        ).first()
+
+                        if existing_folder:
+                            document.folder_id = existing_folder.id
+                            assigned_folder_name = existing_folder.name
+                        else:
+                            # Neuen Ordner nach Absender erstellen
+                            new_folder = Folder(
+                                user_id=user_id,
+                                name=sender_name,
+                                description=f"Automatisch erstellt für Dokumente von {sender_name}",
+                                color="#607D8B"  # Grau-Blau für auto-erstellte Ordner
+                            )
+                            session.add(new_folder)
+                            session.flush()  # ID generieren
+                            document.folder_id = new_folder.id
+                            assigned_folder_name = sender_name
+                            folder_created = True
+
+                result['folder_name'] = assigned_folder_name
+                result['folder_created'] = folder_created
+
+                # ============================================================
+                # VIRTUELLE ORDNER-ZUORDNUNG (Dokument in mehreren Ordnern)
+                # ============================================================
+                virtual_folder_ids = classification.get('virtual_folder_ids', [])
+                if virtual_folder_ids:
+                    try:
+                        # Virtuelle Ordner zuweisen
+                        classifier.assign_to_virtual_folders(document_id, virtual_folder_ids)
+                        # Namen der virtuellen Ordner für Anzeige sammeln
+                        for vf_id in virtual_folder_ids:
+                            vf = session.get(Folder, vf_id)
+                            if vf:
+                                result['virtual_folders'].append(vf.name)
+                    except Exception:
+                        pass  # Fehler bei virtuellen Ordnern ignorieren
+
+                # Fristen erkennen und Kalendereintrag erstellen
+                for deadline in metadata.get('deadlines', []):
+                    deadline_date = None
+                    # Versuche Datum zu parsen
+                    from utils.helpers import parse_german_date
+                    deadline_date = parse_german_date(deadline['date_str'])
+
+                    if deadline_date:
+                        event = CalendarEvent(
+                            user_id=user_id,
+                            document_id=document.id,
+                            title=f"Frist: {document.title or document.filename}",
+                            description=f"Automatisch erkannte Frist aus Dokument",
+                            event_type=EventType.DEADLINE,
+                            start_date=deadline_date,
+                            all_day=True
+                        )
+                        session.add(event)
+
+                # Suchindex aktualisieren
+                if is_debug:
+                    debug_log("🔍 Aktualisiere Suchindex...", "info")
+                search.index_document(document.id, {
+                    'title': document.title or document.filename,
+                    'content': full_text,
+                    'sender': document.sender or '',
+                    'category': document.category or '',
+                    'folder_id': document.folder_id,
+                    'document_date': document.document_date,
+                    'amounts': metadata.get('amounts', []),
+                    'ibans': metadata.get('ibans', []),
+                    'contract_numbers': metadata.get('contract_numbers', []),
+                    'created_at': document.created_at
+                })
+
+                if is_debug:
+                    debug_log("💾 Speichere Dokument...", "info")
+                document.status = DocumentStatus.COMPLETED
                 session.commit()
-            except Exception:
-                pass  # Commit-Fehler ignorieren
-            # NICHT raise - stattdessen Fehler protokollieren und weitermachen
-            result['error'] = str(e)[:200]
-            return result
+
+                if is_debug:
+                    debug_log("✅ Verarbeitung abgeschlossen!", "success")
+                return result
+
+            except Exception as e:
+                if is_debug:
+                    import traceback
+                    debug_log(f"❌ FEHLER: {str(e)[:300]}", "error")
+                    debug_log(f"📍 Traceback: {traceback.format_exc()[-500:]}", "error")
+                document.status = DocumentStatus.ERROR
+                document.processing_error = str(e)[:500]  # Begrenze Fehlerlänge
+                try:
+                    session.commit()
+                except Exception:
+                    pass  # Commit-Fehler ignorieren
+                # NICHT raise - stattdessen Fehler protokollieren und weitermachen
+                result['error'] = str(e)[:200]
+                return result
+
+    except Exception as outer_err:
+        if is_debug:
+            import traceback
+            debug_log(f"❌ ÄUSSERER FEHLER: {str(outer_err)[:300]}", "error")
+            debug_log(f"📍 Traceback: {traceback.format_exc()[-500:]}", "error")
+        return {'error': str(outer_err)[:200]}
 
     return result
 
@@ -590,10 +728,22 @@ with tab_upload:
                     doc_id = save_document(file_data, uploaded_file.name, user_id)
 
                 if process_now:
+                    # Debug-Log vor Start löschen
+                    if st.session_state.get('debug_mode', False):
+                        clear_debug_log()
+
                     with st.spinner("Verarbeite Dokument (OCR & Analyse)..."):
                         try:
                             process_result = process_document(doc_id, file_data, user_id)
-                            st.success("Dokument erfolgreich verarbeitet!")
+
+                            # Debug-Panel anzeigen
+                            show_debug_panel()
+
+                            # Fehler anzeigen falls vorhanden
+                            if process_result.get('error'):
+                                st.error(f"⚠️ Fehler bei Verarbeitung: {process_result['error']}")
+                            else:
+                                st.success("Dokument erfolgreich verarbeitet!")
 
                             # Ordnerzuweisung anzeigen
                             if process_result.get('folder_name'):
