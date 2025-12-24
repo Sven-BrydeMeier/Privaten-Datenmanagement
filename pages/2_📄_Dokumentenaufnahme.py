@@ -198,6 +198,16 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
     # Unicode-Normalisierung (NFC) für konsistente Umlaute (ä, ö, ü)
     filename = unicodedata.normalize('NFC', filename)
 
+    # WICHTIG: Dateiname auf sichere Länge kürzen
+    # VARCHAR(255) in der DB, aber UTF-8-Umlaute brauchen 2 Bytes
+    # Also maximal ~120 Zeichen um sicher zu sein
+    if len(filename) > 150:
+        name_part, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
+        # Kürze den Namen, behalte die Extension
+        max_name_len = 150 - len(ext) - 1 if ext else 150
+        name_part = name_part[:max_name_len]
+        filename = f"{name_part}.{ext}" if ext else name_part
+
     # Content-Hash berechnen
     content_hash = calculate_content_hash(file_data)
 
@@ -208,6 +218,14 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
     safe_filename = sanitize_filename(filename)
     timestamp = get_local_now().strftime("%Y%m%d_%H%M%S")
     stored_filename = f"{timestamp}_{safe_filename}.enc"
+
+    # Auch den gespeicherten Pfad auf sichere Länge begrenzen
+    if len(stored_filename) > 200:
+        # Kürze den safe_filename wenn nötig
+        max_safe = 200 - len(timestamp) - 6  # 6 für "_.enc"
+        safe_filename = safe_filename[:max_safe]
+        stored_filename = f"{timestamp}_{safe_filename}.enc"
+
     file_path = DOCUMENTS_DIR / stored_filename
 
     # Verschlüsselte Datei speichern
@@ -230,7 +248,7 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
         document = Document(
             user_id=user_id,
             folder_id=inbox.id if inbox else None,
-            filename=filename,
+            filename=filename[:250],  # Sicherheits-Limit für DB
             file_path=str(file_path),
             file_size=len(file_data),
             mime_type=mime_type,
@@ -513,9 +531,14 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
 
         except Exception as e:
             document.status = DocumentStatus.ERROR
-            document.processing_error = str(e)
-            session.commit()
-            raise
+            document.processing_error = str(e)[:500]  # Begrenze Fehlerlänge
+            try:
+                session.commit()
+            except Exception:
+                pass  # Commit-Fehler ignorieren
+            # NICHT raise - stattdessen Fehler protokollieren und weitermachen
+            result['error'] = str(e)[:200]
+            return result
 
     return result
 

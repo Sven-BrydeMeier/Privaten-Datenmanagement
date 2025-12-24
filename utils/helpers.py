@@ -328,10 +328,14 @@ def truncate_text(text: str, max_length: int = 100, suffix: str = "...") -> str:
     return text[:max_length - len(suffix)] + suffix
 
 
-def sanitize_filename(filename: str) -> str:
+def sanitize_filename(filename: str, max_length: int = 150) -> str:
     """
     Bereinigt einen Dateinamen für sichere Speicherung.
     Behält Umlaute (ä, ö, ü) und andere Unicode-Zeichen bei.
+
+    Args:
+        filename: Der Dateiname
+        max_length: Maximale Länge (Standard: 150, sicher für DB VARCHAR(255) mit UTF-8)
     """
     import unicodedata
 
@@ -358,10 +362,16 @@ def sanitize_filename(filename: str) -> str:
     # Führende/nachfolgende Leerzeichen und Punkte entfernen
     filename = filename.strip('. ')
 
-    # Maximale Länge (Zeichen, nicht Bytes)
-    if len(filename) > 200:
-        name, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
-        filename = name[:200] + ('.' + ext if ext else '')
+    # Maximale Länge (Zeichen, nicht Bytes) - schützt vor DB-Überlauf
+    if len(filename) > max_length:
+        # Extension extrahieren und behalten
+        if '.' in filename:
+            name, ext = filename.rsplit('.', 1)
+            ext = ext[:10]  # Extension auch begrenzen
+            max_name = max_length - len(ext) - 1
+            filename = name[:max_name] + '.' + ext
+        else:
+            filename = filename[:max_length]
 
     return filename or 'unnamed'
 
