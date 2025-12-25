@@ -102,12 +102,12 @@ def get_entity_documents(entity_id: int):
 st.title("👥 Entitäten verwalten")
 st.markdown("""
 Verwalten Sie Ihre Entitäten für intelligente Dokumentenzuordnung.
-Entitäten können Personen (z.B. Familienmitglieder), Fahrzeuge, Lieferanten oder Projekte sein.
+Entitäten können Personen (z.B. Familienmitglieder), Fahrzeuge, Lieferanten, Ausweisdokumente oder Projekte sein.
 """)
 
 # Tabs für verschiedene Entity-Typen
-tab_overview, tab_person, tab_vehicle, tab_supplier, tab_other = st.tabs([
-    "📊 Übersicht", "👤 Personen", "🚗 Fahrzeuge", "🏢 Lieferanten", "📁 Sonstige"
+tab_overview, tab_person, tab_vehicle, tab_id_doc, tab_supplier, tab_other = st.tabs([
+    "📊 Übersicht", "👤 Personen", "🚗 Fahrzeuge", "🪪 Ausweise", "🏢 Lieferanten", "📁 Sonstige"
 ])
 
 with tab_overview:
@@ -119,7 +119,7 @@ with tab_overview:
         st.info("Noch keine Entitäten vorhanden. Erstellen Sie Ihre erste Entität in einem der Tabs.")
     else:
         # Statistik
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             person_count = len([e for e in entities if e['entity_type'] == EntityType.PERSON])
             st.metric("Personen", person_count)
@@ -127,9 +127,12 @@ with tab_overview:
             vehicle_count = len([e for e in entities if e['entity_type'] == EntityType.VEHICLE])
             st.metric("Fahrzeuge", vehicle_count)
         with col3:
+            id_doc_count = len([e for e in entities if e['entity_type'] == EntityType.ID_DOCUMENT])
+            st.metric("Ausweise", id_doc_count)
+        with col4:
             supplier_count = len([e for e in entities if e['entity_type'] == EntityType.SUPPLIER])
             st.metric("Lieferanten", supplier_count)
-        with col4:
+        with col5:
             total_docs = sum(e['document_count'] for e in entities)
             st.metric("Verknüpfte Dokumente", total_docs)
 
@@ -143,7 +146,8 @@ with tab_overview:
                 EntityType.SUPPLIER: "🏢",
                 EntityType.ORGANIZATION: "🏛️",
                 EntityType.PROJECT: "📁",
-                EntityType.CONTRACT: "📑"
+                EntityType.CONTRACT: "📑",
+                EntityType.ID_DOCUMENT: "🪪"
             }.get(entity['entity_type'], "📌")
 
             with st.expander(f"{type_emoji} {entity['display_name'] or entity['name']} ({entity['document_count']} Dokumente)"):
@@ -304,6 +308,183 @@ with tab_vehicle:
                     st.write(f"📄 {vehicle['document_count']}")
     else:
         st.info("Noch keine Fahrzeuge angelegt.")
+
+
+with tab_id_doc:
+    st.subheader("🪪 Ausweisdokumente verwalten")
+
+    st.markdown("""
+    Erfassen Sie Personalausweise, Reisepässe, Führerscheine und andere Ausweisdokumente.
+    Das System erkennt automatisch Ablaufdaten und erinnert Sie rechtzeitig.
+    """)
+
+    # Neues Ausweisdokument erstellen
+    with st.expander("➕ Neues Ausweisdokument hinzufügen", expanded=False):
+        with st.form("new_id_doc"):
+            doc_type = st.selectbox("Dokumenttyp*", [
+                "Personalausweis", "Reisepass", "Führerschein",
+                "Aufenthaltstitel", "Kinderreisepass", "Sonstiges"
+            ])
+
+            col1, col2 = st.columns(2)
+            with col1:
+                doc_number = st.text_input("Dokumentennummer*", placeholder="z.B. T220001293")
+                issue_date = st.date_input("Ausstellungsdatum", value=None)
+            with col2:
+                expiry_date = st.date_input("Gültig bis*", value=None)
+                issuing_authority = st.text_input("Ausstellende Behörde", placeholder="z.B. Stadt Musterstadt")
+
+            # Person zuordnen
+            persons = get_entities(EntityType.PERSON)
+            person_options = {"(Keine Zuordnung)": None}
+            person_options.update({p['name']: p['id'] for p in persons})
+            holder_name = st.selectbox("Inhaber (Person)*", list(person_options.keys()))
+            holder_id = person_options.get(holder_name)
+
+            # Ordner zuweisen
+            folders = get_folders()
+            folder_options = {f['name']: f['id'] for f in folders}
+            folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
+            folder_id = folder_options.get(folder_name)
+
+            # Erinnerung aktivieren
+            remind_before_expiry = st.checkbox("Vor Ablauf erinnern", value=True)
+            if remind_before_expiry:
+                remind_days = st.number_input("Tage vor Ablauf", min_value=7, max_value=180, value=90)
+            else:
+                remind_days = 0
+
+            notes = st.text_area("Notizen", placeholder="Optional")
+
+            if st.form_submit_button("Ausweisdokument erstellen"):
+                if doc_number and expiry_date:
+                    # Anzeigename erstellen
+                    display_name = f"{doc_type}"
+                    if holder_name and holder_name != "(Keine Zuordnung)":
+                        display_name = f"{doc_type} - {holder_name}"
+
+                    meta = {
+                        "doc_type": doc_type,
+                        "doc_number": doc_number,
+                        "issue_date": issue_date.isoformat() if issue_date else None,
+                        "expiry_date": expiry_date.isoformat() if expiry_date else None,
+                        "issuing_authority": issuing_authority,
+                        "holder_id": holder_id,
+                        "remind_before_expiry": remind_before_expiry,
+                        "remind_days": remind_days,
+                        "notes": notes
+                    }
+
+                    # Aliase für Dokumentenerkennung
+                    aliases = [doc_number]
+                    if doc_type == "Personalausweis":
+                        aliases.append("PERSONALAUSWEIS")
+                        aliases.append("Ausweis")
+                    elif doc_type == "Reisepass":
+                        aliases.append("REISEPASS")
+                        aliases.append("Pass")
+                    elif doc_type == "Führerschein":
+                        aliases.append("FÜHRERSCHEIN")
+                        aliases.append("Fahrerlaubnis")
+
+                    entity_id = create_entity(
+                        EntityType.ID_DOCUMENT,
+                        f"{doc_type} {doc_number}",
+                        display_name,
+                        aliases,
+                        meta,
+                        folder_id
+                    )
+
+                    # Parent-Entity setzen wenn Inhaber gewählt
+                    if holder_id:
+                        update_entity(entity_id, parent_entity_id=holder_id)
+
+                    # Kalendererinnerung erstellen wenn gewünscht
+                    if remind_before_expiry and expiry_date:
+                        from datetime import timedelta
+                        from database.models import CalendarEvent, EventType
+                        reminder_date = expiry_date - timedelta(days=remind_days)
+                        with get_db() as session:
+                            event = CalendarEvent(
+                                user_id=user_id,
+                                title=f"🪪 {doc_type} läuft ab",
+                                description=f"Ihr {doc_type} (Nr. {doc_number}) läuft am {expiry_date.strftime('%d.%m.%Y')} ab. Bitte rechtzeitig verlängern!",
+                                event_type=EventType.DEADLINE,
+                                start_date=reminder_date,
+                                all_day=True
+                            )
+                            session.add(event)
+                            session.commit()
+                        st.success(f"Ausweisdokument '{display_name}' wurde erstellt! Erinnerung am {reminder_date.strftime('%d.%m.%Y')} erstellt.")
+                    else:
+                        st.success(f"Ausweisdokument '{display_name}' wurde erstellt!")
+                    st.rerun()
+                else:
+                    st.error("Bitte geben Sie mindestens Dokumentennummer und Ablaufdatum ein.")
+
+    # Bestehende Ausweisdokumente
+    id_docs = get_entities(EntityType.ID_DOCUMENT)
+    if id_docs:
+        # Warnung für bald ablaufende Dokumente
+        from datetime import date, timedelta
+        today = date.today()
+        warning_threshold = today + timedelta(days=90)
+
+        expiring_soon = []
+        for doc in id_docs:
+            meta = doc['meta']
+            if meta.get('expiry_date'):
+                try:
+                    exp_date = date.fromisoformat(meta['expiry_date'])
+                    if exp_date <= warning_threshold:
+                        expiring_soon.append((doc, exp_date))
+                except (ValueError, TypeError):
+                    pass
+
+        if expiring_soon:
+            st.warning(f"⚠️ {len(expiring_soon)} Dokument(e) laufen in den nächsten 90 Tagen ab!")
+            for doc, exp_date in sorted(expiring_soon, key=lambda x: x[1]):
+                days_left = (exp_date - today).days
+                if days_left < 0:
+                    st.error(f"❌ **{doc['display_name'] or doc['name']}** - ABGELAUFEN seit {abs(days_left)} Tagen!")
+                elif days_left == 0:
+                    st.error(f"⏰ **{doc['display_name'] or doc['name']}** - Läuft HEUTE ab!")
+                else:
+                    st.warning(f"⏳ **{doc['display_name'] or doc['name']}** - Läuft in {days_left} Tagen ab ({exp_date.strftime('%d.%m.%Y')})")
+
+        st.divider()
+
+        for doc in id_docs:
+            meta = doc['meta']
+            with st.container(border=True):
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.write(f"**🪪 {doc['display_name'] or doc['name']}**")
+                    if meta.get('doc_number'):
+                        st.caption(f"Nr.: {meta['doc_number']}")
+                with col2:
+                    if meta.get('expiry_date'):
+                        try:
+                            exp_date = date.fromisoformat(meta['expiry_date'])
+                            days_left = (exp_date - today).days
+                            if days_left < 0:
+                                st.write(f"❌ Abgelaufen: {exp_date.strftime('%d.%m.%Y')}")
+                            elif days_left <= 90:
+                                st.write(f"⚠️ Gültig bis: {exp_date.strftime('%d.%m.%Y')}")
+                            else:
+                                st.write(f"✅ Gültig bis: {exp_date.strftime('%d.%m.%Y')}")
+                        except (ValueError, TypeError):
+                            pass
+                    if meta.get('issuing_authority'):
+                        st.caption(f"📍 {meta['issuing_authority']}")
+                with col3:
+                    st.write(f"📄 {doc['document_count']}")
+                    if st.button("🗑️", key=f"del_id_{doc['id']}"):
+                        delete_entity(doc['id'])
+                        st.rerun()
+    else:
+        st.info("Noch keine Ausweisdokumente angelegt.")
 
 
 with tab_supplier:

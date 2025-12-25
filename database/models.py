@@ -1116,6 +1116,7 @@ class EntityType(enum.Enum):
     ORGANIZATION = "organization"  # Organisation/Verein
     PROJECT = "project"         # Projekt
     CONTRACT = "contract"       # Vertrag (Multi-Topic)
+    ID_DOCUMENT = "id_document" # Ausweisdokument (Personalausweis, Reisepass, Führerschein)
 
 
 # Assoziationstabelle für Dokument-Entity-Verknüpfungen
