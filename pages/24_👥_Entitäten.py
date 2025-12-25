@@ -16,7 +16,7 @@ user_id = get_current_user_id()
 
 
 def get_entities(entity_type: EntityType = None):
-    """Lädt alle Entities des Benutzers"""
+    """Lädt alle Entities des Benutzers als Dictionaries"""
     with get_db() as session:
         query = session.query(Entity).filter(
             Entity.user_id == user_id,
@@ -24,15 +24,30 @@ def get_entities(entity_type: EntityType = None):
         )
         if entity_type:
             query = query.filter(Entity.entity_type == entity_type)
-        return query.order_by(Entity.name).all()
+        entities = query.order_by(Entity.name).all()
+
+        # Daten extrahieren während Session noch offen ist
+        return [{
+            'id': e.id,
+            'name': e.name,
+            'display_name': e.display_name,
+            'entity_type': e.entity_type,
+            'aliases': e.aliases or [],
+            'meta': e.meta or {},
+            'document_count': e.document_count or 0,
+            'folder_id': e.folder_id
+        } for e in entities]
 
 
 def get_folders():
-    """Lädt alle Ordner des Benutzers"""
+    """Lädt alle Ordner des Benutzers als Dictionaries"""
     with get_db() as session:
-        return session.query(Folder).filter(
+        folders = session.query(Folder).filter(
             Folder.user_id == user_id
         ).order_by(Folder.name).all()
+
+        # Daten extrahieren während Session noch offen ist
+        return [{'id': f.id, 'name': f.name} for f in folders]
 
 
 def create_entity(entity_type: EntityType, name: str, display_name: str = None,
@@ -106,16 +121,16 @@ with tab_overview:
         # Statistik
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            person_count = len([e for e in entities if e.entity_type == EntityType.PERSON])
+            person_count = len([e for e in entities if e['entity_type'] == EntityType.PERSON])
             st.metric("Personen", person_count)
         with col2:
-            vehicle_count = len([e for e in entities if e.entity_type == EntityType.VEHICLE])
+            vehicle_count = len([e for e in entities if e['entity_type'] == EntityType.VEHICLE])
             st.metric("Fahrzeuge", vehicle_count)
         with col3:
-            supplier_count = len([e for e in entities if e.entity_type == EntityType.SUPPLIER])
+            supplier_count = len([e for e in entities if e['entity_type'] == EntityType.SUPPLIER])
             st.metric("Lieferanten", supplier_count)
         with col4:
-            total_docs = sum(e.document_count or 0 for e in entities)
+            total_docs = sum(e['document_count'] for e in entities)
             st.metric("Verknüpfte Dokumente", total_docs)
 
         st.divider()
@@ -129,20 +144,20 @@ with tab_overview:
                 EntityType.ORGANIZATION: "🏛️",
                 EntityType.PROJECT: "📁",
                 EntityType.CONTRACT: "📑"
-            }.get(entity.entity_type, "📌")
+            }.get(entity['entity_type'], "📌")
 
-            with st.expander(f"{type_emoji} {entity.display_name or entity.name} ({entity.document_count or 0} Dokumente)"):
+            with st.expander(f"{type_emoji} {entity['display_name'] or entity['name']} ({entity['document_count']} Dokumente)"):
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    st.write(f"**Typ:** {entity.entity_type.value if entity.entity_type else 'Unbekannt'}")
-                    if entity.aliases:
-                        st.write(f"**Aliase:** {', '.join(entity.aliases)}")
-                    if entity.meta:
+                    st.write(f"**Typ:** {entity['entity_type'].value if entity['entity_type'] else 'Unbekannt'}")
+                    if entity['aliases']:
+                        st.write(f"**Aliase:** {', '.join(entity['aliases'])}")
+                    if entity['meta']:
                         st.write("**Metadaten:**")
-                        st.json(entity.meta)
+                        st.json(entity['meta'])
                 with col2:
-                    if st.button("🗑️ Löschen", key=f"del_{entity.id}"):
-                        delete_entity(entity.id)
+                    if st.button("🗑️ Löschen", key=f"del_{entity['id']}"):
+                        delete_entity(entity['id'])
                         st.rerun()
 
 
@@ -167,7 +182,7 @@ with tab_person:
 
             # Ordner zuweisen
             folders = get_folders()
-            folder_options = {f.name: f.id for f in folders}
+            folder_options = {f['name']: f['id'] for f in folders}
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
@@ -189,20 +204,20 @@ with tab_person:
     persons = get_entities(EntityType.PERSON)
     if persons:
         for person in persons:
-            meta = person.meta or {}
+            meta = person['meta']
             with st.container(border=True):
                 col1, col2, col3 = st.columns([3, 2, 1])
                 with col1:
-                    st.write(f"**{person.display_name or person.name}**")
-                    if person.aliases:
-                        st.caption(f"Aliase: {', '.join(person.aliases)}")
+                    st.write(f"**{person['display_name'] or person['name']}**")
+                    if person['aliases']:
+                        st.caption(f"Aliase: {', '.join(person['aliases'])}")
                 with col2:
                     if meta.get('relation'):
                         st.write(f"🔗 {meta['relation']}")
                     if meta.get('birthday'):
                         st.write(f"🎂 {meta['birthday']}")
                 with col3:
-                    st.write(f"📄 {person.document_count or 0}")
+                    st.write(f"📄 {person['document_count']}")
     else:
         st.info("Noch keine Personen angelegt.")
 
@@ -233,13 +248,13 @@ with tab_vehicle:
             # Person zuordnen (optional)
             persons = get_entities(EntityType.PERSON)
             person_options = {"(Keine Zuordnung)": None}
-            person_options.update({p.name: p.id for p in persons})
+            person_options.update({p['name']: p['id'] for p in persons})
             owner_name = st.selectbox("Eigentümer/Halter", list(person_options.keys()))
             owner_id = person_options.get(owner_name)
 
             # Ordner zuweisen
             folders = get_folders()
-            folder_options = {f.name: f.id for f in folders}
+            folder_options = {f['name']: f['id'] for f in folders}
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
@@ -273,11 +288,11 @@ with tab_vehicle:
     vehicles = get_entities(EntityType.VEHICLE)
     if vehicles:
         for vehicle in vehicles:
-            meta = vehicle.meta or {}
+            meta = vehicle['meta']
             with st.container(border=True):
                 col1, col2, col3 = st.columns([3, 2, 1])
                 with col1:
-                    st.write(f"**{vehicle.name}**")
+                    st.write(f"**{vehicle['name']}**")
                     if meta.get('brand') and meta.get('model'):
                         st.caption(f"{meta['brand']} {meta['model']}")
                 with col2:
@@ -286,7 +301,7 @@ with tab_vehicle:
                     if meta.get('year'):
                         st.write(f"📅 {meta['year']}")
                 with col3:
-                    st.write(f"📄 {vehicle.document_count or 0}")
+                    st.write(f"📄 {vehicle['document_count']}")
     else:
         st.info("Noch keine Fahrzeuge angelegt.")
 
@@ -317,7 +332,7 @@ with tab_supplier:
 
             # Ordner zuweisen
             folders = get_folders()
-            folder_options = {f.name: f.id for f in folders}
+            folder_options = {f['name']: f['id'] for f in folders}
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
@@ -340,20 +355,20 @@ with tab_supplier:
     suppliers = get_entities(EntityType.SUPPLIER)
     if suppliers:
         for supplier in suppliers:
-            meta = supplier.meta or {}
+            meta = supplier['meta']
             with st.container(border=True):
                 col1, col2, col3 = st.columns([3, 2, 1])
                 with col1:
-                    st.write(f"**{supplier.name}**")
-                    if supplier.aliases:
-                        st.caption(f"Auch bekannt als: {', '.join(supplier.aliases)}")
+                    st.write(f"**{supplier['name']}**")
+                    if supplier['aliases']:
+                        st.caption(f"Auch bekannt als: {', '.join(supplier['aliases'])}")
                 with col2:
                     if meta.get('category'):
                         st.write(f"📁 {meta['category']}")
                     if meta.get('industry'):
                         st.write(f"🔧 {meta['industry']}")
                 with col3:
-                    st.write(f"📄 {supplier.document_count or 0}")
+                    st.write(f"📄 {supplier['document_count']}")
     else:
         st.info("Noch keine Lieferanten angelegt.")
 
@@ -384,7 +399,7 @@ with tab_other:
 
             # Ordner zuweisen
             folders = get_folders()
-            folder_options = {f.name: f.id for f in folders}
+            folder_options = {f['name']: f['id'] for f in folders}
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
@@ -400,7 +415,7 @@ with tab_other:
 
     # Bestehende sonstige Entities
     other_types = [EntityType.ORGANIZATION, EntityType.PROJECT, EntityType.CONTRACT]
-    others = [e for e in get_entities() if e.entity_type in other_types]
+    others = [e for e in get_entities() if e['entity_type'] in other_types]
 
     if others:
         for entity in others:
@@ -408,18 +423,18 @@ with tab_other:
                 EntityType.ORGANIZATION: "🏛️",
                 EntityType.PROJECT: "📁",
                 EntityType.CONTRACT: "📑"
-            }.get(entity.entity_type, "📌")
+            }.get(entity['entity_type'], "📌")
 
             with st.container(border=True):
                 col1, col2, col3 = st.columns([3, 2, 1])
                 with col1:
-                    st.write(f"**{type_emoji} {entity.display_name or entity.name}**")
-                    if entity.aliases:
-                        st.caption(f"Aliase: {', '.join(entity.aliases)}")
+                    st.write(f"**{type_emoji} {entity['display_name'] or entity['name']}**")
+                    if entity['aliases']:
+                        st.caption(f"Aliase: {', '.join(entity['aliases'])}")
                 with col2:
-                    st.write(f"Typ: {entity.entity_type.value if entity.entity_type else 'Unbekannt'}")
+                    st.write(f"Typ: {entity['entity_type'].value if entity['entity_type'] else 'Unbekannt'}")
                 with col3:
-                    st.write(f"📄 {entity.document_count or 0}")
+                    st.write(f"📄 {entity['document_count']}")
     else:
         st.info("Noch keine sonstigen Entitäten angelegt.")
 
