@@ -1,0 +1,991 @@
+{
+  "static_folders": {
+    "00_Inbox": {
+      "_description": "Eingangsordner fuer unverarbeitete Dokumente"
+    },
+    "01_Identitaet_Stamm": {
+      "Ausweise_Paesse": {},
+      "Geburtsurkunden": {},
+      "Heiratsurkunden": {},
+      "Meldebescheinigungen": {},
+      "Fuehrerscheine": {},
+      "Fuehrungszeugnisse": {},
+      "Vollmachten": {}
+    },
+    "02_Finanzen": {
+      "Bankkonten": {
+        "Sparkasse_Girokonto": {},
+        "ING_Tagesgeld": {},
+        "DKB_Depot": {}
+      },
+      "Kredite_Darlehen": {
+        "Baufinanzierung_Hauptwohnung": {},
+        "Autokredit": {}
+      },
+      "Kreditkarten": {},
+      "Geldanlagen": {
+        "Aktien_ETF": {},
+        "Festgeld": {}
+      },
+      "Schulden_Mahnungen": {}
+    },
+    "03_Steuern": {
+      "Steuererklaerungen": {
+        "2020": {},
+        "2021": {},
+        "2022": {},
+        "2023": {},
+        "2024": {}
+      },
+      "Steuerbescheide": {},
+      "Belege_Nachweise": {},
+      "Steuerberater": {},
+      "Vorauszahlungen": {}
+    },
+    "04_Versicherungen": {
+      "Haftpflicht": {},
+      "Hausrat": {},
+      "Rechtsschutz": {},
+      "Berufsunfaehigkeit": {},
+      "Unfallversicherung": {},
+      "Lebensversicherung": {
+        "Signal_Iduna_Leben": {}
+      },
+      "Zahnzusatz": {},
+      "Tierhalterhaftpflicht": {}
+    },
+    "05_Wohnen_Immobilien": {
+      "Eigene_Miete": {
+        "Mietvertrag": {},
+        "Nebenkostenabrechnungen": {},
+        "Kautionsbelege": {},
+        "Korrespondenz_Vermieter": {},
+        "Uebergabeprotokolle": {}
+      },
+      "Eigentum": {
+        "Wohnung_Musterstadt_Hauptstr_1": {
+          "Kaufvertrag_Grundbuch": {},
+          "Finanzierung": {},
+          "Hausgeld_WEG": {},
+          "Instandhaltung_Reparaturen": {},
+          "Versicherungen_Objekt": {},
+          "Energieausweis": {}
+        },
+        "Haus_Beispielort_Waldweg_5": {
+          "Kaufvertrag_Grundbuch": {},
+          "Finanzierung": {},
+          "Grundsteuer": {},
+          "Instandhaltung_Reparaturen": {},
+          "Versicherungen_Objekt": {},
+          "Energieausweis": {}
+        }
+      },
+      "Vermietung": {
+        "Wohnung_Musterstadt_Hauptstr_1_EG": {
+          "Mietvertrag": {},
+          "Mieter_Mueller": {
+            "Korrespondenz": {},
+            "Kautionsabrechnung": {},
+            "Maengelanzeigen": {}
+          },
+          "Nebenkostenabrechnungen": {},
+          "Betriebskosten_Belege": {
+            "Heizkosten": {},
+            "Wasser_Abwasser": {},
+            "Muellgebuehren": {},
+            "Hausmeister": {},
+            "Versicherungen": {}
+          },
+          "Mietanpassungen": {},
+          "Uebergabeprotokolle": {}
+        }
+      }
+    },
+    "06_Gesundheit": {
+      "Krankenversicherung": {
+        "GKV_Beitraege": {},
+        "PKV_Beitraege": {},
+        "Leistungsabrechnungen": {}
+      },
+      "Pflegeversicherung": {},
+      "Arztberichte_Befunde": {},
+      "Impfungen": {},
+      "Rezepte_Verordnungen": {},
+      "Krankenhausaufenthalte": {},
+      "Zahnbehandlungen": {},
+      "Hilfsmittel": {}
+    },
+    "07_Fahrzeuge": {
+      "PKW_AB-CD-1234": {
+        "Kaufvertrag": {},
+        "Zulassung_Fahrzeugschein": {},
+        "KFZ_Versicherung": {},
+        "KFZ_Steuer": {},
+        "Inspektionen_Reparaturen": {},
+        "TUeV_HU_AU": {}
+      },
+      "Motorrad": {},
+      "Fahrrad_EBike": {}
+    },
+    "08_Arbeit_Bildung": {
+      "Arbeitsvertraege": {},
+      "Gehaltsabrechnungen": {
+        "2023": {},
+        "2024": {}
+      },
+      "Arbeitszeugnisse": {},
+      "Fortbildungen_Zertifikate": {},
+      "Studium_Ausbildung": {
+        "Zeugnisse": {},
+        "Immatrikulation": {}
+      },
+      "Rente_Vorsorge": {
+        "Gesetzliche_Rente_DRV": {},
+        "Versorgungswerk": {
+          "Beitragsbescheide": {},
+          "Renteninformation": {},
+          "Korrespondenz": {}
+        },
+        "Private_Altersvorsorge": {
+          "Signal_Iduna": {
+            "Vertrag": {},
+            "Jaehrliche_Mitteilungen": {},
+            "Korrespondenz": {}
+          },
+          "Riester": {},
+          "Ruerup": {},
+          "Betriebliche_Altersvorsorge": {}
+        }
+      },
+      "Arbeitslosigkeit_ALG": {}
+    },
+    "09_Vertraege_Recht": {
+      "Telekommunikation": {
+        "Mobilfunk": {},
+        "Internet_Festnetz": {}
+      },
+      "Energie": {
+        "Strom": {},
+        "Gas": {}
+      },
+      "Abonnements": {},
+      "Kaufvertraege_Wichtig": {},
+      "Anwalt_Rechtsstreit": {},
+      "Notarielle_Urkunden": {},
+      "Testament_Vorsorge": {}
+    },
+    "10_Familie_Kinder": {
+      "Kind_Max": {
+        "Geburtsurkunde": {},
+        "Schule_Kita": {},
+        "Gesundheit": {},
+        "Versicherungen": {},
+        "Kindergeld_Elterngeld": {}
+      },
+      "Kind_Lisa": {
+        "Geburtsurkunde": {},
+        "Schule_Kita": {},
+        "Gesundheit": {},
+        "Versicherungen": {},
+        "Kindergeld_Elterngeld": {}
+      },
+      "Unterhalt": {},
+      "Sorgerecht": {}
+    },
+    "99_Archiv": {
+      "Abgeschlossene_Vertraege": {},
+      "Ehemalige_Arbeitgeber": {},
+      "Verkaufte_Fahrzeuge": {},
+      "Aufbewahrungsfristen": {
+        "Loeschen_nach_2027": {},
+        "Loeschen_nach_2030": {},
+        "Loeschen_nach_2034": {}
+      }
+    }
+  },
+
+  "metadata_schema": {
+    "core_fields": {
+      "doc_id": {
+        "type": "uuid",
+        "required": true,
+        "auto_generated": true
+      },
+      "filename_original": {
+        "type": "string",
+        "required": true
+      },
+      "filename_normalized": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+\\.pdf$",
+        "required": true
+      },
+      "doc_type": {
+        "type": "enum",
+        "ref": "doc_type_taxonomy",
+        "required": true
+      },
+      "doc_date": {
+        "type": "date",
+        "format": "YYYY-MM-DD",
+        "required": true
+      },
+      "import_date": {
+        "type": "datetime",
+        "auto_generated": true
+      },
+      "counterparty": {
+        "type": "string",
+        "description": "Absender oder Gegenpartei",
+        "required": true
+      },
+      "counterparty_normalized": {
+        "type": "string",
+        "description": "Normalisierter Name ohne GmbH etc."
+      },
+      "subject": {
+        "type": "string",
+        "description": "Betreff oder Thema"
+      },
+      "category": {
+        "type": "enum",
+        "values": ["Identitaet", "Finanzen", "Steuern", "Versicherungen", "Wohnen", "Gesundheit", "Fahrzeuge", "Arbeit", "Vertraege", "Familie", "Sonstiges"]
+      },
+      "static_folder_path": {
+        "type": "string",
+        "description": "Pfad im statischen Ordnerbaum"
+      },
+      "status": {
+        "type": "enum",
+        "values": ["inbox", "processed", "action_required", "archived"],
+        "default": "inbox"
+      }
+    },
+    "financial_fields": {
+      "amount": {
+        "type": "decimal",
+        "currency": "EUR"
+      },
+      "amount_type": {
+        "type": "enum",
+        "values": ["einnahme", "ausgabe", "neutral"]
+      },
+      "payment_status": {
+        "type": "enum",
+        "values": ["offen", "bezahlt", "gemahnt", "storniert"]
+      },
+      "due_date": {
+        "type": "date"
+      },
+      "paid_date": {
+        "type": "date"
+      },
+      "paid_from_account": {
+        "type": "string",
+        "description": "Bankkontoname von dem bezahlt wurde"
+      },
+      "iban_counterparty": {
+        "type": "string",
+        "pattern": "^[A-Z]{2}\\d{2}[A-Z0-9]{4,30}$"
+      },
+      "bic": {
+        "type": "string"
+      }
+    },
+    "reference_fields": {
+      "invoice_number": {
+        "type": "string"
+      },
+      "contract_number": {
+        "type": "string"
+      },
+      "policy_number": {
+        "type": "string",
+        "description": "Versicherungsnummer"
+      },
+      "customer_number": {
+        "type": "string",
+        "description": "Kundennummer"
+      },
+      "case_number": {
+        "type": "string",
+        "description": "Aktenzeichen"
+      },
+      "tax_year": {
+        "type": "integer"
+      }
+    },
+    "property_fields": {
+      "property_id": {
+        "type": "string",
+        "description": "Eindeutige Immobilien-ID"
+      },
+      "property_address": {
+        "type": "string"
+      },
+      "property_type": {
+        "type": "enum",
+        "values": ["eigene_miete", "eigentum_selbstgenutzt", "eigentum_vermietet"]
+      },
+      "tenant_name": {
+        "type": "string"
+      },
+      "rental_period": {
+        "type": "string",
+        "description": "Abrechnungszeitraum"
+      }
+    },
+    "pension_fields": {
+      "pension_type": {
+        "type": "enum",
+        "values": ["gesetzlich_drv", "versorgungswerk", "riester", "ruerup", "betrieblich", "privat"]
+      },
+      "pension_provider": {
+        "type": "string"
+      },
+      "contribution_year": {
+        "type": "integer"
+      }
+    },
+    "vehicle_fields": {
+      "license_plate": {
+        "type": "string"
+      },
+      "vehicle_type": {
+        "type": "enum",
+        "values": ["pkw", "motorrad", "fahrrad", "anhaenger"]
+      },
+      "vin": {
+        "type": "string",
+        "description": "Fahrzeug-Identnummer"
+      }
+    },
+    "family_fields": {
+      "family_member": {
+        "type": "string"
+      },
+      "relation": {
+        "type": "enum",
+        "values": ["selbst", "ehepartner", "kind", "eltern", "sonstige"]
+      }
+    },
+    "retention_fields": {
+      "retention_years": {
+        "type": "integer",
+        "default": 10
+      },
+      "retention_reason": {
+        "type": "enum",
+        "values": ["steuerlich_10j", "steuerlich_6j", "gewaehrleistung_2j", "verjaehrung_3j", "lebenslang", "unbegrenzt"]
+      },
+      "earliest_deletion_date": {
+        "type": "date"
+      }
+    },
+    "ai_fields": {
+      "ocr_text": {
+        "type": "text"
+      },
+      "ocr_confidence": {
+        "type": "float"
+      },
+      "ai_summary": {
+        "type": "text"
+      },
+      "ai_classification_confidence": {
+        "type": "float"
+      },
+      "keywords": {
+        "type": "array",
+        "items": "string"
+      }
+    }
+  },
+
+  "doc_type_taxonomy": [
+    {
+      "category": "Identitaet",
+      "types": ["Personalausweis", "Reisepass", "Geburtsurkunde", "Heiratsurkunde", "Meldebescheinigung", "Fuehrerschein", "Fuehrungszeugnis", "Vollmacht", "Namensaenderung"]
+    },
+    {
+      "category": "Finanzen",
+      "types": ["Kontoauszug", "Depotauszug", "Jahresdepotauszug", "Kreditvertrag", "Darlehensvertrag", "Tilgungsplan", "Zinsanpassung", "Freistellungsauftrag", "Kreditkartenabrechnung", "Mahnung", "Inkasso", "Saldenmitteilung"]
+    },
+    {
+      "category": "Steuern",
+      "types": ["Steuererklaerung", "Steuerbescheid", "Einspruch_Steuerbescheid", "Vorauszahlungsbescheid", "Lohnsteuerbescheinigung", "Spendenquittung", "Handwerkerrechnung_Steuer", "Steuerberaterrechnung"]
+    },
+    {
+      "category": "Versicherungen",
+      "types": ["Versicherungspolice", "Versicherungsschein", "Beitragsrechnung_Versicherung", "Nachtrag_Versicherung", "Kuendigung_Versicherung", "Schadenmeldung", "Schadenregulierung", "Leistungsabrechnung_Versicherung", "Dynamikanpassung"]
+    },
+    {
+      "category": "Wohnen",
+      "types": ["Mietvertrag", "Mietanpassung", "Nebenkostenabrechnung", "Kautionsbeleg", "Uebergabeprotokoll", "Kuendigung_Mietvertrag", "Kaufvertrag_Immobilie", "Grundbuchauszug", "Hausgeldabrechnung", "WEG_Protokoll", "Wirtschaftsplan", "Energieausweis", "Handwerkerrechnung", "Mieteinnahme"]
+    },
+    {
+      "category": "Gesundheit",
+      "types": ["Arztrechnung", "Krankenhausrechnung", "Rezept", "Befund", "Arztbrief", "Impfnachweis", "AU_Bescheinigung", "Heil_Kostenplan", "Leistungsabrechnung_KV", "Beitragsbescheid_KV", "Pflegebescheid"]
+    },
+    {
+      "category": "Fahrzeuge",
+      "types": ["Kaufvertrag_Fahrzeug", "Fahrzeugschein", "Fahrzeugbrief", "KFZ_Versicherung", "KFZ_Steuerbescheid", "Inspektionsrechnung", "Reparaturrechnung", "TUeV_Bericht", "HU_AU_Bescheinigung", "Tankquittung"]
+    },
+    {
+      "category": "Arbeit",
+      "types": ["Arbeitsvertrag", "Gehaltsabrechnung", "Arbeitszeugnis", "Kuendigung_Arbeitsvertrag", "Abmahnung", "Fortbildungszertifikat", "Studienzeugnis", "Ausbildungszeugnis", "Praktikumszeugnis", "Sozialversicherungsnachweis"]
+    },
+    {
+      "category": "Rente",
+      "types": ["Renteninformation", "Rentenbescheid", "Beitragsbescheid_Rente", "Versorgungsauskunft", "Riester_Jahresmitteilung", "Ruerup_Jahresmitteilung", "bAV_Mitteilung", "Lebensversicherung_Standmitteilung"]
+    },
+    {
+      "category": "Vertraege",
+      "types": ["Mobilfunkvertrag", "Internetvertrag", "Stromvertrag", "Gasvertrag", "Abonnement", "Kuendigung_Vertrag", "Vertragsaenderung", "AGB", "Kaufvertrag", "Garantieschein"]
+    },
+    {
+      "category": "Recht",
+      "types": ["Anwaltsschreiben", "Gerichtsurteil", "Mahnbescheid", "Vollstreckungsbescheid", "Notarvertrag", "Testament", "Patientenverfuegung", "Vorsorgevollmacht", "Erbschein"]
+    },
+    {
+      "category": "Familie",
+      "types": ["Kindergeldbescheid", "Elterngeldbescheid", "Kitavertrag", "Schulanmeldung", "Zeugnis_Kind", "Unterhaltsbescheid", "Sorgerechtsbeschluss"]
+    },
+    {
+      "category": "Allgemein",
+      "types": ["Rechnung", "Quittung", "Bestaetigung", "Information", "Werbung", "Sonstiges"]
+    }
+  ],
+
+  "inbox_routing_rules": [
+    {
+      "priority": 1,
+      "name": "Steuererklaerung_nach_Jahr",
+      "conditions": {
+        "doc_type": ["Steuererklaerung", "Steuerbescheid"],
+        "tax_year": {"exists": true}
+      },
+      "target_path": "03_Steuern/Steuererklaerungen/{tax_year}",
+      "actions": ["set_retention_10_years"]
+    },
+    {
+      "priority": 2,
+      "name": "Gehaltsabrechnung_nach_Jahr",
+      "conditions": {
+        "doc_type": "Gehaltsabrechnung",
+        "doc_date": {"extract": "year"}
+      },
+      "target_path": "08_Arbeit_Bildung/Gehaltsabrechnungen/{year}",
+      "actions": ["set_retention_6_years"]
+    },
+    {
+      "priority": 3,
+      "name": "Versorgungswerk",
+      "conditions": {
+        "OR": [
+          {"counterparty_contains": ["Versorgungswerk", "Aerzteversorgung", "Rechtsanwaltsversorgung", "Architektenversorgung"]},
+          {"pension_type": "versorgungswerk"}
+        ]
+      },
+      "target_path": "08_Arbeit_Bildung/Rente_Vorsorge/Versorgungswerk",
+      "actions": []
+    },
+    {
+      "priority": 4,
+      "name": "Signal_Iduna_Altersvorsorge",
+      "conditions": {
+        "counterparty_normalized": "Signal_Iduna",
+        "doc_type": ["Lebensversicherung_Standmitteilung", "Versicherungspolice", "Beitragsrechnung_Versicherung"],
+        "keywords_any": ["Altersvorsorge", "Rentenversicherung", "Lebensversicherung"]
+      },
+      "target_path": "08_Arbeit_Bildung/Rente_Vorsorge/Private_Altersvorsorge/Signal_Iduna",
+      "actions": []
+    },
+    {
+      "priority": 5,
+      "name": "Signal_Iduna_Sonstige",
+      "conditions": {
+        "counterparty_normalized": "Signal_Iduna",
+        "NOT": {"keywords_any": ["Altersvorsorge", "Rentenversicherung", "Lebensversicherung"]}
+      },
+      "target_path": "04_Versicherungen/Lebensversicherung/Signal_Iduna_Leben",
+      "actions": []
+    },
+    {
+      "priority": 10,
+      "name": "Nebenkostenabrechnung_Eigene_Miete",
+      "conditions": {
+        "doc_type": "Nebenkostenabrechnung",
+        "property_type": "eigene_miete"
+      },
+      "target_path": "05_Wohnen_Immobilien/Eigene_Miete/Nebenkostenabrechnungen",
+      "actions": ["create_deadline_widerspruch_30_tage"]
+    },
+    {
+      "priority": 11,
+      "name": "Nebenkostenabrechnung_Vermietung",
+      "conditions": {
+        "doc_type": "Nebenkostenabrechnung",
+        "property_type": "eigentum_vermietet",
+        "property_id": {"exists": true}
+      },
+      "target_path": "05_Wohnen_Immobilien/Vermietung/{property_id}/Nebenkostenabrechnungen",
+      "actions": []
+    },
+    {
+      "priority": 12,
+      "name": "Mieteinnahme",
+      "conditions": {
+        "doc_type": "Mieteinnahme",
+        "property_id": {"exists": true}
+      },
+      "target_path": "05_Wohnen_Immobilien/Vermietung/{property_id}",
+      "actions": ["mark_as_einnahme"]
+    },
+    {
+      "priority": 13,
+      "name": "Betriebskosten_Vermietung",
+      "conditions": {
+        "property_type": "eigentum_vermietet",
+        "keywords_any": ["Heizkosten", "Wasserkosten", "Muellgebuehren", "Hausmeister"]
+      },
+      "target_path": "05_Wohnen_Immobilien/Vermietung/{property_id}/Betriebskosten_Belege",
+      "actions": []
+    },
+    {
+      "priority": 14,
+      "name": "Hausgeld_WEG",
+      "conditions": {
+        "doc_type": ["Hausgeldabrechnung", "WEG_Protokoll", "Wirtschaftsplan"],
+        "property_id": {"exists": true}
+      },
+      "target_path": "05_Wohnen_Immobilien/Eigentum/{property_id}/Hausgeld_WEG",
+      "actions": []
+    },
+    {
+      "priority": 20,
+      "name": "KFZ_nach_Kennzeichen",
+      "conditions": {
+        "license_plate": {"exists": true},
+        "category": "Fahrzeuge"
+      },
+      "target_path": "07_Fahrzeuge/PKW_{license_plate}",
+      "actions": ["create_folder_if_not_exists"]
+    },
+    {
+      "priority": 30,
+      "name": "Rechnung_offen",
+      "conditions": {
+        "doc_type": "Rechnung",
+        "payment_status": "offen",
+        "due_date": {"exists": true}
+      },
+      "target_path": "_KEEP_IN_INBOX_",
+      "actions": ["create_payment_reminder", "flag_action_required"]
+    },
+    {
+      "priority": 40,
+      "name": "Kind_Dokumente",
+      "conditions": {
+        "family_member": {"exists": true},
+        "relation": "kind"
+      },
+      "target_path": "10_Familie_Kinder/Kind_{family_member}",
+      "actions": ["create_folder_if_not_exists"]
+    },
+    {
+      "priority": 100,
+      "name": "Versicherung_nach_Typ",
+      "conditions": {
+        "category": "Versicherungen",
+        "policy_number": {"exists": true}
+      },
+      "target_path": "04_Versicherungen/{insurance_type}",
+      "actions": []
+    },
+    {
+      "priority": 200,
+      "name": "Fallback_nach_Kategorie",
+      "conditions": {
+        "category": {"exists": true}
+      },
+      "target_path": "{category_folder_root}",
+      "mapping": {
+        "Identitaet": "01_Identitaet_Stamm",
+        "Finanzen": "02_Finanzen",
+        "Steuern": "03_Steuern",
+        "Versicherungen": "04_Versicherungen",
+        "Wohnen": "05_Wohnen_Immobilien",
+        "Gesundheit": "06_Gesundheit",
+        "Fahrzeuge": "07_Fahrzeuge",
+        "Arbeit": "08_Arbeit_Bildung",
+        "Vertraege": "09_Vertraege_Recht",
+        "Familie": "10_Familie_Kinder"
+      },
+      "actions": []
+    },
+    {
+      "priority": 900,
+      "name": "Fallback_Absenderordner",
+      "conditions": {
+        "counterparty_normalized": {"exists": true},
+        "no_rule_matched": true
+      },
+      "target_path": "00_Inbox/Nach_Absender/{counterparty_normalized}",
+      "actions": ["create_folder_if_not_exists", "flag_for_manual_review"]
+    }
+  ],
+
+  "smart_folders": [
+    {
+      "name": "Offene_Rechnungen",
+      "filter": {
+        "doc_type": ["Rechnung", "Mahnung"],
+        "payment_status": "offen"
+      },
+      "sort": {"due_date": "asc"},
+      "purpose": "Alle unbezahlten Rechnungen mit Faelligkeit"
+    },
+    {
+      "name": "Fristen_naechste_30_Tage",
+      "filter": {
+        "due_date": {"between": ["today", "today+30d"]}
+      },
+      "sort": {"due_date": "asc"},
+      "purpose": "Dokumente mit anstehenden Fristen"
+    },
+    {
+      "name": "Steuerrelevant_aktuelles_Jahr",
+      "filter": {
+        "OR": [
+          {"doc_type": ["Spendenquittung", "Handwerkerrechnung_Steuer", "Arztrechnung"]},
+          {"keywords_any": ["steuerlich absetzbar", "Werbungskosten", "Sonderausgaben"]},
+          {"category": "Steuern"}
+        ],
+        "doc_date": {"year": "current"}
+      },
+      "purpose": "Belege fuer die naechste Steuererklaerung"
+    },
+    {
+      "name": "Mieteinnahmen_aktuelles_Jahr",
+      "filter": {
+        "property_type": "eigentum_vermietet",
+        "amount_type": "einnahme",
+        "doc_date": {"year": "current"}
+      },
+      "group_by": "property_id",
+      "purpose": "Uebersicht Mieteinnahmen pro Objekt"
+    },
+    {
+      "name": "Betriebskosten_Vermietung",
+      "filter": {
+        "property_type": "eigentum_vermietet",
+        "amount_type": "ausgabe",
+        "keywords_any": ["Betriebskosten", "Nebenkosten", "Heizung", "Wasser", "Muell"]
+      },
+      "group_by": ["property_id", "rental_period"],
+      "purpose": "Belege fuer Nebenkostenabrechnungen an Mieter"
+    },
+    {
+      "name": "Versicherungspolicen_aktiv",
+      "filter": {
+        "doc_type": ["Versicherungspolice", "Versicherungsschein"],
+        "status": {"not": "archived"}
+      },
+      "purpose": "Alle aktuellen Versicherungsvertraege"
+    },
+    {
+      "name": "Altersvorsorge_Uebersicht",
+      "filter": {
+        "OR": [
+          {"pension_type": {"exists": true}},
+          {"doc_type": ["Renteninformation", "Rentenbescheid", "Lebensversicherung_Standmitteilung", "Riester_Jahresmitteilung"]}
+        ]
+      },
+      "group_by": "pension_type",
+      "purpose": "Gesamtuebersicht Altersvorsorge"
+    },
+    {
+      "name": "Vertraege_kuerzlich_geaendert",
+      "filter": {
+        "doc_type": ["Vertragsaenderung", "Nachtrag_Versicherung", "Mietanpassung", "Zinsanpassung"],
+        "doc_date": {"gte": "today-90d"}
+      },
+      "purpose": "Aktuelle Vertragsaenderungen zur Pruefung"
+    },
+    {
+      "name": "Dokumente_ohne_Zuordnung",
+      "filter": {
+        "static_folder_path": {"starts_with": "00_Inbox"},
+        "import_date": {"lt": "today-7d"}
+      },
+      "purpose": "Laenger als 7 Tage im Posteingang"
+    },
+    {
+      "name": "Bald_zu_loeschen",
+      "filter": {
+        "earliest_deletion_date": {"between": ["today", "today+365d"]}
+      },
+      "sort": {"earliest_deletion_date": "asc"},
+      "purpose": "Dokumente deren Aufbewahrungsfrist bald endet"
+    },
+    {
+      "name": "Hohe_Betraege",
+      "filter": {
+        "amount": {"gte": 1000}
+      },
+      "sort": {"amount": "desc"},
+      "purpose": "Dokumente mit hohen Geldbetraegen"
+    },
+    {
+      "name": "Korrespondenz_Mieter",
+      "filter": {
+        "property_type": "eigentum_vermietet",
+        "doc_type": {"in": ["Korrespondenz", "Maengelanzeige", "Kuendigung_Mietvertrag"]}
+      },
+      "group_by": ["property_id", "tenant_name"],
+      "purpose": "Schriftverkehr mit Mietern"
+    },
+    {
+      "name": "KFZ_Kosten_Jahr",
+      "filter": {
+        "category": "Fahrzeuge",
+        "amount_type": "ausgabe",
+        "doc_date": {"year": "current"}
+      },
+      "group_by": "license_plate",
+      "aggregate": {"sum": "amount"},
+      "purpose": "Fahrzeugkosten pro KFZ"
+    }
+  ],
+
+  "learning_policy": {
+    "learn_on_manual_move": true,
+    "learned_rule_template": {
+      "captured_features": [
+        {
+          "field": "counterparty_normalized",
+          "weight": 1.0,
+          "match_type": "exact"
+        },
+        {
+          "field": "doc_type",
+          "weight": 0.8,
+          "match_type": "exact"
+        },
+        {
+          "field": "policy_number",
+          "weight": 0.9,
+          "match_type": "exact",
+          "if_exists": true
+        },
+        {
+          "field": "contract_number",
+          "weight": 0.9,
+          "match_type": "exact",
+          "if_exists": true
+        },
+        {
+          "field": "iban_counterparty",
+          "weight": 0.7,
+          "match_type": "exact",
+          "if_exists": true
+        },
+        {
+          "field": "property_address",
+          "weight": 0.85,
+          "match_type": "fuzzy",
+          "if_exists": true
+        },
+        {
+          "field": "keywords",
+          "weight": 0.5,
+          "match_type": "any_of",
+          "min_match": 2
+        }
+      ],
+      "target_folder_path": "{{moved_to_path}}",
+      "initial_confidence": 0.6,
+      "confidence_increment_on_confirm": 0.1,
+      "confidence_decrement_on_reject": 0.2,
+      "max_confidence": 0.99
+    },
+    "confidence_threshold_auto_apply": 0.75,
+    "confidence_threshold_suggest": 0.5,
+    "conflict_resolution": {
+      "strategy": "specificity_then_recency",
+      "rules": [
+        {
+          "name": "specificity_wins",
+          "description": "Regel mit mehr passenden Feldern gewinnt",
+          "priority": 1
+        },
+        {
+          "name": "higher_confidence_wins",
+          "description": "Bei gleicher Spezifitaet gewinnt hoehere Konfidenz",
+          "priority": 2
+        },
+        {
+          "name": "recent_wins",
+          "description": "Bei Gleichstand gewinnt die neuere Regel",
+          "priority": 3
+        }
+      ],
+      "manual_override": true,
+      "notify_on_conflict": true
+    },
+    "rule_lifecycle": {
+      "min_applications_before_auto": 3,
+      "decay_after_days_unused": 365,
+      "decay_rate": 0.1,
+      "delete_below_confidence": 0.2,
+      "merge_similar_rules": true,
+      "similarity_threshold_merge": 0.9
+    },
+    "feedback_loop": {
+      "track_auto_assignments": true,
+      "allow_quick_reject": true,
+      "learn_from_rejection": true,
+      "periodic_review_prompt_days": 90
+    }
+  },
+
+  "filename_standard": {
+    "pattern": "{doc_date}__{doc_type}__{counterparty_normalized}__{subject_short}.pdf",
+    "date_format": "YYYY-MM-DD",
+    "separator": "__",
+    "max_length": 200,
+    "character_replacement": {
+      "umlauts": {
+        "ae": "ae",
+        "oe": "oe",
+        "ue": "ue",
+        "Ae": "Ae",
+        "Oe": "Oe",
+        "Ue": "Ue",
+        "ss": "ss"
+      },
+      "special_chars": {
+        " ": "_",
+        "/": "-",
+        "\\": "-",
+        ":": "-",
+        "&": "und"
+      },
+      "remove": ["?", "*", "\"", "<", ">", "|", "'", ",", ";"]
+    },
+    "examples": [
+      "2024-03-15__Rechnung__Deutsche_Telekom__Mobilfunk_Maerz.pdf",
+      "2024-01-20__Nebenkostenabrechnung__Hausverwaltung_Schmidt__Abrechnungsjahr_2023.pdf",
+      "2024-05-01__Gehaltsabrechnung__Musterfirma_GmbH__Mai_2024.pdf",
+      "2024-02-28__Lebensversicherung_Standmitteilung__Signal_Iduna__Jahresinformation.pdf"
+    ]
+  },
+
+  "export_profiles": {
+    "share_email": {
+      "name": "E-Mail Versand",
+      "format": "pdf",
+      "include_metadata": false,
+      "flatten_annotations": true,
+      "max_size_mb": 25,
+      "compression": "auto",
+      "password_protect": false,
+      "watermark": null
+    },
+    "share_link": {
+      "name": "Download-Link",
+      "format": "pdf",
+      "expiry_days": 7,
+      "max_downloads": 5,
+      "password_protect": true,
+      "password_generation": "random_12_chars",
+      "notify_on_download": true,
+      "audit_log": true
+    },
+    "steuerberater": {
+      "name": "Export fuer Steuerberater",
+      "format": "zip",
+      "include_metadata": true,
+      "metadata_format": "csv",
+      "folder_structure": "by_category",
+      "index_pdf": true,
+      "index_includes": ["filename", "doc_date", "counterparty", "amount", "doc_type"],
+      "zip_password": true,
+      "password_delivery": "separate_channel",
+      "expiry_days": 30
+    },
+    "versicherung": {
+      "name": "Export fuer Versicherung",
+      "format": "pdf_merged",
+      "include_metadata": false,
+      "add_cover_page": true,
+      "cover_includes": ["case_number", "policy_number", "document_list"],
+      "max_size_mb": 50,
+      "compression": "medium"
+    },
+    "backup_lokal": {
+      "name": "Lokales Backup",
+      "format": "zip",
+      "include_metadata": true,
+      "metadata_format": "json",
+      "folder_structure": "original",
+      "include_encrypted": true,
+      "zip_password": true,
+      "password_source": "user_master_password",
+      "verify_integrity": true
+    },
+    "archiv_export": {
+      "name": "Archiv-Export",
+      "format": "zip",
+      "include_metadata": true,
+      "metadata_format": "json",
+      "index_pdf": true,
+      "index_includes": ["filename", "doc_date", "counterparty", "category", "retention_reason", "earliest_deletion_date"],
+      "long_term_format": "pdf_a",
+      "include_checksums": true,
+      "checksum_algorithm": "sha256"
+    }
+  },
+
+  "property_registry": {
+    "_description": "Zentrale Verwaltung von Immobilien fuer konsistente Zuordnung",
+    "properties": [
+      {
+        "property_id": "Wohnung_Musterstadt_Hauptstr_1",
+        "address": "Hauptstrasse 1, 12345 Musterstadt",
+        "type": "eigentum_selbstgenutzt",
+        "purchase_date": "2018-06-01",
+        "folder_path": "05_Wohnen_Immobilien/Eigentum/Wohnung_Musterstadt_Hauptstr_1"
+      },
+      {
+        "property_id": "Wohnung_Musterstadt_Hauptstr_1_EG",
+        "address": "Hauptstrasse 1 EG, 12345 Musterstadt",
+        "type": "eigentum_vermietet",
+        "purchase_date": "2020-03-15",
+        "current_tenant": "Familie Mueller",
+        "monthly_rent": 850.00,
+        "deposit_amount": 2550.00,
+        "folder_path": "05_Wohnen_Immobilien/Vermietung/Wohnung_Musterstadt_Hauptstr_1_EG"
+      }
+    ]
+  },
+
+  "counterparty_aliases": {
+    "_description": "Normalisierung verschiedener Schreibweisen",
+    "mappings": [
+      {
+        "normalized": "Signal_Iduna",
+        "aliases": ["SIGNAL IDUNA", "Signal Iduna Gruppe", "SIGNAL IDUNA Lebensversicherung a.G.", "Signal Iduna Allgemeine"]
+      },
+      {
+        "normalized": "Deutsche_Telekom",
+        "aliases": ["Telekom Deutschland GmbH", "Deutsche Telekom AG", "Telekom", "T-Mobile"]
+      },
+      {
+        "normalized": "Deutsche_Rentenversicherung",
+        "aliases": ["DRV Bund", "Deutsche Rentenversicherung Bund", "DRV"]
+      }
+    ]
+  }
+}
