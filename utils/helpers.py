@@ -477,28 +477,26 @@ def render_share_buttons(title: str, text: str, url: str = None, key_prefix: str
         )
 
     # Native Share API für Mobilgeräte (JavaScript)
-    title_escaped = title.replace("'", "\\'")
-    text_escaped = text.replace("'", "\\'")
-    share_js = f"""
-    <script>
-    function nativeShare_{key_prefix}() {{
-        if (navigator.share) {{
-            navigator.share({{
-                title: '{title_escaped}',
-                text: '{text_escaped}',
-                url: '{url or ""}'
-            }}).catch(console.error);
-        }} else {{
-            alert('Native Teilen wird auf diesem Gerät nicht unterstützt. Nutzen Sie die Buttons oben.');
-        }}
+    # Escaping für JavaScript-Strings: Zeilenumbrüche und Anführungszeichen
+    title_escaped = title.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+    text_escaped = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+
+    share_js = f"""<script>
+function nativeShare_{key_prefix}() {{
+    if (navigator.share) {{
+        navigator.share({{
+            title: '{title_escaped}',
+            text: '{text_escaped}',
+            url: '{url or ""}'
+        }}).catch(console.error);
+    }} else {{
+        alert('Native Teilen wird auf diesem Gerät nicht unterstützt. Nutzen Sie die Buttons oben.');
     }}
-    </script>
-    <button onclick="nativeShare_{key_prefix}()" style="background-color: #007AFF; color: white;
-            border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer;
-            width: 100%; margin-top: 10px;">
-        📲 Natives Teilen (Mobil)
-    </button>
-    """
+}}
+</script>
+<button onclick="nativeShare_{key_prefix}()" style="background-color: #007AFF; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 10px;">
+    📲 Natives Teilen (Mobil)
+</button>"""
     st.markdown(share_js, unsafe_allow_html=True)
 
 
