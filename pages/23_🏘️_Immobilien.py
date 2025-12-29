@@ -19,6 +19,94 @@ init_db()
 # Sidebar mit Aktentasche
 render_sidebar_cart()
 
+
+def link_documents_to_property(session, user_id: int, property_id: int,
+                                street: str, house_number: str, postal_code: str, city: str) -> int:
+    """
+    Durchsucht alle Dokumente nach der Immobilienadresse und verknüpft passende Dokumente.
+
+    Returns:
+        Anzahl der verknüpften Dokumente
+    """
+    linked_count = 0
+
+    # Suchbegriffe erstellen
+    search_terms = []
+
+    # Vollständige Adresse
+    full_address = f"{street} {house_number}".strip()
+    if full_address:
+        search_terms.append(full_address.lower())
+
+    # Straße ohne Hausnummer
+    if street:
+        search_terms.append(street.lower())
+
+    # PLZ + Stadt
+    if postal_code:
+        search_terms.append(postal_code)
+    if city:
+        search_terms.append(city.lower())
+
+    # PLZ Stadt Kombination
+    if postal_code and city:
+        search_terms.append(f"{postal_code} {city}".lower())
+
+    # Alle Dokumente durchsuchen
+    documents = session.query(Document).filter(
+        Document.user_id == user_id,
+        Document.property_id.is_(None),  # Nur nicht-zugeordnete
+        Document.ocr_text.isnot(None)
+    ).all()
+
+    for doc in documents:
+        if not doc.ocr_text:
+            continue
+
+        text_lower = doc.ocr_text.lower()
+        matches = 0
+
+        # Prüfen, ob Adressbestandteile vorkommen
+        for term in search_terms:
+            if term in text_lower:
+                matches += 1
+
+        # Wenn mindestens 2 Adressbestandteile gefunden werden (z.B. Straße + PLZ oder Stadt)
+        if matches >= 2:
+            doc.property_id = property_id
+            doc.property_address = f"{street} {house_number}, {postal_code} {city}".strip()
+            linked_count += 1
+
+    if linked_count > 0:
+        session.commit()
+
+    return linked_count
+
+
+def scan_all_documents_for_properties(user_id: int) -> dict:
+    """
+    Durchsucht alle Dokumente nach allen Immobilienadresse und verknüpft passende.
+
+    Returns:
+        Dictionary mit property_id -> Anzahl verknüpfter Dokumente
+    """
+    results = {}
+
+    with get_db() as session:
+        properties = session.query(Property).filter(
+            Property.user_id == user_id
+        ).all()
+
+        for prop in properties:
+            count = link_documents_to_property(
+                session, user_id, prop.id,
+                prop.street, prop.house_number, prop.postal_code, prop.city
+            )
+            if count > 0:
+                results[prop.id] = count
+
+    return results
+
 st.title("🏘️ Immobilien-Verwaltung")
 st.markdown("Verwalten Sie Ihre Immobilien für automatische Dokumentenzuordnung")
 
@@ -69,6 +157,19 @@ tab_list, tab_add, tab_docs = st.tabs(["📋 Übersicht", "➕ Hinzufügen", "�
 
 with tab_list:
     st.subheader("Ihre Immobilien")
+
+    # Button zum Durchsuchen aller Dokumente
+    col_title, col_scan = st.columns([3, 1])
+    with col_scan:
+        if st.button("🔍 Dokumente scannen", help="Durchsucht alle Dokumente nach Immobilienadressen"):
+            with st.spinner("Durchsuche Dokumente..."):
+                results = scan_all_documents_for_properties(user_id)
+                if results:
+                    total = sum(results.values())
+                    st.success(f"✅ {total} Dokumente wurden zugeordnet!")
+                    st.rerun()
+                else:
+                    st.info("Keine neuen Zuordnungen gefunden.")
 
     with get_db() as session:
         properties = session.query(Property).filter(
@@ -279,8 +380,43 @@ with tab_add:
                             color="#A1887F"
                         )
                         session.add(prop_folder)
+                        session.flush()
+
+                        # Virtuelle Unterordner für Immobilienkategorien erstellen
+                        property_subfolders = [
+                            ("📜 Grundsteuer", "#8D6E63"),
+                            ("🛡️ Versicherung", "#7986CB"),
+                            ("💰 Hausgeldabrechnung", "#4DB6AC"),
+                            ("📊 Wirtschaftsplan", "#FFB74D"),
+                            ("🔧 Sanierungen & Reparaturen", "#FF8A65"),
+                            ("📋 Verträge", "#9575CD"),
+                            ("📄 Korrespondenz", "#90A4AE"),
+                        ]
+
+                        for subfolder_name, color in property_subfolders:
+                            subfolder = Folder(
+                                user_id=user_id,
+                                name=subfolder_name,
+                                parent_id=prop_folder.id,
+                                color=color
+                            )
+                            session.add(subfolder)
+
                         session.commit()
-                        st.info(f"📁 Ordner 'Immobilien/{name}' wurde erstellt.")
+                        st.info(f"📁 Ordner 'Immobilien/{name}' mit Unterordnern wurde erstellt.")
+
+                        # Dokumente nach Immobilienadresse durchsuchen
+                        st.info("🔍 Durchsuche vorhandene Dokumente nach Adresse...")
+                        property_id = new_prop.id
+                        linked_count = link_documents_to_property(
+                            session, user_id, property_id,
+                            street, house_number, postal_code, city
+                        )
+
+                        if linked_count > 0:
+                            st.success(f"✅ {linked_count} Dokumente wurden automatisch mit der Immobilie verknüpft!")
+                        else:
+                            st.info("Keine passenden Dokumente gefunden.")
 
                         st.rerun()
 

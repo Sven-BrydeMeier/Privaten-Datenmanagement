@@ -1148,6 +1148,129 @@ Antworte im JSON-Format:
                 pass
 
 
+    def suggest_folders_for_document(self, document_id: int, limit: int = 5) -> List[Dict]:
+        """
+        Gibt intelligente Ordnervorschläge für ein bestehendes Dokument.
+
+        Args:
+            document_id: ID des Dokuments
+            limit: Maximale Anzahl von Vorschlägen
+
+        Returns:
+            Liste von Ordner-Vorschlägen mit Begründung
+        """
+        suggestions = []
+
+        try:
+            with get_db() as session:
+                doc = session.get(Document, document_id)
+                if not doc:
+                    return []
+
+                current_folder_id = doc.folder_id
+
+                # 1. Basierend auf Kategorie - häufigste Ordner
+                if doc.category:
+                    from sqlalchemy import func
+                    folder_counts = session.query(
+                        Folder.id, Folder.name, func.count(Document.id).label('count')
+                    ).join(Document, Document.folder_id == Folder.id).filter(
+                        Document.category == doc.category,
+                        Document.user_id == self.user_id,
+                        Folder.id != current_folder_id
+                    ).group_by(Folder.id).order_by(func.count(Document.id).desc()).limit(3).all()
+
+                    for folder_id, folder_name, count in folder_counts:
+                        suggestions.append({
+                            'folder_id': folder_id,
+                            'folder_name': folder_name,
+                            'reason': f'📊 {count} ähnliche "{doc.category}"-Dokumente',
+                            'confidence': min(0.8, count / 10),
+                            'priority': 1
+                        })
+
+                # 2. Basierend auf Absender - wo sind andere Dokumente dieses Absenders?
+                if doc.sender:
+                    sender_folders = session.query(
+                        Folder.id, Folder.name, func.count(Document.id).label('count')
+                    ).join(Document, Document.folder_id == Folder.id).filter(
+                        Document.sender.ilike(f'%{doc.sender}%'),
+                        Document.user_id == self.user_id,
+                        Folder.id != current_folder_id
+                    ).group_by(Folder.id).order_by(func.count(Document.id).desc()).limit(2).all()
+
+                    for folder_id, folder_name, count in sender_folders:
+                        # Nicht doppelt hinzufügen
+                        if not any(s['folder_id'] == folder_id for s in suggestions):
+                            suggestions.append({
+                                'folder_id': folder_id,
+                                'folder_name': folder_name,
+                                'reason': f'📤 {count} Dokumente von "{doc.sender[:20]}..."',
+                                'confidence': min(0.9, count / 5),
+                                'priority': 2
+                            })
+
+                # 3. Basierend auf Immobilie
+                if doc.property_id:
+                    prop = session.get(Property, doc.property_id)
+                    if prop:
+                        # Ordner für diese Immobilie finden/vorschlagen
+                        prop_folder = session.query(Folder).filter(
+                            Folder.user_id == self.user_id,
+                            Folder.name.ilike(f'%{prop.name}%')
+                        ).first()
+
+                        if prop_folder and prop_folder.id != current_folder_id:
+                            if not any(s['folder_id'] == prop_folder.id for s in suggestions):
+                                suggestions.append({
+                                    'folder_id': prop_folder.id,
+                                    'folder_name': prop_folder.name,
+                                    'reason': f'🏠 Immobilie: {prop.name}',
+                                    'confidence': 0.95,
+                                    'priority': 0  # Höchste Priorität
+                                })
+
+                # 4. Re-Klassifikation durchführen für neue Vorschläge
+                if doc.ocr_text:
+                    result = self.classify(doc.ocr_text, {
+                        'sender': doc.sender,
+                        'category': doc.category
+                    }, save_explanation=False)
+
+                    # Primären Ordner vorschlagen
+                    if result.get('primary_folder_id') and result['primary_folder_id'] != current_folder_id:
+                        primary = session.get(Folder, result['primary_folder_id'])
+                        if primary and not any(s['folder_id'] == primary.id for s in suggestions):
+                            suggestions.append({
+                                'folder_id': primary.id,
+                                'folder_name': primary.name,
+                                'reason': f'🤖 KI-Empfehlung: {result.get("reasons", ["Analyse"])[0] if result.get("reasons") else "Analyse"}',
+                                'confidence': result.get('confidence', 0.5),
+                                'priority': 3
+                            })
+
+                    # Alternative Ordner
+                    for alt in result.get('alternatives', [])[:2]:
+                        if alt['folder_id'] != current_folder_id:
+                            if not any(s['folder_id'] == alt['folder_id'] for s in suggestions):
+                                suggestions.append({
+                                    'folder_id': alt['folder_id'],
+                                    'folder_name': alt['folder_name'],
+                                    'reason': f'💡 {alt["reason"]}',
+                                    'confidence': alt.get('confidence', 0.5),
+                                    'priority': 4
+                                })
+
+                # Sortieren nach Priorität und Confidence
+                suggestions.sort(key=lambda x: (x['priority'], -x['confidence']))
+
+        except Exception as e:
+            # Bei Fehler leere Liste zurückgeben
+            pass
+
+        return suggestions[:limit]
+
+
 def get_classifier(user_id: int) -> DocumentClassifier:
     """Factory für DocumentClassifier"""
     return DocumentClassifier(user_id)

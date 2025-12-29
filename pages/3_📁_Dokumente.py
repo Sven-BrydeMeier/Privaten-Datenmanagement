@@ -377,16 +377,19 @@ with col_docs:
                         with st.popover("⋮"):
                             if st.button("👁️ Anzeigen", key=f"view_{doc.id}"):
                                 st.session_state.view_document_id = doc.id
+                                st.rerun()
 
                             if st.button("📋 In Aktentasche", key=f"cart_{doc.id}"):
                                 if 'active_cart_items' not in st.session_state:
                                     st.session_state.active_cart_items = []
                                 if doc.id not in st.session_state.active_cart_items:
                                     st.session_state.active_cart_items.append(doc.id)
-                                    st.success("Hinzugefügt!")
+                                    st.toast("✅ Zur Aktentasche hinzugefügt!")
+                                    st.rerun()
 
                             if st.button("📂 Verschieben", key=f"move_{doc.id}"):
                                 st.session_state.move_document_id = doc.id
+                                st.rerun()
 
                             if st.button("🔗 Teilen", key=f"share_{doc.id}"):
                                 link = generate_share_link(doc.id)
@@ -394,6 +397,7 @@ with col_docs:
 
                             if st.button("🗑️ Löschen", key=f"del_{doc.id}"):
                                 st.session_state.delete_document_id = doc.id
+                                st.rerun()
 
                     st.divider()
         else:
@@ -751,12 +755,43 @@ if 'move_document_id' in st.session_state:
             # Aktuellen Ordner des Dokuments ermitteln
             doc = session.get(Document, doc_id)
             current_folder_name = ""
-            if doc and doc.folder_id:
-                current_folder = session.get(Folder, doc.folder_id)
-                if current_folder:
-                    current_folder_name = current_folder.name
+            doc_title = ""
+            if doc:
+                doc_title = doc.title or doc.filename
+                if doc.folder_id:
+                    current_folder = session.get(Folder, doc.folder_id)
+                    if current_folder:
+                        current_folder_name = current_folder.name
 
-            st.info(f"📄 Aktueller Ordner: **{current_folder_name or 'Kein Ordner'}**")
+            st.info(f"📄 **{doc_title}** | Aktueller Ordner: **{current_folder_name or 'Kein Ordner'}**")
+
+            # Intelligente Ordnervorschläge
+            classifier = get_classifier(user_id)
+            suggestions = classifier.suggest_folders_for_document(doc_id, limit=5)
+
+            if suggestions:
+                st.markdown("### 💡 Empfohlene Ordner")
+                for i, suggestion in enumerate(suggestions):
+                    col_sug, col_btn = st.columns([4, 1])
+                    with col_sug:
+                        confidence_bar = "🟢" if suggestion['confidence'] > 0.7 else "🟡" if suggestion['confidence'] > 0.4 else "⚪"
+                        st.markdown(f"{confidence_bar} **{suggestion['folder_name']}**")
+                        st.caption(suggestion['reason'])
+                    with col_btn:
+                        if st.button("Hierhin", key=f"suggest_{i}_{suggestion['folder_id']}"):
+                            with get_db() as move_session:
+                                move_doc = move_session.get(Document, doc_id)
+                                if move_doc:
+                                    move_doc.folder_id = suggestion['folder_id']
+                                    move_session.commit()
+                                    classifier.learn_from_move(doc_id, suggestion['folder_id'])
+                                    st.toast(f"✅ Verschoben nach '{suggestion['folder_name']}'!")
+                                    del st.session_state.move_document_id
+                                    st.rerun()
+
+                st.divider()
+
+            st.markdown("### 📂 Oder Ordner manuell wählen")
 
             # Ordnerauswahl mit Baumstruktur
             target_folder = st.selectbox(
@@ -774,20 +809,19 @@ if 'move_document_id' in st.session_state:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Verschieben", type="primary"):
-                    doc = session.get(Document, doc_id)
-                    if doc:
-                        old_folder_id = doc.folder_id
-                        doc.folder_id = target_folder
-                        session.commit()
+                    with get_db() as move_session:
+                        move_doc = move_session.get(Document, doc_id)
+                        if move_doc:
+                            move_doc.folder_id = target_folder
+                            move_session.commit()
 
-                        # Klassifikator lernen lassen
-                        classifier = get_classifier(user_id)
-                        classifier.learn_from_move(doc_id, target_folder)
+                            # Klassifikator lernen lassen
+                            classifier.learn_from_move(doc_id, target_folder)
 
-                        target_name = next((f['name'] for f in folder_tree if f['id'] == target_folder), "")
-                        st.success(f"✓ Verschoben nach '{target_name}'!")
-                        del st.session_state.move_document_id
-                        st.rerun()
+                            target_name = next((f['name'] for f in folder_tree if f['id'] == target_folder), "")
+                            st.success(f"✓ Verschoben nach '{target_name}'!")
+                            del st.session_state.move_document_id
+                            st.rerun()
             with col2:
                 if st.button("Abbrechen"):
                     del st.session_state.move_document_id
