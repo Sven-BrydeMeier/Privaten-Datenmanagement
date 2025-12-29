@@ -264,10 +264,53 @@ def run_migrations():
                     pass
 
 
+def create_indexes_safely():
+    """Erstellt alle Indizes sicher mit IF NOT EXISTS"""
+    # Alle Indizes aus den Modellen sammeln
+    indexes_to_create = []
+    for table in Base.metadata.tables.values():
+        for index in table.indexes:
+            columns = [col.name for col in index.columns]
+            indexes_to_create.append({
+                'name': index.name,
+                'table': table.name,
+                'columns': columns
+            })
+
+    # Indizes sicher erstellen
+    with engine.connect() as conn:
+        for idx in indexes_to_create:
+            try:
+                columns_str = ', '.join(idx['columns'])
+                sql = f"CREATE INDEX IF NOT EXISTS {idx['name']} ON {idx['table']} ({columns_str})"
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                pass  # Index existiert bereits oder Fehler ignorieren
+
+
 def init_db():
     """Initialisiert die Datenbank und erstellt alle Tabellen"""
-    # Erst Basis-Tabellen erstellen
-    Base.metadata.create_all(bind=engine)
+    # Indizes temporär aus den Metadaten entfernen, um Duplikat-Fehler zu vermeiden
+    # SQLAlchemy's create_all() versucht sonst, bereits existierende Indizes zu erstellen
+    all_indexes = []
+    for table in Base.metadata.tables.values():
+        all_indexes.extend(list(table.indexes))
+        table.indexes.clear()
+
+    try:
+        # Tabellen ohne Indizes erstellen
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        pass  # Tabellen existieren bereits
+
+    # Indizes wieder zu den Metadaten hinzufügen für zukünftige Referenz
+    for idx in all_indexes:
+        idx.table.indexes.add(idx)
+
+    # Indizes sicher mit IF NOT EXISTS erstellen
+    create_indexes_safely()
+
     # Dann Migrationen für neue Spalten/Tabellen ausführen
     try:
         run_migrations()
