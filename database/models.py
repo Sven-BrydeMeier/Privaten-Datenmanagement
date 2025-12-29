@@ -1385,6 +1385,6 @@ class LayoutTemplate(Base):
     user = relationship("User")
 
     __table_args__ = (
-        Index('idx_template_user', 'user_id'),
-        Index('idx_template_sender', 'sender_pattern'),
+        Index('idx_layout_template_user', 'user_id'),
+        Index('idx_layout_template_sender', 'sender_pattern'),
     )
