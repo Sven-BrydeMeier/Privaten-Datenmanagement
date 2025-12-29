@@ -179,7 +179,7 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
                 with get_db() as session:
                     doc = session.get(Document, existing_doc['id'])
                     if doc and doc.encryption_iv:
-                        decrypted_data = encryption.decrypt_file(encrypted_data, doc.encryption_iv)
+                        decrypted_data = encryption.decrypt_file(encrypted_data, doc.encryption_iv, doc.filename)
 
                         if existing_doc['filename'].lower().endswith('.pdf'):
                             try:
