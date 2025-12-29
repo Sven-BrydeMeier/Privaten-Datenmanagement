@@ -22,3 +22,4 @@ beautifulsoup4>=4.12.0
 pdf2image>=1.16.0
 pycryptodome>=3.19.0
 pytesseract>=0.3.10
+reportlab>=4.0.0

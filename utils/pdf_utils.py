@@ -4,6 +4,7 @@ PDF-Verarbeitungsutilities
 import io
 from typing import List, Tuple, Optional, Dict
 from pathlib import Path
+from datetime import datetime
 from PIL import Image
 import streamlit as st
 
@@ -299,3 +300,129 @@ def get_pdf_processor() -> PDFProcessor:
     if 'pdf_processor' not in st.session_state:
         st.session_state.pdf_processor = PDFProcessor()
     return st.session_state.pdf_processor
+
+
+def add_paid_stamp(
+    pdf_bytes: bytes,
+    payment_date: datetime,
+    bank_account: str,
+    stamp_text: str = "BEZAHLT",
+    stamp_color: Tuple[float, float, float] = (0.0, 0.6, 0.0),  # Grün
+    opacity: float = 0.5
+) -> bytes:
+    """
+    Fügt einen "BEZAHLT"-Stempel auf die erste Seite eines PDFs hinzu.
+
+    Args:
+        pdf_bytes: Original-PDF als Bytes
+        payment_date: Datum der Bezahlung
+        bank_account: Name des Bankkontos (z.B. "🏦 Sparkasse - Girokonto")
+        stamp_text: Haupttext des Stempels (Standard: "BEZAHLT")
+        stamp_color: RGB-Farbe als Tuple (0.0-1.0)
+        opacity: Transparenz (0.0-1.0)
+
+    Returns:
+        Gestempeltes PDF als Bytes
+    """
+    try:
+        from PyPDF2 import PdfReader, PdfWriter
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.colors import Color
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        # Original-PDF lesen
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        if len(reader.pages) == 0:
+            return pdf_bytes
+
+        first_page = reader.pages[0]
+        page_width = float(first_page.mediabox.width)
+        page_height = float(first_page.mediabox.height)
+
+        # Stempel-PDF erstellen
+        stamp_buffer = io.BytesIO()
+        c = canvas.Canvas(stamp_buffer, pagesize=(page_width, page_height))
+
+        # Stempel-Farbe mit Transparenz
+        stamp_color_obj = Color(
+            stamp_color[0],
+            stamp_color[1],
+            stamp_color[2],
+            alpha=opacity
+        )
+
+        # Stempel-Position (oben rechts, etwas Abstand)
+        stamp_x = page_width - 180
+        stamp_y = page_height - 120
+
+        # Rahmen zeichnen
+        c.setStrokeColor(stamp_color_obj)
+        c.setLineWidth(3)
+        c.roundRect(stamp_x - 10, stamp_y - 55, 170, 90, 10)
+
+        # Haupttext "BEZAHLT"
+        c.setFillColor(stamp_color_obj)
+        c.setFont("Helvetica-Bold", 22)
+        c.drawCentredString(stamp_x + 75, stamp_y + 10, stamp_text)
+
+        # Datum formatieren
+        date_str = payment_date.strftime("%d.%m.%Y")
+        c.setFont("Helvetica", 12)
+        c.drawCentredString(stamp_x + 75, stamp_y - 10, f"am {date_str}")
+
+        # Konto-Info (ohne Emojis für PDF-Kompatibilität)
+        # Entferne Emojis aus dem Kontonamen
+        clean_account = ''.join(char for char in bank_account if ord(char) < 0x10000)
+        # Kürze wenn zu lang
+        if len(clean_account) > 22:
+            clean_account = clean_account[:19] + "..."
+        c.setFont("Helvetica", 9)
+        c.drawCentredString(stamp_x + 75, stamp_y - 30, clean_account)
+
+        # Kleine Zeile für Zeitstempel
+        c.setFont("Helvetica", 7)
+        c.setFillColor(Color(0.5, 0.5, 0.5, alpha=opacity * 0.8))
+        c.drawCentredString(stamp_x + 75, stamp_y - 45, f"Markiert: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+
+        c.save()
+        stamp_buffer.seek(0)
+
+        # Stempel-PDF lesen
+        stamp_reader = PdfReader(stamp_buffer)
+        stamp_page = stamp_reader.pages[0]
+
+        # Original-PDF mit Stempel überlagern
+        writer = PdfWriter()
+
+        for i, page in enumerate(reader.pages):
+            if i == 0:
+                # Stempel auf erste Seite
+                page.merge_page(stamp_page)
+            writer.add_page(page)
+
+        # Neues PDF schreiben
+        output = io.BytesIO()
+        writer.write(output)
+        return output.getvalue()
+
+    except ImportError as e:
+        st.warning(f"ReportLab nicht installiert. Stempel konnte nicht hinzugefügt werden: {e}")
+        return pdf_bytes
+    except Exception as e:
+        st.warning(f"Fehler beim Hinzufügen des Stempels: {e}")
+        return pdf_bytes
+
+
+def remove_paid_stamp(pdf_bytes: bytes) -> bytes:
+    """
+    Entfernt einen Stempel von einem PDF indem nur das Original wiederhergestellt wird.
+
+    Hinweis: Dies funktioniert nicht direkt. Stattdessen muss das Original-PDF
+    ohne Stempel verwendet werden. Diese Funktion ist ein Platzhalter für
+    zukünftige Implementierung mit PDF-Annotationen.
+    """
+    # Nicht möglich wenn der Stempel auf die Seite gemergt wurde
+    # In einer zukünftigen Version könnte man Stempel als Annotation hinzufügen
+    return pdf_bytes

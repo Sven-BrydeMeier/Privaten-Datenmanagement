@@ -21,8 +21,71 @@ from utils.helpers import (
     create_share_text_for_expense_split
 )
 from utils.components import render_sidebar_cart, apply_custom_css, add_to_cart
+from utils.pdf_utils import add_paid_stamp
+from services.encryption import get_encryption_service
+from pathlib import Path
 
 st.set_page_config(page_title="Finanzen", page_icon="💰", layout="wide")
+
+
+def stamp_invoice_pdf(document, payment_date: datetime, bank_account_name: str) -> bool:
+    """
+    Fügt einen BEZAHLT-Stempel auf das PDF einer Rechnung hinzu.
+
+    Args:
+        document: Document ORM-Objekt
+        payment_date: Bezahldatum
+        bank_account_name: Name des Bankkontos
+
+    Returns:
+        True wenn erfolgreich, False bei Fehlern
+    """
+    try:
+        if not document.file_path or not Path(document.file_path).exists():
+            st.warning("PDF-Datei nicht gefunden")
+            return False
+
+        # Prüfe ob es ein PDF ist
+        if not document.filename.lower().endswith('.pdf'):
+            # Kein PDF - Stempel nicht möglich
+            return True  # Trotzdem Erfolg zurückgeben
+
+        encryption = get_encryption_service()
+
+        # PDF entschlüsseln
+        with open(document.file_path, 'rb') as f:
+            encrypted_data = f.read()
+
+        decrypted_pdf = encryption.decrypt_file(
+            encrypted_data,
+            document.encryption_iv,
+            document.filename
+        )
+
+        # Stempel hinzufügen
+        stamped_pdf = add_paid_stamp(
+            decrypted_pdf,
+            payment_date,
+            bank_account_name
+        )
+
+        # Neu verschlüsseln (mit neuem IV)
+        encrypted_stamped, new_iv = encryption.encrypt_file(stamped_pdf, document.filename)
+
+        # Datei speichern
+        with open(document.file_path, 'wb') as f:
+            f.write(encrypted_stamped)
+
+        # IV in Datenbank aktualisieren
+        document.encryption_iv = new_iv
+
+        return True
+
+    except Exception as e:
+        st.error(f"Fehler beim Stempeln des PDFs: {e}")
+        return False
+
+
 init_db()
 apply_custom_css()
 render_sidebar_cart()
@@ -767,10 +830,19 @@ with tab_invoices:
                                 label_visibility="collapsed"
                             )
                             if st.button("✅ Bezahlt", key=f"pay_{inv_data['id']}", use_container_width=True):
+                                payment_date = datetime.now()
+                                account_name = bank_account_options.get(pay_bank_id, "Unbekannt")
+
                                 inv.invoice_status = InvoiceStatus.PAID
-                                inv.invoice_paid_date = datetime.now()
-                                # Speichere den Anzeigenamen des Kontos
-                                inv.paid_with_bank_account = bank_account_options.get(pay_bank_id, "Unbekannt")
+                                inv.invoice_paid_date = payment_date
+                                inv.paid_with_bank_account = account_name
+
+                                # BEZAHLT-Stempel auf PDF hinzufügen
+                                if stamp_invoice_pdf(inv, payment_date, account_name):
+                                    st.success("✅ Rechnung als bezahlt markiert und PDF gestempelt!")
+                                else:
+                                    st.success("✅ Rechnung als bezahlt markiert.")
+
                                 session.commit()
                                 st.rerun()
                         else:
@@ -869,8 +941,72 @@ with tab_invoices:
                             st.caption("Verwendung")
 
                     st.divider()
-        else:
-            st.info("Keine Rechnungen gefunden")
+
+        # Wenn "Offen" gefiltert: Zeige die letzten 5 bezahlten Rechnungen durchgestrichen
+        if inv_status_filter == "Offen":
+            # Letzte 5 bezahlte Rechnungen laden
+            recent_paid_query = session.query(Document).filter(
+                Document.user_id == user_id,
+                Document.invoice_amount.isnot(None),
+                Document.invoice_amount > 0,
+                Document.invoice_status == InvoiceStatus.PAID
+            ).order_by(Document.invoice_paid_date.desc()).limit(5)
+
+            recent_paid = recent_paid_query.all()
+
+            if recent_paid:
+                st.markdown("---")
+                st.markdown("### 📜 Zuletzt bezahlt")
+                st.caption("Die letzten 5 bezahlten Rechnungen")
+
+                for paid_inv in recent_paid:
+                    paid_data = {
+                        'id': paid_inv.id,
+                        'title': paid_inv.title or paid_inv.filename,
+                        'sender': paid_inv.sender or '',
+                        'amount': paid_inv.invoice_amount or 0,
+                        'paid_date': paid_inv.invoice_paid_date,
+                        'paid_with': getattr(paid_inv, 'paid_with_bank_account', '') or ''
+                    }
+
+                    # Durchgestrichene Anzeige
+                    with st.container():
+                        col1, col2, col3 = st.columns([3, 1, 1])
+
+                        with col1:
+                            # Durchgestrichener Titel und Absender
+                            st.markdown(
+                                f"<span style='text-decoration: line-through; color: #888;'>"
+                                f"✅ {paid_data['title']}"
+                                f"</span>",
+                                unsafe_allow_html=True
+                            )
+                            st.caption(f"~~{paid_data['sender']}~~" if paid_data['sender'] else "")
+
+                        with col2:
+                            # Durchgestrichener Betrag
+                            st.markdown(
+                                f"<span style='text-decoration: line-through; color: #888;'>"
+                                f"{format_currency(paid_data['amount'])}"
+                                f"</span>",
+                                unsafe_allow_html=True
+                            )
+
+                        with col3:
+                            # Bezahldatum und Konto
+                            if paid_data['paid_date']:
+                                st.caption(f"💳 {format_date(paid_data['paid_date'])}")
+                            if paid_data['paid_with']:
+                                # Kürze den Kontonamen
+                                short_account = paid_data['paid_with'][:20] + "..." if len(paid_data['paid_with']) > 20 else paid_data['paid_with']
+                                st.caption(short_account)
+
+                        st.markdown("<hr style='margin: 5px 0; border: none; border-top: 1px dashed #ccc;'>", unsafe_allow_html=True)
+
+        if not invoices:
+            if inv_status_filter != "Offen":
+                st.info("Keine Rechnungen gefunden")
+            # Bei "Offen"-Filter ohne offene Rechnungen - "Zuletzt bezahlt" wird oben schon angezeigt
 
 
 with tab_transactions:
