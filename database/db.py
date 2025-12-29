@@ -264,22 +264,10 @@ def run_migrations():
                     pass
 
 
-def create_indexes_safely():
+def create_indexes_safely(indexes_info: list):
     """Erstellt alle Indizes sicher mit IF NOT EXISTS"""
-    # Alle Indizes aus den Modellen sammeln
-    indexes_to_create = []
-    for table in Base.metadata.tables.values():
-        for index in table.indexes:
-            columns = [col.name for col in index.columns]
-            indexes_to_create.append({
-                'name': index.name,
-                'table': table.name,
-                'columns': columns
-            })
-
-    # Indizes sicher erstellen
     with engine.connect() as conn:
-        for idx in indexes_to_create:
+        for idx in indexes_info:
             try:
                 columns_str = ', '.join(idx['columns'])
                 sql = f"CREATE INDEX IF NOT EXISTS {idx['name']} ON {idx['table']} ({columns_str})"
@@ -289,8 +277,31 @@ def create_indexes_safely():
                 pass  # Index existiert bereits oder Fehler ignorieren
 
 
+# Cache für Index-Informationen (wird nur einmal beim Import gefüllt)
+_cached_indexes = None
+
+
+def _collect_index_info():
+    """Sammelt Index-Informationen aus den Modellen (nur einmal)"""
+    global _cached_indexes
+    if _cached_indexes is None:
+        _cached_indexes = []
+        for table in Base.metadata.tables.values():
+            for index in table.indexes:
+                columns = [col.name for col in index.columns]
+                _cached_indexes.append({
+                    'name': index.name,
+                    'table': table.name,
+                    'columns': columns
+                })
+    return _cached_indexes
+
+
 def init_db():
     """Initialisiert die Datenbank und erstellt alle Tabellen"""
+    # Index-Informationen sammeln BEVOR wir sie entfernen
+    indexes_info = _collect_index_info()
+
     # Indizes temporär aus den Metadaten entfernen, um Duplikat-Fehler zu vermeiden
     # SQLAlchemy's create_all() versucht sonst, bereits existierende Indizes zu erstellen
     all_indexes = []
@@ -308,8 +319,8 @@ def init_db():
     for idx in all_indexes:
         idx.table.indexes.add(idx)
 
-    # Indizes sicher mit IF NOT EXISTS erstellen
-    create_indexes_safely()
+    # Indizes sicher mit IF NOT EXISTS erstellen (aus dem Cache)
+    create_indexes_safely(indexes_info)
 
     # Dann Migrationen für neue Spalten/Tabellen ausführen
     try:
