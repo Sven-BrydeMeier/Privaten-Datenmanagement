@@ -154,6 +154,7 @@ def render_restore(service: BackupService):
             with col4:
                 if st.button("Wiederherstellen", key=f"restore_{backup['filename']}"):
                     st.session_state[f"restore_confirm_{backup['filename']}"] = True
+                    st.rerun()
 
             if st.session_state.get(f"restore_confirm_{backup['filename']}"):
                 st.warning("Sind Sie sicher? Diese Aktion kann nicht rückgängig gemacht werden.")

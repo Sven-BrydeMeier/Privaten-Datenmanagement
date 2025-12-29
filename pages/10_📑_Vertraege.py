@@ -126,6 +126,7 @@ with tab_overview:
                 with col_b:
                     if st.button("✏️ Daten bearbeiten", key=f"edit_{contract['id']}"):
                         st.session_state[f"edit_contract_{contract['id']}"] = True
+                        st.rerun()
 
                 # Bearbeitungsmodus
                 if st.session_state.get(f"edit_contract_{contract['id']}"):

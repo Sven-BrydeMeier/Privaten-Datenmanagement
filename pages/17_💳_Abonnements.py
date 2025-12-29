@@ -357,7 +357,8 @@ def render_all_subscriptions(service: SubscriptionService):
                         st.rerun()
                     else:
                         st.session_state[f"confirm_del_{sub.id}"] = True
-                        st.warning("Erneut klicken")
+                        st.warning("Erneut klicken zum Bestätigen")
+                        st.rerun()
 
             if sub.notes:
                 st.markdown(f"**Notizen:** {sub.notes}")

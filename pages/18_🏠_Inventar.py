@@ -332,11 +332,13 @@ def render_all_items(service: InventoryService):
             with col1:
                 if st.button("Bearbeiten", key=f"edit_{item.id}"):
                     st.session_state[f"editing_{item.id}"] = True
+                    st.rerun()
 
             with col2:
                 if item.is_active:
                     if st.button("Entsorgt/Verkauft", key=f"dispose_{item.id}"):
                         st.session_state[f"disposing_{item.id}"] = True
+                        st.rerun()
 
             with col3:
                 if st.button("Löschen", key=f"delete_{item.id}"):
@@ -346,7 +348,8 @@ def render_all_items(service: InventoryService):
                         st.rerun()
                     else:
                         st.session_state[f"confirm_del_{item.id}"] = True
-                        st.warning("Erneut klicken")
+                        st.warning("Erneut klicken zum Bestätigen")
+                        st.rerun()
 
             # Entsorgungs-Dialog
             if st.session_state.get(f"disposing_{item.id}"):

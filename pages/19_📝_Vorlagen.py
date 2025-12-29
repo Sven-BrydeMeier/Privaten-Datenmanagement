@@ -221,7 +221,8 @@ def render_my_templates(service: TemplateService):
                             st.rerun()
                         else:
                             st.session_state[f"confirm_del_{template.id}"] = True
-                            st.warning("Erneut klicken")
+                            st.warning("Erneut klicken zum Bestätigen")
+                            st.rerun()
 
                 # Inhalt anzeigen
                 st.text_area("Inhalt", value=template.content, height=200, disabled=True)

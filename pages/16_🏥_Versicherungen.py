@@ -580,6 +580,7 @@ def render_all_insurances(service: InsuranceService):
             with col1:
                 if st.button("Schadenfall melden", key=f"claim_{ins.id}"):
                     st.session_state[f"new_claim_{ins.id}"] = True
+                    st.rerun()
 
             with col2:
                 if ins.is_active:
@@ -596,7 +597,8 @@ def render_all_insurances(service: InsuranceService):
                         st.rerun()
                     else:
                         st.session_state[f"confirm_del_{ins.id}"] = True
-                        st.warning("Erneut klicken")
+                        st.warning("Erneut klicken zum Bestätigen")
+                        st.rerun()
 
             # Schadensfall-Dialog
             if st.session_state.get(f"new_claim_{ins.id}"):

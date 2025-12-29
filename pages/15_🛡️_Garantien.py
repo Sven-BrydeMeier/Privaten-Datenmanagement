@@ -328,10 +328,12 @@ def render_all_warranties(service: WarrantyService):
                 if warranty.status != WarrantyStatus.CLAIMED and days_left > 0:
                     if st.button("Garantiefall melden", key=f"claim_{warranty.id}"):
                         st.session_state[f"claiming_{warranty.id}"] = True
+                        st.rerun()
 
             with action_col3:
                 if st.button("Bearbeiten", key=f"edit_{warranty.id}"):
                     st.session_state[f"editing_{warranty.id}"] = True
+                    st.rerun()
 
             with action_col4:
                 if st.button("Löschen", key=f"delete_{warranty.id}"):
@@ -342,6 +344,7 @@ def render_all_warranties(service: WarrantyService):
                     else:
                         st.session_state[f"confirm_delete_{warranty.id}"] = True
                         st.warning("Erneut klicken zum Bestätigen")
+                        st.rerun()
 
             # Garantiefall-Dialog
             if st.session_state.get(f"claiming_{warranty.id}"):

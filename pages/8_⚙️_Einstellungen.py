@@ -385,6 +385,7 @@ with tab_bank:
                             # Bearbeiten
                             if st.button("✏️", key=f"edit_{account.id}", help="Bearbeiten"):
                                 st.session_state[f'editing_account_{account.id}'] = True
+                                st.rerun()
 
                         with action_cols[1]:
                             # Standard setzen/entfernen
@@ -408,6 +409,7 @@ with tab_bank:
                             # Löschen
                             if st.button("🗑️", key=f"delete_{account.id}", help="Löschen"):
                                 st.session_state[f'confirm_delete_{account.id}'] = True
+                                st.rerun()
 
                     # Bearbeitungsformular
                     if st.session_state.get(f'editing_account_{account.id}'):

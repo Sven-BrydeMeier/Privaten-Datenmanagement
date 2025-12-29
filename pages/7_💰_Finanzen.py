@@ -1183,9 +1183,11 @@ with tab_transactions:
                                 st.markdown("**Mit Dokument verknüpfen:**")
                                 if st.button("🧾 Bon zuordnen", key=f"link_receipt_{tx.id}"):
                                     st.session_state[f'linking_tx_{tx.id}'] = 'receipt'
+                                    st.rerun()
 
                                 if st.button("📄 Rechnung zuordnen", key=f"link_invoice_{tx.id}"):
                                     st.session_state[f'linking_tx_{tx.id}'] = 'invoice'
+                                    st.rerun()
 
                         st.divider()
 
