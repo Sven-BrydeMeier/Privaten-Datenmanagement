@@ -1281,3 +1281,110 @@ class ClassificationExplanation(Base):
     __table_args__ = (
         Index('idx_explanation_document', 'document_id'),
     )
+
+
+# ============================================================
+# FELD-ANNOTATION SYSTEM: Lernende Felderkennung
+# ============================================================
+
+class FieldType(enum.Enum):
+    """Typ eines markierten Feldes"""
+    SENDER = "sender"                   # Absender
+    SENDER_ADDRESS = "sender_address"   # Absender-Adresse
+    RECIPIENT = "recipient"             # Empfänger
+    DATE = "date"                       # Dokumentendatum
+    DUE_DATE = "due_date"               # Fälligkeitsdatum/Frist
+    AMOUNT = "amount"                   # Betrag
+    INVOICE_NUMBER = "invoice_number"   # Rechnungsnummer
+    CUSTOMER_NUMBER = "customer_number" # Kundennummer
+    REFERENCE = "reference"             # Aktenzeichen/Referenz
+    IBAN = "iban"                       # IBAN
+    BIC = "bic"                         # BIC
+    SUBJECT = "subject"                 # Betreff
+    CONTRACT_NUMBER = "contract_number" # Vertragsnummer
+    CUSTOM = "custom"                   # Benutzerdefiniert
+
+
+class FieldAnnotation(Base):
+    """Markierung eines Feldes auf einem Dokument (für Lernzwecke)"""
+    __tablename__ = 'field_annotations'
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey('documents.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Feldtyp
+    field_type = Column(SQLEnum(FieldType), nullable=False)
+    custom_field_name = Column(String(100))  # Falls field_type == CUSTOM
+
+    # Position auf der Seite (prozentual 0.0-1.0 für Skalierbarkeit)
+    page_number = Column(Integer, default=1)  # Seitennummer (1-basiert)
+    x_percent = Column(Float, nullable=False)  # Linke Kante (0.0-1.0)
+    y_percent = Column(Float, nullable=False)  # Obere Kante (0.0-1.0)
+    width_percent = Column(Float, nullable=False)  # Breite (0.0-1.0)
+    height_percent = Column(Float, nullable=False)  # Höhe (0.0-1.0)
+
+    # Extrahierter Text aus dem markierten Bereich
+    extracted_text = Column(Text)
+
+    # Vom Benutzer korrigierter/bestätigter Wert
+    confirmed_value = Column(Text)
+
+    # Status
+    is_confirmed = Column(Boolean, default=False)  # Benutzer hat bestätigt
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    document = relationship("Document")
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_annotation_document', 'document_id'),
+        Index('idx_annotation_field_type', 'field_type'),
+    )
+
+
+class LayoutTemplate(Base):
+    """Gelerntes Layout-Template für automatische Felderkennung"""
+    __tablename__ = 'layout_templates'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Identifikation des Templates
+    name = Column(String(255), nullable=False)  # z.B. "Telekom Rechnung"
+
+    # Erkennungsmerkmale
+    sender_pattern = Column(String(500))  # Regex oder exakter Match für Absender
+    keywords = Column(JSON)  # Schlüsselwörter die das Layout identifizieren
+
+    # Gelernte Feldpositionen (JSON)
+    # Format: {
+    #   "sender": {"page": 1, "x": 0.05, "y": 0.02, "w": 0.4, "h": 0.08},
+    #   "amount": {"page": 1, "x": 0.7, "y": 0.3, "w": 0.2, "h": 0.03},
+    #   "due_date": {"page": 1, "x": 0.6, "y": 0.25, "w": 0.15, "h": 0.02}
+    # }
+    field_positions = Column(JSON, nullable=False)
+
+    # Statistik
+    times_used = Column(Integer, default=0)  # Wie oft erfolgreich angewandt
+    times_corrected = Column(Integer, default=0)  # Wie oft korrigiert
+    confidence = Column(Float, default=0.5)  # Vertrauen (0.0-1.0)
+
+    # Basiert auf welchen Dokumenten
+    source_document_ids = Column(JSON)  # Liste der Dokument-IDs für Training
+
+    # Status
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehung
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_template_user', 'user_id'),
+        Index('idx_template_sender', 'sender_pattern'),
+    )

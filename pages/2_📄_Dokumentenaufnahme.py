@@ -503,6 +503,72 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                         st.warning(f"KI-Analyse teilweise fehlgeschlagen: {e}")
 
                 # ============================================================
+                # GELERNTE FELDPOSITIONEN ANWENDEN (Field Learning)
+                # ============================================================
+                if not document.sender or document.sender.strip() == "":
+                    if is_debug:
+                        debug_log("🎯 Prüfe gelernte Feldpositionen...", "info")
+                    try:
+                        from services.field_learning_service import get_field_learning_service
+                        field_service = get_field_learning_service(user_id)
+
+                        # Passendes Template suchen
+                        template = field_service.find_matching_template(full_text, document.sender)
+
+                        if template:
+                            if is_debug:
+                                debug_log(f"✅ Template gefunden: {template['name']} (Score: {template.get('score', 0):.0%})", "success")
+
+                            # Dokument als Bild laden für Feldextraktion
+                            doc_image = None
+                            if filename.lower().endswith('.pdf'):
+                                try:
+                                    from pdf2image import convert_from_bytes
+                                    images = convert_from_bytes(file_data, first_page=1, last_page=1, dpi=150)
+                                    if images:
+                                        doc_image = images[0]
+                                except:
+                                    pass
+                            else:
+                                from PIL import Image
+                                doc_image = Image.open(io.BytesIO(file_data))
+
+                            if doc_image:
+                                # Felder extrahieren
+                                extracted = field_service.extract_fields_with_template(doc_image, template)
+
+                                if extracted:
+                                    if is_debug:
+                                        debug_log(f"📋 Felder extrahiert: {list(extracted.keys())}", "success")
+
+                                    # Felder auf Dokument anwenden
+                                    if 'sender' in extracted and not document.sender:
+                                        document.sender = extracted['sender']
+                                        result['sender'] = extracted['sender']
+                                    if 'amount' in extracted and not document.invoice_amount:
+                                        try:
+                                            document.invoice_amount = float(extracted['amount'].replace(',', '.'))
+                                        except:
+                                            pass
+                                    if 'iban' in extracted and not document.iban:
+                                        document.iban = extracted['iban'].replace(' ', '')
+                                    if 'customer_number' in extracted and not document.customer_number:
+                                        document.customer_number = extracted['customer_number']
+                                    if 'invoice_number' in extracted and not document.invoice_number:
+                                        document.invoice_number = extracted['invoice_number']
+                                    if 'due_date' in extracted and not document.invoice_due_date:
+                                        parsed = field_service._parse_date(extracted['due_date'])
+                                        if parsed:
+                                            document.invoice_due_date = parsed
+                        else:
+                            if is_debug:
+                                debug_log("ℹ️ Kein passendes Template gefunden", "info")
+
+                    except Exception as fl_error:
+                        if is_debug:
+                            debug_log(f"⚠️ Field Learning Fehler: {str(fl_error)[:200]}", "warning")
+
+                # ============================================================
                 # INTELLIGENTE KLASSIFIKATION MIT KI-UNTERSTÜTZUNG
                 # ============================================================
                 if is_debug:
