@@ -5,15 +5,28 @@ Eine intelligente Dokumentenverwaltung mit KI-Unterstützung
 # WICHTIG: Warnungen für Whoosh FRÜH unterdrücken (vor allen anderen Imports!)
 # Whoosh ist nicht vollständig kompatibel mit Python 3.13 (verwendet alte Regex-Syntax)
 import warnings
-# Regex-Pattern für alle Whoosh-Module (whoosh, whoosh.analysis, whoosh.qparser, etc.)
-warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh\..*')
-warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'whoosh')
-warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh\..*')
-warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'whoosh')
+import sys
+
+# Aggressivere Unterdrückung: Alle SyntaxWarnings global unterdrücken während des Imports
+# Dies ist nötig, weil Whoosh die Warnungen beim Kompilieren der Regex-Pattern auslöst
+warnings.filterwarnings('ignore', category=SyntaxWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning, message='.*invalid escape sequence.*')
+
+# Whoosh vorab importieren um Warnungen zu unterdrücken
+try:
+    import whoosh
+    import whoosh.analysis
+    import whoosh.qparser
+    import whoosh.index
+except ImportError:
+    pass  # Whoosh nicht installiert - OK
+
+# SyntaxWarnings wieder aktivieren für anderen Code (nur Whoosh-spezifische ignorieren)
+warnings.filterwarnings('default', category=SyntaxWarning)
+warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'.*whoosh.*')
 
 import streamlit as st
 from pathlib import Path
-import sys
 from datetime import datetime, timedelta
 
 # Projektverzeichnis zum Pfad hinzufügen
