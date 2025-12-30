@@ -1085,14 +1085,14 @@ with tab_folder:
                     if process_multi:
                         try:
                             process_document(doc_id, file_data, user_id)
-                        except:
-                            pass
+                        except Exception as proc_err:
+                            st.toast(f"⚠️ Verarbeitung von {file.name}: {str(proc_err)[:50]}")
 
                     imported += 1
 
                 except Exception as e:
                     errors += 1
-                    st.warning(f"⚠️ Fehler bei {file.name}: {str(e)[:30]}")
+                    st.warning(f"⚠️ Fehler bei {file.name}: {str(e)[:100]}")
 
             progress_bar.progress(1.0, text="✅ Import abgeschlossen!")
             st.success(f"✅ **{imported} Dateien** erfolgreich importiert!")
@@ -1248,14 +1248,14 @@ with tab_folder:
                             if process_docs:
                                 try:
                                     process_document(doc_id, file_data, user_id)
-                                except Exception as e:
-                                    pass  # Fehler bei Verarbeitung ignorieren
+                                except Exception as proc_err:
+                                    st.toast(f"⚠️ Verarbeitung: {str(proc_err)[:50]}")
 
                             imported_count += 1
 
                         except Exception as e:
                             error_count += 1
-                            st.warning(f"⚠️ Fehler bei {filename}: {str(e)[:50]}")
+                            st.warning(f"⚠️ Fehler bei {filename}: {str(e)[:100]}")
 
                     progress_bar.progress(1.0, text="✅ Import abgeschlossen!")
                     status_text.empty()
@@ -1330,12 +1330,12 @@ with tab_folder:
                     if process_multi:
                         try:
                             process_document(doc_id, file_data, user_id)
-                        except:
-                            pass
+                        except Exception as proc_err:
+                            st.toast(f"⚠️ Verarbeitung von {file.name}: {str(proc_err)[:50]}")
 
                     imported += 1
                 except Exception as e:
-                    st.warning(f"⚠️ Fehler bei {file.name}: {e}")
+                    st.warning(f"⚠️ Fehler bei {file.name}: {str(e)[:100]}")
 
             progress_bar.progress(1.0, text="✅ Fertig!")
             st.success(f"✅ **{imported} Dateien** erfolgreich importiert!")
