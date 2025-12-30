@@ -737,6 +737,121 @@ with tab_cloud:
     else:
         cloud_service = CloudSyncService(user_id)
 
+        # ========== GOOGLE DRIVE OAUTH KONFIGURATION ==========
+        with st.expander("🔐 Google Drive OAuth Konfiguration (für freigegebene Ordner)", expanded=False):
+            st.markdown("""
+            **Für freigegebene (nicht-öffentliche) Google Drive Ordner benötigen Sie OAuth:**
+
+            ### Schritt 1: Google Cloud Projekt erstellen
+            1. Gehen Sie zur [Google Cloud Console](https://console.cloud.google.com)
+            2. Erstellen Sie ein neues Projekt (oder wählen Sie ein bestehendes)
+            3. Aktivieren Sie die **Google Drive API**:
+               - Gehen Sie zu "APIs & Services" → "Library"
+               - Suchen Sie "Google Drive API" und aktivieren Sie sie
+
+            ### Schritt 2: OAuth Credentials erstellen
+            1. Gehen Sie zu "APIs & Services" → "Credentials"
+            2. Klicken Sie auf "Create Credentials" → "OAuth client ID"
+            3. Wählen Sie "Desktop app" als Anwendungstyp
+            4. Kopieren Sie Client ID und Client Secret
+            """)
+
+            col_cred1, col_cred2 = st.columns(2)
+            with col_cred1:
+                google_client_id = st.text_input(
+                    "Google Client ID",
+                    value=settings.google_drive_client_id,
+                    type="password",
+                    help="Die Client ID aus der Google Cloud Console"
+                )
+            with col_cred2:
+                google_client_secret = st.text_input(
+                    "Google Client Secret",
+                    value=settings.google_drive_client_secret,
+                    type="password",
+                    help="Das Client Secret aus der Google Cloud Console"
+                )
+
+            if st.button("💾 Credentials speichern"):
+                settings.google_drive_client_id = google_client_id
+                settings.google_drive_client_secret = google_client_secret
+                settings.save()
+                st.success("✅ Credentials gespeichert!")
+                st.rerun()
+
+            # OAuth-Flow nur anzeigen wenn Credentials vorhanden
+            if settings.google_drive_client_id and settings.google_drive_client_secret:
+                st.markdown("---")
+                st.markdown("### Schritt 3: Mit Google verbinden")
+
+                # Prüfen ob bereits authentifiziert
+                if settings.google_drive_refresh_token:
+                    st.success("✅ Google Drive ist verbunden!")
+                    if st.button("🔄 Verbindung erneuern"):
+                        settings.google_drive_refresh_token = ""
+                        settings.google_drive_access_token = ""
+                        settings.save()
+                        st.rerun()
+                else:
+                    # OAuth URL generieren
+                    # Redirect URI für Desktop/manuelle Flow
+                    redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+                    auth_url = cloud_service.get_google_auth_url(
+                        settings.google_drive_client_id,
+                        redirect_uri
+                    )
+
+                    st.markdown(f"""
+                    **Schritt 3a:** Klicken Sie auf den Link und melden Sie sich bei Google an:
+
+                    [🔗 Bei Google anmelden]({auth_url})
+
+                    **Schritt 3b:** Nach der Anmeldung kopieren Sie den Autorisierungscode und fügen ihn hier ein:
+                    """)
+
+                    auth_code = st.text_input(
+                        "Autorisierungscode",
+                        placeholder="Fügen Sie hier den Code von Google ein...",
+                        help="Der Code wird nach der Anmeldung bei Google angezeigt"
+                    )
+
+                    if st.button("✅ Code bestätigen", type="primary"):
+                        if auth_code:
+                            try:
+                                tokens = cloud_service.exchange_google_code(
+                                    auth_code,
+                                    settings.google_drive_client_id,
+                                    settings.google_drive_client_secret,
+                                    redirect_uri
+                                )
+
+                                if "error" in tokens:
+                                    st.error(f"❌ Fehler: {tokens.get('error_description', tokens.get('error'))}")
+                                else:
+                                    settings.google_drive_access_token = tokens.get("access_token", "")
+                                    settings.google_drive_refresh_token = tokens.get("refresh_token", "")
+
+                                    # Token-Ablaufzeit berechnen
+                                    from datetime import datetime, timedelta
+                                    expires_in = tokens.get("expires_in", 3600)
+                                    expiry = datetime.now() + timedelta(seconds=expires_in)
+                                    settings.google_drive_token_expiry = expiry.isoformat()
+
+                                    settings.save()
+                                    st.success("✅ Google Drive erfolgreich verbunden!")
+                                    st.balloons()
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Fehler bei der Authentifizierung: {str(e)}")
+                        else:
+                            st.warning("Bitte geben Sie den Autorisierungscode ein.")
+
+            st.markdown("---")
+            st.info("""
+            💡 **Hinweis:** Nach der OAuth-Verbindung können Sie auch freigegebene Ordner synchronisieren,
+            die nicht öffentlich zugänglich sind. Verwenden Sie dazu den normalen "Neue Verbindung"-Dialog unten.
+            """)
+
         # Aktive Verbindungen anzeigen
         st.markdown("### 🔗 Aktive Sync-Verbindungen")
 
@@ -946,14 +1061,52 @@ with tab_cloud:
                         interval_minutes = 5  # Kontinuierlich = alle 5 Minuten
 
                     try:
+                        # OAuth-Token für Google Drive verwenden, wenn konfiguriert
+                        access_token = None
+                        refresh_token = None
+                        if cloud_provider == "google_drive" and settings.google_drive_refresh_token:
+                            access_token = settings.google_drive_access_token
+                            refresh_token = settings.google_drive_refresh_token
+
+                            # Token erneuern wenn abgelaufen
+                            if settings.google_drive_token_expiry:
+                                from datetime import datetime
+                                try:
+                                    expiry = datetime.fromisoformat(settings.google_drive_token_expiry)
+                                    if datetime.now() >= expiry:
+                                        # Token erneuern
+                                        new_tokens = cloud_service.refresh_google_token(
+                                            refresh_token,
+                                            settings.google_drive_client_id,
+                                            settings.google_drive_client_secret
+                                        )
+                                        if "access_token" in new_tokens:
+                                            access_token = new_tokens["access_token"]
+                                            settings.google_drive_access_token = access_token
+                                            expires_in = new_tokens.get("expires_in", 3600)
+                                            from datetime import timedelta
+                                            new_expiry = datetime.now() + timedelta(seconds=expires_in)
+                                            settings.google_drive_token_expiry = new_expiry.isoformat()
+                                            settings.save()
+                                except Exception:
+                                    pass
+
                         conn = cloud_service.create_connection(
                             provider=CloudProvider.DROPBOX if cloud_provider == "dropbox" else CloudProvider.GOOGLE_DRIVE,
                             folder_id=folder_id,
                             folder_path=folder_link,
+                            access_token=access_token,
+                            refresh_token=refresh_token,
                             sync_interval_minutes=interval_minutes
                         )
 
-                        st.success(f"✅ Cloud-Verbindung erstellt!")
+                        if cloud_provider == "google_drive" and access_token:
+                            st.success(f"✅ Cloud-Verbindung erstellt (OAuth authentifiziert)!")
+                        elif cloud_provider == "google_drive":
+                            st.success(f"✅ Cloud-Verbindung erstellt (öffentlicher Zugriff)!")
+                            st.info("💡 Für freigegebene Ordner: Konfigurieren Sie OAuth oben.")
+                        else:
+                            st.success(f"✅ Cloud-Verbindung erstellt!")
 
                         # Bei einmalig sofort synchronisieren mit Fortschritt
                         if sync_mode == "once":

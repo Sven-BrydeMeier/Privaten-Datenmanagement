@@ -69,6 +69,13 @@ class Settings:
     trash_retention_hours: int = 48  # Aufbewahrungszeit in Stunden (Standard: 48h)
     auto_cleanup_trash: bool = True  # Automatische Bereinigung beim Start
 
+    # Google Drive OAuth
+    google_drive_client_id: str = ""
+    google_drive_client_secret: str = ""
+    google_drive_refresh_token: str = ""
+    google_drive_access_token: str = ""
+    google_drive_token_expiry: str = ""  # ISO-Format DateTime
+
     # Text-to-Speech Einstellungen
     tts_voice: str = "nova"  # Standard-Stimme (alloy, echo, fable, onyx, nova, shimmer)
     tts_model: str = "tts-1"  # TTS-Modell (tts-1 oder tts-1-hd)
