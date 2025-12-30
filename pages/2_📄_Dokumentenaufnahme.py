@@ -363,6 +363,7 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                 # OCR durchführen
                 full_text = ""
                 confidence = 0.0
+                ocr_error = None
 
                 if is_debug:
                     debug_log("🔤 Starte OCR-Extraktion...", "info")
@@ -381,9 +382,11 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                             if is_debug:
                                 debug_log("⚠️ Kein Text extrahiert (möglicherweise Bild-PDF)", "warning")
                     except Exception as ocr_err:
+                        ocr_error = str(ocr_err)[:200]
                         if is_debug:
-                            debug_log(f"❌ PDF-OCR Fehler: {str(ocr_err)[:200]}", "error")
-                        raise
+                            debug_log(f"⚠️ PDF-OCR Fehler (wird übersprungen): {ocr_error}", "warning")
+                        # NICHT abbrechen - Dokument trotzdem speichern
+                        full_text = f"[OCR-Fehler: {ocr_error}]"
                 else:
                     # Bild
                     if is_debug:
@@ -397,12 +400,16 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                         if is_debug:
                             debug_log(f"✅ Bild-OCR erfolgreich: {len(full_text)} Zeichen", "success")
                     except Exception as img_err:
+                        ocr_error = str(img_err)[:200]
                         if is_debug:
-                            debug_log(f"❌ Bild-OCR Fehler: {str(img_err)[:200]}", "error")
-                        raise
+                            debug_log(f"⚠️ Bild-OCR Fehler (wird übersprungen): {ocr_error}", "warning")
+                        # NICHT abbrechen - Dokument trotzdem speichern
+                        full_text = f"[OCR-Fehler: {ocr_error}]"
 
                 document.ocr_text = full_text
                 document.ocr_confidence = confidence
+                if ocr_error:
+                    document.processing_notes = f"OCR-Fehler: {ocr_error}"
 
                 # Metadaten extrahieren
                 if is_debug:
