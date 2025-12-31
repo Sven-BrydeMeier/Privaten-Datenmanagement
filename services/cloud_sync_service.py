@@ -373,7 +373,118 @@ class CloudSyncService:
     def _google_public_list_folder(self, folder_id: str) -> Dict:
         """
         Listet Dateien in einem öffentlich freigegebenen Google Drive-Ordner.
-        Verwendet Web-Scraping der öffentlichen Ordner-Seite.
+        Verwendet mehrere Methoden in Reihenfolge der Zuverlässigkeit.
+        """
+        # Methode 1: Versuche die Embed-API (zuverlässiger als Web-Scraping)
+        embed_result = self._google_public_list_folder_embed(folder_id)
+        if embed_result.get("success") and embed_result.get("files"):
+            return embed_result
+
+        # Methode 2: Fallback auf Web-Scraping der öffentlichen Seite
+        return self._google_public_list_folder_scrape(folder_id)
+
+    def _google_public_list_folder_embed(self, folder_id: str) -> Dict:
+        """
+        Listet Dateien über die Google Drive Embed-Ansicht.
+        Diese Methode ist zuverlässiger, da sie ein einfacheres HTML-Format verwendet.
+        """
+        try:
+            # Die Embed-URL zeigt eine vereinfachte Ansicht
+            embed_url = f"https://drive.google.com/embeddedfolderview?id={folder_id}#list"
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+
+            response = requests.get(embed_url, headers=headers, timeout=30, allow_redirects=True)
+
+            if response.status_code != 200:
+                return {"error": f"HTTP {response.status_code}", "success": False}
+
+            html_content = response.text
+            files = []
+            seen_ids = set()
+
+            # Die Embed-Ansicht hat ein einfacheres Format
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Suche nach flip-entry Elementen (Dateien und Ordner)
+            entries = soup.find_all(['div', 'tr'], class_=re.compile(r'flip-entry|goog-inline-block'))
+
+            for entry in entries:
+                # Finde die ID
+                file_id = entry.get('id', '')
+                if not file_id or len(file_id) < 20:
+                    # Suche in Links
+                    link = entry.find('a', href=True)
+                    if link:
+                        href = link.get('href', '')
+                        # Extrahiere ID aus verschiedenen URL-Formaten
+                        id_match = re.search(r'(?:id=|/d/|folders/)([a-zA-Z0-9_-]{20,})', href)
+                        if id_match:
+                            file_id = id_match.group(1)
+
+                if not file_id or len(file_id) < 20 or file_id in seen_ids:
+                    continue
+
+                # Finde den Namen
+                name_elem = entry.find(class_=re.compile(r'flip-entry-title|entry-title'))
+                if name_elem:
+                    name = name_elem.get_text(strip=True)
+                else:
+                    name = entry.get_text(strip=True)[:100]  # Fallback
+
+                if not name or len(name) < 1:
+                    continue
+
+                seen_ids.add(file_id)
+
+                # Bestimme den Typ
+                is_folder = 'folder' in entry.get('class', []) or 'folder' in str(entry).lower()
+                mime_type = "application/vnd.google-apps.folder" if is_folder else self._guess_mime_type(name)
+
+                files.append({
+                    "id": file_id,
+                    "name": name,
+                    "mimeType": mime_type,
+                    "size": 0
+                })
+
+            # Alternative: Suche nach Links direkt
+            if not files:
+                all_links = soup.find_all('a', href=re.compile(r'(file/d/|folders/|id=)'))
+                for link in all_links:
+                    href = link.get('href', '')
+                    id_match = re.search(r'(?:id=|/d/|folders/)([a-zA-Z0-9_-]{20,})', href)
+                    if id_match:
+                        file_id = id_match.group(1)
+                        if file_id not in seen_ids:
+                            name = link.get_text(strip=True) or f"item_{file_id[:8]}"
+                            if len(name) > 1:
+                                seen_ids.add(file_id)
+                                is_folder = 'folders/' in href
+                                files.append({
+                                    "id": file_id,
+                                    "name": name,
+                                    "mimeType": "application/vnd.google-apps.folder" if is_folder else self._guess_mime_type(name),
+                                    "size": 0
+                                })
+
+            if files:
+                logger.info(f"Embed-Methode: {len(files)} Dateien/Ordner gefunden")
+                return {"files": files, "success": True}
+
+            return {"files": [], "success": False}
+
+        except Exception as e:
+            logger.warning(f"Embed-Methode fehlgeschlagen: {e}")
+            return {"error": str(e), "success": False}
+
+    def _google_public_list_folder_scrape(self, folder_id: str) -> Dict:
+        """
+        Listet Dateien via Web-Scraping der öffentlichen Ordner-Seite.
+        Fallback-Methode wenn Embed nicht funktioniert.
         """
         try:
             # Versuche, die öffentliche Ordnerseite zu laden
@@ -437,7 +548,18 @@ class CloudSyncService:
 
             # Ordner scheint leer zu sein oder Format nicht erkannt
             logger.warning(f"Keine Dateien gefunden in Ordner {folder_id}. "
-                          f"Möglicherweise ist der Ordner leer.")
+                          f"Möglicherweise ist der Ordner leer oder das Format hat sich geändert.")
+
+            # Speichere HTML für Debugging (nur in Dev-Umgebung)
+            debug_path = Path("data/debug")
+            debug_path.mkdir(parents=True, exist_ok=True)
+            debug_file = debug_path / f"gdrive_debug_{folder_id[:10]}.html"
+            try:
+                with open(debug_file, "w", encoding="utf-8") as f:
+                    f.write(response_text[:50000])  # Nur die ersten 50KB
+                logger.info(f"Debug-HTML gespeichert unter: {debug_file}")
+            except Exception:
+                pass
 
             return {"files": [], "success": True}
 
@@ -543,40 +665,115 @@ class CloudSyncService:
     def _extract_drive_data_from_html(self, html_content: str) -> List[Dict]:
         """
         Extrahiert Datei-Informationen aus eingebetteten JSON-Daten in der Google Drive Seite.
+        Verwendet mehrere Strategien, da Google das Format regelmäßig ändert.
         """
         files = []
+        seen_ids = set()
 
         try:
-            # Google Drive enthält oft JSON-Daten in Script-Tags
-            # Suche nach typischen Mustern
-
-            # Muster 1: AF_initDataCallback mit Datei-Array
-            pattern = r'\["([a-zA-Z0-9_-]{25,})","([^"]+)"'
-            matches = re.findall(pattern, html_content)
+            # Strategie 1: Suche nach Array-Mustern ["id","name",...]
+            # Google Drive verwendet oft Arrays mit [id, name, mimeType, ...]
+            pattern1 = r'\["([a-zA-Z0-9_-]{25,})","([^"]+)"'
+            matches = re.findall(pattern1, html_content)
 
             for file_id, name in matches:
-                # Filtere ungültige/System-IDs
-                if len(file_id) >= 25 and not name.startswith('_'):
-                    if file_id not in [f.get('id') for f in files]:
-                        files.append({
-                            "id": file_id,
-                            "name": name,
-                            "mimeType": self._guess_mime_type(name),
-                            "size": 0
-                        })
-
-            # Muster 2: itemId mit Namen
-            pattern2 = r'"itemId":"([a-zA-Z0-9_-]+)"[^}]*"name":"([^"]+)"'
-            matches2 = re.findall(pattern2, html_content)
-
-            for file_id, name in matches2:
-                if file_id not in [f.get('id') for f in files]:
+                if file_id not in seen_ids and not name.startswith('_'):
+                    # Filtere System-IDs und UI-Elemente
+                    name_lower = name.lower()
+                    if name_lower in ['sign in', 'anmelden', 'drive', 'google', 'help', 'hilfe']:
+                        continue
+                    seen_ids.add(file_id)
                     files.append({
                         "id": file_id,
                         "name": name,
                         "mimeType": self._guess_mime_type(name),
                         "size": 0
                     })
+
+            # Strategie 2: itemId/name Paare in JSON-Objekten
+            pattern2 = r'"(?:itemId|id)":\s*"([a-zA-Z0-9_-]{20,})"[^}]*?"(?:name|title)":\s*"([^"]+)"'
+            matches2 = re.findall(pattern2, html_content, re.IGNORECASE)
+
+            for file_id, name in matches2:
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+            # Strategie 3: Suche nach data-docid oder data-id Attributen mit Namen
+            pattern3 = r'data-(?:docid|id)="([a-zA-Z0-9_-]{20,})"[^>]*>([^<]+)<'
+            matches3 = re.findall(pattern3, html_content)
+
+            for file_id, name in matches3:
+                name = name.strip()
+                if file_id not in seen_ids and name and len(name) > 1:
+                    seen_ids.add(file_id)
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+            # Strategie 4: AF_initDataCallback JSON-Daten (Google's interne Datenstruktur)
+            # Format: ,["file_id",["file_id","name",null,null,null,mimeType,...]]
+            pattern4 = r'\["([a-zA-Z0-9_-]{25,})",\s*\["[^"]+","([^"]+)"'
+            matches4 = re.findall(pattern4, html_content)
+
+            for file_id, name in matches4:
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+            # Strategie 5: Ordner-spezifische Muster (application/vnd.google-apps.folder)
+            folder_pattern = r'"([a-zA-Z0-9_-]{25,})"[^]]*"application/vnd\.google-apps\.folder"[^]]*"([^"]+)"'
+            folder_matches = re.findall(folder_pattern, html_content)
+
+            for file_id, name in folder_matches:
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": "application/vnd.google-apps.folder",
+                        "size": 0
+                    })
+
+            # Strategie 6: Suche in window.wiz_data oder ähnlichen Strukturen
+            # Diese enthalten oft alle Datei-Daten als JSON
+            wiz_pattern = r'"([a-zA-Z0-9_-]{25,})"(?:[^]]*?)"name":"([^"]+)"'
+            wiz_matches = re.findall(wiz_pattern, html_content)
+
+            for file_id, name in wiz_matches:
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+            # Logge Ergebnis für Debugging
+            if files:
+                logger.info(f"Gefunden: {len(files)} Dateien/Ordner via JSON-Extraktion")
+            else:
+                # Debug: Zeige einen Ausschnitt des HTML für Analyse
+                logger.warning(f"Keine Dateien via JSON-Extraktion gefunden. HTML-Länge: {len(html_content)}")
+                # Suche nach typischen Google Drive Markern
+                if 'drive.google.com' in html_content:
+                    logger.info("HTML enthält Google Drive Marker")
+                if 'data-id' in html_content:
+                    logger.info("HTML enthält data-id Attribute")
 
         except Exception as e:
             logger.error(f"Fehler beim Extrahieren von Drive-Daten: {e}")

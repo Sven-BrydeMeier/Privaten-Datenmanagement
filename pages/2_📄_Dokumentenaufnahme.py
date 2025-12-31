@@ -1621,10 +1621,25 @@ with tab_cloud:
 
 **4. Unterstützte Dateitypen:**
    - PDF, JPG, JPEG, PNG, GIF, DOC, DOCX, XLS, XLSX, TXT
+
+**5. Google Drive Format-Änderung:**
+   - Google ändert manchmal das HTML-Format
+   - Prüfen Sie die Debug-Datei unter `data/debug/` für Details
                                     """)
 
                                 # Button zum Testen des Links
                                 st.markdown(f"[🔗 Link im Browser öffnen]({cloud_link})")
+
+                                # Debug-Informationen anzeigen
+                                from pathlib import Path
+                                debug_path = Path("data/debug")
+                                if debug_path.exists():
+                                    debug_files = list(debug_path.glob("gdrive_debug_*.html"))
+                                    if debug_files:
+                                        with st.expander("🔧 Debug-Informationen (für Entwickler)", expanded=False):
+                                            st.markdown("Eine Debug-Datei wurde erstellt. Diese kann helfen, das Problem zu analysieren:")
+                                            for df in sorted(debug_files, key=lambda x: x.stat().st_mtime, reverse=True)[:3]:
+                                                st.code(f"{df.name} ({df.stat().st_size / 1024:.1f} KB)")
 
                             if skipped > 0:
                                 st.caption(f"ℹ️ {skipped} Dateien übersprungen (bereits vorhanden oder nicht unterstützt)")
