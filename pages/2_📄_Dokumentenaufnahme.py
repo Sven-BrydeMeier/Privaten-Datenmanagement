@@ -153,11 +153,11 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
                 from pdf2image import convert_from_bytes
                 images = convert_from_bytes(new_file_data, first_page=1, last_page=1, dpi=100)
                 if images:
-                    st.image(images[0], caption="Vorschau (Seite 1)", use_container_width=True)
+                    st.image(images[0], caption="Vorschau (Seite 1)", width="stretch")
             except Exception:
                 st.info("PDF-Vorschau nicht verfügbar")
         else:
-            st.image(new_file_data, caption="Vorschau", use_container_width=True)
+            st.image(new_file_data, caption="Vorschau", width="stretch")
 
     with col_existing:
         st.markdown("### 📁 Bestehendes Dokument")
@@ -186,11 +186,11 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
                                 from pdf2image import convert_from_bytes
                                 images = convert_from_bytes(decrypted_data, first_page=1, last_page=1, dpi=100)
                                 if images:
-                                    st.image(images[0], caption="Vorschau (Seite 1)", use_container_width=True)
+                                    st.image(images[0], caption="Vorschau (Seite 1)", width="stretch")
                             except Exception:
                                 st.info("PDF-Vorschau nicht verfügbar")
                         else:
-                            st.image(decrypted_data, caption="Vorschau", use_container_width=True)
+                            st.image(decrypted_data, caption="Vorschau", width="stretch")
             except Exception as e:
                 st.info(f"Vorschau nicht verfügbar: {e}")
 

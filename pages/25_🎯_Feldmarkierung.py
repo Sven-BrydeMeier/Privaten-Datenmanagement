@@ -274,7 +274,7 @@ with tab_annotate:
 
                             except ImportError:
                                 st.warning("streamlit-drawable-canvas nicht installiert. Bitte installieren mit: pip install streamlit-drawable-canvas")
-                                st.image(image, use_container_width=True)
+                                st.image(image, width="stretch")
                                 canvas_result = None
 
                         with col_tools:

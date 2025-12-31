@@ -6,24 +6,48 @@ Eine intelligente Dokumentenverwaltung mit KI-Unterstützung
 # Whoosh ist nicht vollständig kompatibel mit Python 3.13 (verwendet alte Regex-Syntax)
 import warnings
 import sys
+import os
 
-# Aggressivere Unterdrückung: Alle SyntaxWarnings global unterdrücken während des Imports
-# Dies ist nötig, weil Whoosh die Warnungen beim Kompilieren der Regex-Pattern auslöst
+# Komplett alle Warnungen während des Whoosh-Imports unterdrücken
+# Die Warnungen kommen beim Kompilieren der .py zu .pyc, also vor dem Import
+_original_showwarning = warnings.showwarning
+warnings.showwarning = lambda *args, **kwargs: None
+
+# Auch PYTHONWARNINGS ignorieren
+os.environ['PYTHONWARNINGS'] = 'ignore::SyntaxWarning'
+
+# Alle Warnungsfilter setzen
 warnings.filterwarnings('ignore', category=SyntaxWarning)
-warnings.filterwarnings('ignore', category=DeprecationWarning, message='.*invalid escape sequence.*')
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', message='.*invalid escape sequence.*')
+warnings.filterwarnings('ignore', message=r'.*"is" with.*literal.*')
 
 # Whoosh vorab importieren um Warnungen zu unterdrücken
 try:
+    # Kompilierung erzwingen während Warnungen unterdrückt sind
+    import importlib
     import whoosh
     import whoosh.analysis
+    import whoosh.analysis.filters
+    import whoosh.analysis.intraword
+    import whoosh.codec.whoosh3
     import whoosh.qparser
     import whoosh.index
+    import whoosh.fields
+    import whoosh.query
 except ImportError:
     pass  # Whoosh nicht installiert - OK
+except Exception:
+    pass  # Andere Fehler ignorieren
 
-# SyntaxWarnings wieder aktivieren für anderen Code (nur Whoosh-spezifische ignorieren)
+# showwarning wiederherstellen
+warnings.showwarning = _original_showwarning
+
+# Warnungsfilter für den Rest der App setzen
 warnings.filterwarnings('default', category=SyntaxWarning)
 warnings.filterwarnings('ignore', category=SyntaxWarning, module=r'.*whoosh.*')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module=r'.*whoosh.*')
+warnings.filterwarnings('ignore', message=r'.*"is" with.*literal.*')
 
 import streamlit as st
 from pathlib import Path

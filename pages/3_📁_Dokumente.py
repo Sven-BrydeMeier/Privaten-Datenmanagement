@@ -471,7 +471,7 @@ if 'view_document_id' in st.session_state:
                     if doc_data['mime_type'] and doc_data['mime_type'].startswith('image/'):
                         from PIL import Image
                         img = Image.open(io.BytesIO(decrypted))
-                        st.image(img, use_container_width=True)
+                        st.image(img, width="stretch")
                     elif doc_data['mime_type'] == 'application/pdf':
                         st.info("📄 PDF-Dokument - Vorschau unten")
                         # PDF Info
