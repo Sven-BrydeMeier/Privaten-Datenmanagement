@@ -671,14 +671,30 @@ class CloudSyncService:
         seen_ids = set()
 
         try:
-            # Strategie 1: Suche nach Array-Mustern ["id","name",...]
-            # Google Drive verwendet oft Arrays mit [id, name, mimeType, ...]
+            # Strategie 1: Suche nach dem neuen Google Drive Format (2024/2025)
+            # Google verwendet jetzt oft: null,["ID","Name",["mime/type"],...
+            # oder: ,["ID",["ID","Name",null,null,...
+            pattern_new = r',\["([a-zA-Z0-9_-]{20,})",\["[^"]*","([^"]+)"'
+            matches_new = re.findall(pattern_new, html_content)
+            for file_id, name in matches_new:
+                if file_id not in seen_ids and len(name) > 1:
+                    name_lower = name.lower()
+                    if name_lower not in ['sign in', 'anmelden', 'drive', 'google', 'help', 'hilfe', 'null']:
+                        seen_ids.add(file_id)
+                        is_folder = 'application/vnd.google-apps.folder' in html_content[html_content.find(file_id):html_content.find(file_id)+500]
+                        files.append({
+                            "id": file_id,
+                            "name": name,
+                            "mimeType": "application/vnd.google-apps.folder" if is_folder else self._guess_mime_type(name),
+                            "size": 0
+                        })
+
+            # Strategie 2: Suche nach Array-Mustern ["id","name",...]
             pattern1 = r'\["([a-zA-Z0-9_-]{25,})","([^"]+)"'
             matches = re.findall(pattern1, html_content)
 
             for file_id, name in matches:
                 if file_id not in seen_ids and not name.startswith('_'):
-                    # Filtere System-IDs und UI-Elemente
                     name_lower = name.lower()
                     if name_lower in ['sign in', 'anmelden', 'drive', 'google', 'help', 'hilfe']:
                         continue
@@ -690,7 +706,21 @@ class CloudSyncService:
                         "size": 0
                     })
 
-            # Strategie 2: itemId/name Paare in JSON-Objekten
+            # Strategie 3: Suche nach Datei-IDs mit nachfolgendem Namen in Anführungszeichen
+            # Format: "1ABC...XYZ","filename.pdf"
+            pattern_simple = r'"([a-zA-Z0-9_-]{25,})","([^"]+\.(?:pdf|PDF|jpg|JPG|jpeg|JPEG|png|PNG|doc|DOC|docx|DOCX|xls|XLS|xlsx|XLSX|txt|TXT))"'
+            matches_simple = re.findall(pattern_simple, html_content)
+            for file_id, name in matches_simple:
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+            # Strategie 4: itemId/name Paare in JSON-Objekten
             pattern2 = r'"(?:itemId|id)":\s*"([a-zA-Z0-9_-]{20,})"[^}]*?"(?:name|title)":\s*"([^"]+)"'
             matches2 = re.findall(pattern2, html_content, re.IGNORECASE)
 
@@ -704,7 +734,7 @@ class CloudSyncService:
                         "size": 0
                     })
 
-            # Strategie 3: Suche nach data-docid oder data-id Attributen mit Namen
+            # Strategie 5: Suche nach data-docid oder data-id Attributen mit Namen
             pattern3 = r'data-(?:docid|id)="([a-zA-Z0-9_-]{20,})"[^>]*>([^<]+)<'
             matches3 = re.findall(pattern3, html_content)
 
@@ -719,13 +749,29 @@ class CloudSyncService:
                         "size": 0
                     })
 
-            # Strategie 4: AF_initDataCallback JSON-Daten (Google's interne Datenstruktur)
-            # Format: ,["file_id",["file_id","name",null,null,null,mimeType,...]]
-            pattern4 = r'\["([a-zA-Z0-9_-]{25,})",\s*\["[^"]+","([^"]+)"'
-            matches4 = re.findall(pattern4, html_content)
+            # Strategie 6: Suche nach Ordner-Links mit Namen
+            # Format: /drive/folders/ID">Ordnername</a>
+            pattern_folder = r'/drive/folders/([a-zA-Z0-9_-]{20,})"[^>]*>([^<]+)</a>'
+            matches_folder = re.findall(pattern_folder, html_content)
+            for file_id, name in matches_folder:
+                name = name.strip()
+                if file_id not in seen_ids and name and len(name) > 1:
+                    name_lower = name.lower()
+                    if name_lower not in ['sign in', 'anmelden', 'drive', 'google', 'help', 'hilfe', 'back']:
+                        seen_ids.add(file_id)
+                        files.append({
+                            "id": file_id,
+                            "name": name,
+                            "mimeType": "application/vnd.google-apps.folder",
+                            "size": 0
+                        })
 
-            for file_id, name in matches4:
-                if file_id not in seen_ids:
+            # Strategie 7: Suche nach file/d/ Links mit Dateinamen
+            pattern_file = r'/file/d/([a-zA-Z0-9_-]{20,})/[^"]*"[^>]*>([^<]+)</a>'
+            matches_file = re.findall(pattern_file, html_content)
+            for file_id, name in matches_file:
+                name = name.strip()
+                if file_id not in seen_ids and name and len(name) > 1:
                     seen_ids.add(file_id)
                     files.append({
                         "id": file_id,
@@ -734,51 +780,56 @@ class CloudSyncService:
                         "size": 0
                     })
 
-            # Strategie 5: Ordner-spezifische Muster (application/vnd.google-apps.folder)
-            folder_pattern = r'"([a-zA-Z0-9_-]{25,})"[^]]*"application/vnd\.google-apps\.folder"[^]]*"([^"]+)"'
-            folder_matches = re.findall(folder_pattern, html_content)
-
-            for file_id, name in folder_matches:
-                if file_id not in seen_ids:
-                    seen_ids.add(file_id)
-                    files.append({
-                        "id": file_id,
-                        "name": name,
-                        "mimeType": "application/vnd.google-apps.folder",
-                        "size": 0
-                    })
-
-            # Strategie 6: Suche in window.wiz_data oder ähnlichen Strukturen
-            # Diese enthalten oft alle Datei-Daten als JSON
-            wiz_pattern = r'"([a-zA-Z0-9_-]{25,})"(?:[^]]*?)"name":"([^"]+)"'
-            wiz_matches = re.findall(wiz_pattern, html_content)
-
-            for file_id, name in wiz_matches:
-                if file_id not in seen_ids:
-                    seen_ids.add(file_id)
-                    files.append({
-                        "id": file_id,
-                        "name": name,
-                        "mimeType": self._guess_mime_type(name),
-                        "size": 0
-                    })
+            # Strategie 8: Suche in window.__DRIVE_INITIAL_STATE oder ähnlichen Variablen
+            # Diese enthalten oft die komplette Dateiliste als JSON
+            state_match = re.search(r'window\.__[A-Z_]+\s*=\s*(\{.+?\});', html_content, re.DOTALL)
+            if state_match:
+                try:
+                    # Versuche JSON zu parsen
+                    import json
+                    state_data = json.loads(state_match.group(1))
+                    # Rekursiv nach Dateien suchen
+                    self._extract_from_json(state_data, files, seen_ids)
+                except:
+                    pass
 
             # Logge Ergebnis für Debugging
             if files:
                 logger.info(f"Gefunden: {len(files)} Dateien/Ordner via JSON-Extraktion")
             else:
-                # Debug: Zeige einen Ausschnitt des HTML für Analyse
                 logger.warning(f"Keine Dateien via JSON-Extraktion gefunden. HTML-Länge: {len(html_content)}")
-                # Suche nach typischen Google Drive Markern
-                if 'drive.google.com' in html_content:
-                    logger.info("HTML enthält Google Drive Marker")
-                if 'data-id' in html_content:
-                    logger.info("HTML enthält data-id Attribute")
 
         except Exception as e:
             logger.error(f"Fehler beim Extrahieren von Drive-Daten: {e}")
 
         return files
+
+    def _extract_from_json(self, data, files: List[Dict], seen_ids: set, depth: int = 0):
+        """Rekursive Extraktion von Dateien aus JSON-Daten"""
+        if depth > 10:  # Maximale Rekursionstiefe
+            return
+
+        if isinstance(data, dict):
+            # Prüfe ob dieses Dict eine Datei/Ordner-Info enthält
+            if 'id' in data and 'name' in data:
+                file_id = data['id']
+                name = data['name']
+                if file_id not in seen_ids and len(file_id) >= 20:
+                    seen_ids.add(file_id)
+                    mime_type = data.get('mimeType', self._guess_mime_type(name))
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": mime_type,
+                        "size": data.get('size', 0)
+                    })
+            # Rekursiv durch alle Werte
+            for value in data.values():
+                self._extract_from_json(value, files, seen_ids, depth + 1)
+
+        elif isinstance(data, list):
+            for item in data:
+                self._extract_from_json(item, files, seen_ids, depth + 1)
 
     def _guess_mime_type(self, filename: str) -> str:
         """Schätzt MIME-Type basierend auf Dateinamen"""
