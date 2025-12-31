@@ -110,8 +110,22 @@ Antworte im JSON-Format:
 
         try:
             result = self._call_ai(prompt)
+
+            # Prüfen ob Ergebnis leer ist
+            if not result or not result.strip():
+                return 'Sonstiges', 0.0
+
+            # JSON aus der Antwort extrahieren (falls zusätzlicher Text vorhanden)
+            json_start = result.find('{')
+            json_end = result.rfind('}') + 1
+
+            if json_start >= 0 and json_end > json_start:
+                result = result[json_start:json_end]
+
             data = json.loads(result)
             return data.get('category', 'Sonstiges'), data.get('confidence', 0.5)
+        except json.JSONDecodeError:
+            return 'Sonstiges', 0.0
         except Exception as e:
             st.warning(f"KI-Klassifizierung fehlgeschlagen: {e}")
             return 'Sonstiges', 0.0
@@ -168,12 +182,25 @@ Wichtig:
 
         try:
             result = self._call_ai(prompt)
+
+            # Prüfen ob Ergebnis leer ist
+            if not result or not result.strip():
+                st.warning("KI-Extraktion fehlgeschlagen: Leere Antwort von der KI-API")
+                return {}
+
             # JSON aus der Antwort extrahieren (falls zusätzlicher Text vorhanden)
             json_start = result.find('{')
             json_end = result.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                result = result[json_start:json_end]
-            return json.loads(result)
+
+            if json_start < 0 or json_end <= json_start:
+                st.warning("KI-Extraktion fehlgeschlagen: Kein gültiges JSON in der Antwort gefunden")
+                return {}
+
+            json_str = result[json_start:json_end]
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            st.warning(f"KI-Extraktion fehlgeschlagen: Ungültiges JSON-Format - {e}")
+            return {}
         except Exception as e:
             st.warning(f"KI-Extraktion fehlgeschlagen: {e}")
             return {}
@@ -269,7 +296,23 @@ Antworte im JSON-Format als Liste:
 
         try:
             result = self._call_ai(prompt)
+
+            # Prüfen ob Ergebnis leer ist
+            if not result or not result.strip():
+                return []
+
+            # JSON aus Antwort extrahieren (Array oder Objekt)
+            json_start = result.find('[')
+            if json_start < 0:
+                json_start = result.find('{')
+            json_end = max(result.rfind(']'), result.rfind('}')) + 1
+
+            if json_start >= 0 and json_end > json_start:
+                result = result[json_start:json_end]
+
             return json.loads(result)
+        except json.JSONDecodeError:
+            return []
         except Exception as e:
             st.warning(f"Anforderungsanalyse fehlgeschlagen: {e}")
             return []
@@ -308,6 +351,18 @@ Antworte im JSON-Format:
 """
             try:
                 result = self._call_ai(prompt)
+
+                # Prüfen ob Ergebnis leer ist
+                if not result or not result.strip():
+                    return False, ""
+
+                # JSON aus Antwort extrahieren
+                json_start = result.find('{')
+                json_end = result.rfind('}') + 1
+
+                if json_start >= 0 and json_end > json_start:
+                    result = result[json_start:json_end]
+
                 data = json.loads(result)
                 return data.get('requires_response', False), data.get('reason', '')
             except (json.JSONDecodeError, Exception):

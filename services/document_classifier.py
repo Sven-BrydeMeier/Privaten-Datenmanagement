@@ -838,23 +838,34 @@ Antworte im JSON-Format:
 
                 ai_result = ai.process(prompt)
 
-                # JSON aus Antwort extrahieren
-                json_match = re.search(r'\{[^}]+\}', ai_result, re.DOTALL)
-                if json_match:
-                    ai_data = json.loads(json_match.group())
+                # Prüfen ob Ergebnis leer ist
+                if not ai_result or not ai_result.strip():
+                    pass  # Leere Antwort - regelbasiertes Ergebnis behalten
+                else:
+                    # JSON aus Antwort extrahieren (mit geschachtelten Klammern)
+                    json_start = ai_result.find('{')
+                    json_end = ai_result.rfind('}') + 1
 
-                    result['category'] = ai_data.get('category', result['category'])
-                    result['subcategory'] = ai_data.get('subcategory')
-                    result['confidence'] = max(result['confidence'], ai_data.get('confidence', 0.5))
-                    result['reasons'].append(f"KI: {ai_data.get('reason', 'Analyse')}")
+                    if json_start >= 0 and json_end > json_start:
+                        json_str = ai_result[json_start:json_end]
+                        try:
+                            ai_data = json.loads(json_str)
 
-                    # Ordner finden
-                    suggested = ai_data.get('suggested_folder')
-                    if suggested:
-                        folder_id = self._get_or_create_folder_path(suggested)
-                        if folder_id:
-                            result['primary_folder_id'] = folder_id
-                            result['primary_folder_path'] = suggested
+                            result['category'] = ai_data.get('category', result['category'])
+                            result['subcategory'] = ai_data.get('subcategory')
+                            result['confidence'] = max(result['confidence'], ai_data.get('confidence', 0.5))
+                            result['reasons'].append(f"KI: {ai_data.get('reason', 'Analyse')}")
+
+                            # Ordner finden
+                            suggested = ai_data.get('suggested_folder')
+                            if suggested:
+                                folder_id = self._get_or_create_folder_path(suggested)
+                                if folder_id:
+                                    result['primary_folder_id'] = folder_id
+                                    result['primary_folder_path'] = suggested
+                        except json.JSONDecodeError:
+                            # Ungültiges JSON - regelbasiertes Ergebnis behalten
+                            pass
 
             except Exception as e:
                 # KI-Fehler ignorieren, regelbasiertes Ergebnis behalten

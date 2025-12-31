@@ -538,7 +538,17 @@ Nur JSON ausgeben, keine Erklärung."""
                 max_tokens=200
             )
 
-            ai_result = json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content
+            if not content or not content.strip():
+                return self.parser.parse_command(text)
+
+            # JSON aus Antwort extrahieren (falls zusätzlicher Text vorhanden)
+            json_start = content.find('{')
+            json_end = content.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                content = content[json_start:json_end]
+
+            ai_result = json.loads(content)
 
             # Konvertiere zu unserem Format
             parsed_dt = None
