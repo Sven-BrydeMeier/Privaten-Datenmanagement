@@ -300,17 +300,89 @@ Der Text ist auf Deutsch."""
 
         return results
 
-    def _ocr_pdf_images(self, pdf_bytes: bytes) -> List[Tuple[str, float]]:
-        """Konvertiert PDF zu Bildern und führt OCR durch"""
+    def _ocr_pdf_images(self, pdf_bytes: bytes, target_max_px: int = 3000) -> List[Tuple[str, float]]:
+        """
+        Konvertiert PDF zu Bildern und führt OCR durch.
+
+        Verwendet PyMuPDF (fitz) für speichereffiziente Verarbeitung.
+        Große Seiten (z.B. Baupläne) werden automatisch herunterskaliert.
+
+        Args:
+            pdf_bytes: PDF als Bytes
+            target_max_px: Maximale Kantenlänge in Pixeln (Standard: 3000)
+
+        Returns:
+            Liste von (Text, Konfidenz) pro Seite
+        """
         results = []
 
+        # Versuche zuerst PyMuPDF (speichereffizienter)
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+            for page_num in range(len(doc)):
+                try:
+                    page = doc[page_num]
+                    rect = page.rect
+
+                    # Dynamische Skalierung basierend auf Seitengröße
+                    # PyMuPDF: 1.0 entspricht 72 DPI
+                    zoom = target_max_px / max(rect.width, rect.height)
+                    zoom = min(zoom, 6.0)  # Cap bei ~432 DPI (6 * 72)
+                    zoom = max(zoom, 1.0)  # Minimum 72 DPI
+
+                    mat = fitz.Matrix(zoom, zoom).prerotate(page.rotation)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)  # alpha=False spart RAM
+
+                    # Zu PIL Image konvertieren
+                    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+                    # Für OCR in Graustufen konvertieren (spart RAM, oft bessere Erkennung)
+                    img_gray = img.convert("L")
+
+                    # OCR durchführen
+                    text, confidence = self.extract_text_from_image(img_gray, preprocess=False)
+                    results.append((text, confidence))
+
+                    # Speicher freigeben
+                    del pix, img, img_gray
+
+                except Exception as page_error:
+                    # Einzelne Seite fehlgeschlagen, weiter mit nächster
+                    results.append((f"[Seite {page_num + 1} Fehler: {str(page_error)[:100]}]", 0.0))
+
+            doc.close()
+            return results
+
+        except ImportError:
+            # PyMuPDF nicht verfügbar, Fallback auf pdf2image
+            pass
+        except Exception as e:
+            # PyMuPDF Fehler, versuche Fallback
+            if results:
+                return results
+
+        # Fallback: pdf2image (weniger speichereffizient)
         try:
             from pdf2image import convert_from_bytes
 
-            images = convert_from_bytes(pdf_bytes, dpi=300)
+            # Niedrigere DPI für große Dokumente
+            images = convert_from_bytes(pdf_bytes, dpi=200, fmt='jpeg')
             for image in images:
+                # Größe prüfen und ggf. reduzieren
+                max_dim = max(image.size)
+                if max_dim > target_max_px:
+                    scale = target_max_px / max_dim
+                    new_size = (int(image.size[0] * scale), int(image.size[1] * scale))
+                    image = image.resize(new_size, Image.Resampling.LANCZOS)
+
                 text, confidence = self.extract_text_from_image(image)
                 results.append((text, confidence))
+
+                # Speicher freigeben
+                del image
 
         except Exception as e:
             st.warning(f"PDF zu Bild Konvertierung fehlgeschlagen: {e}")
