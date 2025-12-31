@@ -8,10 +8,17 @@ from pathlib import Path
 
 # Imports
 try:
-    from services.backup_service import BackupService
+    from services.backup_service import BackupService, DeveloperSnapshot, get_snapshot_service
     BACKUP_AVAILABLE = True
+    SNAPSHOT_AVAILABLE = True
 except ImportError:
-    BACKUP_AVAILABLE = False
+    try:
+        from services.backup_service import BackupService
+        BACKUP_AVAILABLE = True
+        SNAPSHOT_AVAILABLE = False
+    except ImportError:
+        BACKUP_AVAILABLE = False
+        SNAPSHOT_AVAILABLE = False
 
 
 def render_backup_page():
@@ -30,8 +37,16 @@ def render_backup_page():
     user_id = st.session_state.user.get("id", 1)
     service = BackupService(user_id)
 
-    # Tabs
-    tab1, tab2, tab3 = st.tabs(["Backup erstellen", "Wiederherstellen", "Historie"])
+    # Tabs - mit Entwickler-Snapshot wenn verfügbar
+    if SNAPSHOT_AVAILABLE:
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "Backup erstellen",
+            "Wiederherstellen",
+            "Historie",
+            "🔧 Entwickler-Snapshot"
+        ])
+    else:
+        tab1, tab2, tab3 = st.tabs(["Backup erstellen", "Wiederherstellen", "Historie"])
 
     with tab1:
         render_create_backup(service)
@@ -41,6 +56,10 @@ def render_backup_page():
 
     with tab3:
         render_history(service)
+
+    if SNAPSHOT_AVAILABLE:
+        with tab4:
+            render_developer_snapshot()
 
 
 def render_create_backup(service: BackupService):
@@ -289,6 +308,206 @@ def get_backup_type_name(backup_type: str) -> str:
         "incremental": "Inkrementell"
     }
     return names.get(backup_type, backup_type)
+
+
+def format_size(size_bytes: int) -> str:
+    """Formatiert Bytes als lesbare Größe"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def render_developer_snapshot():
+    """Tab: Entwickler-Snapshots für vollständige Datensicherung"""
+    st.subheader("🔧 Entwickler-Snapshot")
+
+    st.info("""
+    **Entwickler-Snapshots** sind vollständige Kopien der Datenbank und aller Dateien.
+
+    Im Gegensatz zum normalen Backup wird hier die **komplette SQLite-Datenbank**
+    direkt kopiert - inklusive aller Tabellen, Indizes und Strukturen.
+
+    **Vorteile:**
+    - Schnelle Wiederherstellung ohne Neuaufbau der Datenbank
+    - Perfekt für Entwicklung und Tests
+    - Enthält alle Daten, nicht nur exportierte Felder
+    """)
+
+    snapshot_service = get_snapshot_service()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### Neuen Snapshot erstellen")
+
+        snapshot_name = st.text_input(
+            "Snapshot-Name (optional)",
+            placeholder="z.B. vor_feature_xyz"
+        )
+
+        include_index = st.checkbox(
+            "Suchindex einschließen",
+            value=False,
+            help="Der Suchindex kann groß sein und wird bei Bedarf neu aufgebaut"
+        )
+
+        if st.button("📸 Snapshot erstellen", type="primary"):
+            with st.spinner("Snapshot wird erstellt..."):
+                result = snapshot_service.create_snapshot(
+                    name=snapshot_name if snapshot_name else None,
+                    include_index=include_index
+                )
+
+                if result["success"]:
+                    st.success("✅ Snapshot erfolgreich erstellt!")
+
+                    metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+                    with metrics_col1:
+                        st.metric("Datenbank", format_size(result["database_size"]))
+                    with metrics_col2:
+                        st.metric("Dateien", result["files_count"])
+                    with metrics_col3:
+                        st.metric("Gesamt (ZIP)", format_size(result["total_size"]))
+
+                    # Download anbieten
+                    if result["snapshot_path"]:
+                        snapshot_file = Path(result["snapshot_path"])
+                        if snapshot_file.exists():
+                            with open(snapshot_file, "rb") as f:
+                                st.download_button(
+                                    "💾 Snapshot herunterladen",
+                                    data=f.read(),
+                                    file_name=snapshot_file.name,
+                                    mime="application/zip"
+                                )
+                else:
+                    st.error("❌ Snapshot fehlgeschlagen!")
+                    for error in result.get("errors", []):
+                        st.error(error)
+
+    with col2:
+        st.markdown("### Vorhandene Snapshots")
+
+        snapshots = snapshot_service.list_snapshots()
+
+        if snapshots:
+            for snapshot in snapshots:
+                with st.expander(f"📦 {snapshot['name']}", expanded=False):
+                    st.markdown(f"**Erstellt:** {snapshot['created'].strftime('%d.%m.%Y %H:%M')}")
+                    st.markdown(f"**Größe:** {format_size(snapshot['size'])}")
+                    st.markdown(f"**Dateien:** {snapshot['files_count']}")
+                    st.markdown(f"**Datenbank:** {format_size(snapshot['database_size'])}")
+
+                    btn_col1, btn_col2, btn_col3 = st.columns(3)
+
+                    with btn_col1:
+                        # Download
+                        snapshot_file = Path(snapshot["path"])
+                        if snapshot_file.exists():
+                            with open(snapshot_file, "rb") as f:
+                                st.download_button(
+                                    "⬇️ Download",
+                                    data=f.read(),
+                                    file_name=snapshot["filename"],
+                                    mime="application/zip",
+                                    key=f"dl_{snapshot['filename']}"
+                                )
+
+                    with btn_col2:
+                        # Wiederherstellen
+                        if st.button("🔄 Restore", key=f"restore_{snapshot['filename']}"):
+                            st.session_state[f"confirm_restore_{snapshot['filename']}"] = True
+                            st.rerun()
+
+                    with btn_col3:
+                        # Löschen
+                        if st.button("🗑️ Löschen", key=f"del_{snapshot['filename']}"):
+                            if snapshot_service.delete_snapshot(snapshot["path"]):
+                                st.success("Gelöscht!")
+                                st.rerun()
+
+                    # Bestätigungsdialog für Restore
+                    if st.session_state.get(f"confirm_restore_{snapshot['filename']}"):
+                        st.warning("⚠️ **ACHTUNG:** Dies überschreibt ALLE aktuellen Daten!")
+                        st.markdown("Die aktuelle Datenbank wird als `.db.old` gesichert.")
+
+                        confirm_col1, confirm_col2 = st.columns(2)
+                        with confirm_col1:
+                            if st.button("✅ Ja, wiederherstellen", key=f"yes_{snapshot['filename']}"):
+                                with st.spinner("Wiederherstellung läuft..."):
+                                    result = snapshot_service.restore_snapshot(
+                                        snapshot["path"],
+                                        confirm=True
+                                    )
+                                    if result["success"]:
+                                        st.success(f"✅ Snapshot wiederhergestellt! {result['documents_restored']} Dateien.")
+                                        st.info("Bitte laden Sie die Seite neu (F5), um die Änderungen zu sehen.")
+                                        del st.session_state[f"confirm_restore_{snapshot['filename']}"]
+                                    else:
+                                        st.error("❌ Wiederherstellung fehlgeschlagen!")
+                                        for error in result.get("errors", []):
+                                            st.error(error)
+
+                        with confirm_col2:
+                            if st.button("❌ Abbrechen", key=f"no_{snapshot['filename']}"):
+                                del st.session_state[f"confirm_restore_{snapshot['filename']}"]
+                                st.rerun()
+        else:
+            st.info("Keine Snapshots vorhanden.")
+
+    # Snapshot hochladen
+    st.divider()
+    st.markdown("### Snapshot hochladen")
+
+    uploaded_snapshot = st.file_uploader(
+        "Snapshot-ZIP hochladen",
+        type=["zip"],
+        key="snapshot_upload"
+    )
+
+    if uploaded_snapshot:
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+            tmp.write(uploaded_snapshot.getvalue())
+            tmp_path = tmp.name
+
+        # Snapshot-Info anzeigen
+        info = snapshot_service.get_snapshot_info(tmp_path)
+        if info:
+            st.success(f"✅ Gültiger Snapshot: **{info.get('name', 'Unbekannt')}**")
+            st.markdown(f"- Erstellt: {info.get('created_at', 'Unbekannt')}")
+            st.markdown(f"- Dateien: {info.get('files_count', 0)}")
+
+            if st.button("📥 Hochgeladenen Snapshot wiederherstellen", type="primary"):
+                st.session_state["confirm_upload_restore"] = True
+                st.rerun()
+
+            if st.session_state.get("confirm_upload_restore"):
+                st.warning("⚠️ **ACHTUNG:** Dies überschreibt ALLE aktuellen Daten!")
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("✅ Bestätigen"):
+                        with st.spinner("Wiederherstellung läuft..."):
+                            result = snapshot_service.restore_snapshot(tmp_path, confirm=True)
+                            if result["success"]:
+                                st.success("✅ Erfolgreich wiederhergestellt!")
+                                st.info("Bitte laden Sie die Seite neu (F5).")
+                                del st.session_state["confirm_upload_restore"]
+                            else:
+                                st.error("❌ Fehlgeschlagen!")
+                with col_b:
+                    if st.button("❌ Abbrechen"):
+                        del st.session_state["confirm_upload_restore"]
+                        st.rerun()
+        else:
+            st.error("❌ Keine gültige Snapshot-Datei (manifest.json fehlt)")
 
 
 # ==================== HAUPTFUNKTION ====================

@@ -1,6 +1,10 @@
 """
 Backup & Restore Service
 Erstellt und verwaltet Backups der Dokumente und Datenbank
+
+Enthält zwei Modi:
+1. Standard-Backup: Exportiert Metadaten als JSON + Dateien (für Benutzer-Backups)
+2. Entwickler-Snapshot: Kopiert die komplette Datenbank + alle Dateien (für Entwicklung)
 """
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -9,9 +13,12 @@ import json
 import shutil
 import zipfile
 import tempfile
+import sqlite3
+import os
 
 from database.models import Document, Folder, Tag, get_session
 from database.extended_models import BackupLog
+from config.settings import DATABASE_PATH, DATA_DIR, DOCUMENTS_DIR, INDEX_DIR, CONFIG_FILE
 
 
 class BackupService:
@@ -380,3 +387,269 @@ class BackupService:
         except:
             pass
         return False
+
+
+# ==================== ENTWICKLER-SNAPSHOT FUNKTIONEN ====================
+
+class DeveloperSnapshot:
+    """
+    Erstellt komplette Snapshots des Datenverzeichnisses für Entwicklungszwecke.
+
+    Im Gegensatz zum normalen Backup wird hier die komplette Datenbank-Datei
+    und alle Uploads direkt kopiert - kein JSON-Export nötig.
+    """
+
+    def __init__(self):
+        self.snapshot_dir = DATA_DIR / "snapshots"
+        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    def create_snapshot(self, name: str = None, include_index: bool = False) -> Dict[str, Any]:
+        """
+        Erstellt einen kompletten Snapshot der Datenbank und aller Dateien.
+
+        Args:
+            name: Optionaler Name für den Snapshot
+            include_index: Ob der Suchindex eingeschlossen werden soll
+
+        Returns:
+            Dict mit Ergebnis-Informationen
+        """
+        result = {
+            "success": False,
+            "snapshot_path": None,
+            "database_size": 0,
+            "files_count": 0,
+            "total_size": 0,
+            "errors": []
+        }
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        snapshot_name = name or f"snapshot_{timestamp}"
+        snapshot_name = snapshot_name.replace(" ", "_").replace("/", "_")
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+
+                # 1. Datenbank kopieren (mit SQLite-sicherem Backup)
+                db_backup_path = temp_path / "docmanagement.db"
+                self._backup_database(db_backup_path)
+                result["database_size"] = db_backup_path.stat().st_size
+
+                # 2. Dokumente-Verzeichnis kopieren
+                docs_backup_path = temp_path / "documents"
+                if DOCUMENTS_DIR.exists():
+                    shutil.copytree(DOCUMENTS_DIR, docs_backup_path, dirs_exist_ok=True)
+                    result["files_count"] = sum(1 for _ in docs_backup_path.rglob('*') if _.is_file())
+
+                # 3. Config kopieren (falls vorhanden)
+                if CONFIG_FILE.exists():
+                    shutil.copy2(CONFIG_FILE, temp_path / "config.json")
+
+                # 4. Suchindex kopieren (optional, kann groß sein)
+                if include_index and INDEX_DIR.exists():
+                    index_backup_path = temp_path / "search_index"
+                    shutil.copytree(INDEX_DIR, index_backup_path, dirs_exist_ok=True)
+
+                # 5. Manifest erstellen
+                manifest = {
+                    "version": "2.0",
+                    "type": "developer_snapshot",
+                    "created_at": datetime.now().isoformat(),
+                    "name": snapshot_name,
+                    "database_size": result["database_size"],
+                    "files_count": result["files_count"],
+                    "include_index": include_index,
+                    "python_version": os.sys.version,
+                }
+                with open(temp_path / "manifest.json", "w", encoding="utf-8") as f:
+                    json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+                # 6. Als ZIP komprimieren
+                zip_path = self.snapshot_dir / f"{snapshot_name}.zip"
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+                    for file_path in temp_path.rglob('*'):
+                        if file_path.is_file():
+                            arcname = file_path.relative_to(temp_path)
+                            zipf.write(file_path, arcname)
+
+                result["success"] = True
+                result["snapshot_path"] = str(zip_path)
+                result["total_size"] = zip_path.stat().st_size
+
+        except Exception as e:
+            result["errors"].append(str(e))
+
+        return result
+
+    def _backup_database(self, dest_path: Path):
+        """
+        Erstellt ein sicheres Backup der SQLite-Datenbank.
+        Verwendet die SQLite Online Backup API für Konsistenz.
+        """
+        source_conn = sqlite3.connect(str(DATABASE_PATH))
+        dest_conn = sqlite3.connect(str(dest_path))
+
+        try:
+            source_conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+            source_conn.close()
+
+    def restore_snapshot(self, snapshot_path: str, confirm: bool = False) -> Dict[str, Any]:
+        """
+        Stellt einen Snapshot wieder her.
+
+        ACHTUNG: Dies überschreibt alle aktuellen Daten!
+
+        Args:
+            snapshot_path: Pfad zur Snapshot-ZIP-Datei
+            confirm: Muss True sein, um die Wiederherstellung zu bestätigen
+
+        Returns:
+            Dict mit Ergebnis-Informationen
+        """
+        result = {
+            "success": False,
+            "documents_restored": 0,
+            "errors": []
+        }
+
+        if not confirm:
+            result["errors"].append("Bestätigung erforderlich: confirm=True")
+            return result
+
+        snapshot_file = Path(snapshot_path)
+        if not snapshot_file.exists():
+            result["errors"].append(f"Snapshot nicht gefunden: {snapshot_path}")
+            return result
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+
+                # ZIP entpacken
+                with zipfile.ZipFile(snapshot_file, 'r') as zipf:
+                    zipf.extractall(temp_path)
+
+                # Manifest prüfen
+                manifest_path = temp_path / "manifest.json"
+                if manifest_path.exists():
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        manifest = json.load(f)
+                    if manifest.get("type") != "developer_snapshot":
+                        result["errors"].append("Ungültiger Snapshot-Typ")
+                        return result
+
+                # Aktuelle Datenbank schließen (wichtig für SQLite)
+                from database.db import engine
+                engine.dispose()
+
+                # 1. Datenbank wiederherstellen
+                db_backup = temp_path / "docmanagement.db"
+                if db_backup.exists():
+                    # Alte DB sichern
+                    if DATABASE_PATH.exists():
+                        backup_old = DATABASE_PATH.with_suffix('.db.old')
+                        shutil.copy2(DATABASE_PATH, backup_old)
+                    # Neue DB kopieren
+                    shutil.copy2(db_backup, DATABASE_PATH)
+
+                # 2. Dokumente wiederherstellen
+                docs_backup = temp_path / "documents"
+                if docs_backup.exists():
+                    # Altes Verzeichnis löschen
+                    if DOCUMENTS_DIR.exists():
+                        shutil.rmtree(DOCUMENTS_DIR)
+                    # Neues Verzeichnis kopieren
+                    shutil.copytree(docs_backup, DOCUMENTS_DIR)
+                    result["documents_restored"] = sum(1 for _ in DOCUMENTS_DIR.rglob('*') if _.is_file())
+
+                # 3. Config wiederherstellen
+                config_backup = temp_path / "config.json"
+                if config_backup.exists():
+                    shutil.copy2(config_backup, CONFIG_FILE)
+
+                # 4. Suchindex wiederherstellen (falls vorhanden)
+                index_backup = temp_path / "search_index"
+                if index_backup.exists():
+                    if INDEX_DIR.exists():
+                        shutil.rmtree(INDEX_DIR)
+                    shutil.copytree(index_backup, INDEX_DIR)
+
+                result["success"] = True
+
+        except Exception as e:
+            result["errors"].append(str(e))
+
+        return result
+
+    def list_snapshots(self) -> List[Dict]:
+        """Listet alle verfügbaren Snapshots"""
+        snapshots = []
+
+        if self.snapshot_dir.exists():
+            for file_path in self.snapshot_dir.glob("*.zip"):
+                try:
+                    # Manifest aus ZIP lesen
+                    manifest = None
+                    with zipfile.ZipFile(file_path, 'r') as zipf:
+                        if 'manifest.json' in zipf.namelist():
+                            with zipf.open('manifest.json') as f:
+                                manifest = json.load(f)
+
+                    snapshots.append({
+                        "filename": file_path.name,
+                        "path": str(file_path),
+                        "size": file_path.stat().st_size,
+                        "created": datetime.fromtimestamp(file_path.stat().st_mtime),
+                        "name": manifest.get("name") if manifest else file_path.stem,
+                        "files_count": manifest.get("files_count", 0) if manifest else 0,
+                        "database_size": manifest.get("database_size", 0) if manifest else 0,
+                    })
+                except Exception:
+                    # Fehlerhafte ZIP ignorieren
+                    continue
+
+        return sorted(snapshots, key=lambda x: x["created"], reverse=True)
+
+    def delete_snapshot(self, snapshot_path: str) -> bool:
+        """Löscht einen Snapshot"""
+        try:
+            path = Path(snapshot_path)
+            if path.exists() and path.parent == self.snapshot_dir:
+                path.unlink()
+                return True
+        except:
+            pass
+        return False
+
+    def get_snapshot_info(self, snapshot_path: str) -> Optional[Dict]:
+        """Holt detaillierte Informationen über einen Snapshot"""
+        try:
+            with zipfile.ZipFile(snapshot_path, 'r') as zipf:
+                if 'manifest.json' in zipf.namelist():
+                    with zipf.open('manifest.json') as f:
+                        manifest = json.load(f)
+
+                    # Dateiliste hinzufügen
+                    files = []
+                    for name in zipf.namelist():
+                        info = zipf.getinfo(name)
+                        files.append({
+                            "name": name,
+                            "size": info.file_size,
+                            "compressed": info.compress_size
+                        })
+
+                    manifest["files"] = files
+                    manifest["total_compressed_size"] = Path(snapshot_path).stat().st_size
+                    return manifest
+        except Exception:
+            pass
+        return None
+
+
+def get_snapshot_service() -> DeveloperSnapshot:
+    """Singleton für den Snapshot-Service"""
+    return DeveloperSnapshot()
