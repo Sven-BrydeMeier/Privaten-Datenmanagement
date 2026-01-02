@@ -1538,46 +1538,93 @@ with tab_cloud:
 
                         def is_valid_name(name):
                             """Prüft ob ein Name ein gültiger Datei/Ordnername ist"""
-                            if not name or len(name) < 2:
+                            if not name or len(name) < 2 or len(name) > 200:
                                 return False
-                            # Filtere URLs und System-Strings
+                            # Filtere URLs, JS-Code und System-Strings
                             invalid = ['http', 'https', 'clients', '.com', '.google',
-                                       'sign in', 'anmelden', 'drive', 'null', 'undefined']
+                                       'sign in', 'anmelden', 'null', 'undefined',
+                                       'function', 'return', 'var ', 'const ', 'window.',
+                                       '();', '{}', 'prototype', 'throw', 'catch']
                             name_lower = name.lower()
-                            return not any(inv in name_lower for inv in invalid)
+                            if any(inv in name_lower for inv in invalid):
+                                return False
+                            # Muss mindestens einen Buchstaben enthalten
+                            if not re.search(r'[a-zA-ZäöüÄÖÜß]', name):
+                                return False
+                            return True
 
-                        # Methode 1: Dateinamen mit bekannten Erweiterungen
-                        extensions = r'\.(?:pdf|jpg|jpeg|png|gif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|zip|rar)'
-                        file_pattern = rf'"([a-zA-Z0-9_-]{{20,}})","([^"]*{extensions})"'
-                        for fid, name in re.findall(file_pattern, html, re.IGNORECASE):
+                        # Methode 1: Suche nach Dateinamen mit Erweiterungen
+                        # Flexibleres Pattern: ID gefolgt von Name mit Erweiterung
+                        ext_pattern = r'"([a-zA-Z0-9_-]{20,})"[,\]\[null"]*"([^"]+\.(?:pdf|jpg|jpeg|png|gif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|zip|PDF|JPG|PNG|DOC|XLS))"'
+                        for fid, name in re.findall(ext_pattern, html):
                             if fid not in seen_ids and is_valid_name(name):
                                 seen_ids.add(fid)
                                 found_items.append((fid, name, "📄"))
 
-                        # Methode 2: Ordner-Links im HTML
-                        folder_links = re.findall(r'href="[^"]*folders/([a-zA-Z0-9_-]{20,})"[^>]*>([^<]+)<', html)
-                        for fid, name in folder_links:
-                            name = name.strip()
-                            if fid not in seen_ids and fid != folder_id and is_valid_name(name):
-                                seen_ids.add(fid)
-                                found_items.append((fid, name, "📁"))
-
-                        # Methode 3: Datei-Links im HTML
-                        file_links = re.findall(r'href="[^"]*file/d/([a-zA-Z0-9_-]{20,})[^"]*"[^>]*>([^<]+)<', html)
-                        for fid, name in file_links:
-                            name = name.strip()
+                        # Methode 2: Name mit Erweiterung gefolgt von ID
+                        rev_pattern = r'"([^"]+\.(?:pdf|jpg|jpeg|png|doc|docx|xls|xlsx|txt|PDF|JPG|PNG))"[,\]\[null"]*"([a-zA-Z0-9_-]{20,})"'
+                        for name, fid in re.findall(rev_pattern, html):
                             if fid not in seen_ids and is_valid_name(name):
                                 seen_ids.add(fid)
                                 found_items.append((fid, name, "📄"))
 
-                        # Methode 4: data-id mit nachfolgendem Text
-                        data_id_pattern = r'data-id="([a-zA-Z0-9_-]{20,})"[^>]*>([^<]{2,60})<'
-                        for fid, name in re.findall(data_id_pattern, html):
-                            name = name.strip()
+                        # Methode 3: Alle Ordner-IDs aus /folders/ Links
+                        folder_ids_found = set(re.findall(r'/folders/([a-zA-Z0-9_-]{20,})', html))
+                        folder_ids_found.discard(folder_id)
+                        for fid in folder_ids_found:
+                            if fid not in seen_ids:
+                                # Suche Namen in der Nähe der ID
+                                idx = html.find(fid)
+                                if idx >= 0:
+                                    context = html[max(0,idx-100):idx+200]
+                                    # Suche nach "Name" nach der ID
+                                    name_match = re.search(rf'{fid}"[,\]\[null"]*"([^"]+)"', context)
+                                    if name_match and is_valid_name(name_match.group(1)):
+                                        seen_ids.add(fid)
+                                        found_items.append((fid, name_match.group(1), "📁"))
+                                    else:
+                                        seen_ids.add(fid)
+                                        found_items.append((fid, f"Ordner {len(found_items)+1}", "📁"))
+
+                        # Methode 4: data-id Attribute mit aria-label/title in der Nähe
+                        for match in re.finditer(r'data-id="([a-zA-Z0-9_-]{20,})"', html):
+                            fid = match.group(1)
+                            if fid not in seen_ids:
+                                # Hole Kontext um das Attribut
+                                start = max(0, match.start() - 300)
+                                end = min(len(html), match.end() + 300)
+                                context = html[start:end]
+
+                                # Suche nach aria-label oder data-tooltip
+                                label = re.search(r'(?:aria-label|data-tooltip|title)="([^"]+)"', context)
+                                if label and is_valid_name(label.group(1)):
+                                    name = label.group(1)
+                                    seen_ids.add(fid)
+                                    is_file = bool(re.search(r'\.\w{2,5}$', name))
+                                    found_items.append((fid, name, "📄" if is_file else "📁"))
+
+                        # Methode 5: Kompakte JSON-Struktur ["ID","Name"]
+                        compact_pattern = r'\["([a-zA-Z0-9_-]{25,})",\s*"([^"]{2,100})"'
+                        for fid, name in re.findall(compact_pattern, html):
                             if fid not in seen_ids and is_valid_name(name):
                                 seen_ids.add(fid)
-                                is_file = bool(re.search(r'\.\w{2,4}$', name))
+                                is_file = bool(re.search(r'\.\w{2,5}$', name))
                                 found_items.append((fid, name, "📄" if is_file else "📁"))
+
+                        # Methode 6: Suche alle .pdf Erwähnungen und extrahiere Namen
+                        pdf_names = re.findall(r'"([^"]{3,80}\.pdf)"', html, re.IGNORECASE)
+                        for name in pdf_names:
+                            if is_valid_name(name) and name not in [f[1] for f in found_items]:
+                                # Suche ID in der Nähe
+                                idx = html.find(f'"{name}"')
+                                if idx >= 0:
+                                    context = html[max(0,idx-150):idx+150]
+                                    id_match = re.search(r'"([a-zA-Z0-9_-]{25,})"', context)
+                                    if id_match:
+                                        fid = id_match.group(1)
+                                        if fid not in seen_ids:
+                                            seen_ids.add(fid)
+                                            found_items.append((fid, name, "📄"))
 
                         col1, col2 = st.columns(2)
                         with col1:
