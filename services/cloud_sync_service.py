@@ -61,6 +61,8 @@ class CloudSyncConnectionWrapper:
         self.auto_sync_enabled = connection.auto_sync_enabled
         self.created_at = connection.created_at
         self.updated_at = connection.updated_at
+        self.file_extensions = connection.file_extensions
+        self.max_file_size_mb = connection.max_file_size_mb
 
 
 class CloudSyncLogWrapper:
