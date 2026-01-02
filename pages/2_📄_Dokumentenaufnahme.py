@@ -1477,8 +1477,106 @@ with tab_cloud:
             else:
                 return f"{bytes_size / (1024 * 1024):.1f} MB"
 
+        # Buttons nebeneinander
+        col_import, col_diagnose = st.columns([2, 1])
+
+        with col_import:
+            import_clicked = st.button("☁️ Import starten", type="primary", disabled=not cloud_link or not detected_provider)
+
+        with col_diagnose:
+            diagnose_clicked = st.button("🔍 Diagnose", disabled=not cloud_link or detected_provider != "google_drive",
+                                         help="Zeigt Details zum Google Drive Ordner")
+
+        # Diagnose-Funktion
+        if diagnose_clicked and cloud_link and detected_provider == "google_drive":
+            import requests
+            import re
+
+            # Folder-ID extrahieren
+            folder_id = None
+            for pattern in [r'folders/([a-zA-Z0-9_-]+)', r'id=([a-zA-Z0-9_-]+)']:
+                match = re.search(pattern, cloud_link)
+                if match:
+                    folder_id = match.group(1)
+                    break
+
+            if folder_id:
+                st.markdown("---")
+                st.subheader("🔍 Google Drive Diagnose")
+                st.code(f"Folder-ID: {folder_id}")
+
+                with st.spinner("Lade Ordner-Inhalt..."):
+                    try:
+                        headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        }
+
+                        # Test 1: Standard-URL
+                        url = f"https://drive.google.com/drive/folders/{folder_id}"
+                        response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+
+                        st.markdown(f"**HTTP Status:** {response.status_code}")
+                        st.markdown(f"**Finale URL:** `{response.url[:80]}...`")
+                        st.markdown(f"**HTML Länge:** {len(response.text)} Zeichen")
+
+                        html = response.text
+                        html_lower = html.lower()
+
+                        # Zugriffsprüfung
+                        if 'accounts.google.com' in response.url:
+                            st.error("❌ **Problem:** Weiterleitung zur Anmeldung - Ordner ist NICHT öffentlich!")
+                        elif 'you need access' in html_lower:
+                            st.error("❌ **Problem:** Zugriff verweigert!")
+                        else:
+                            st.success("✓ Ordner scheint zugänglich")
+
+                        # Dateien suchen
+                        st.markdown("**Gefundene Elemente:**")
+
+                        # Pattern für Dateien
+                        file_pattern = r'"([a-zA-Z0-9_-]{25,})","([^"]+\.(?:pdf|jpg|jpeg|png|doc|docx|xls|xlsx|txt))"'
+                        files_found = re.findall(file_pattern, html, re.IGNORECASE)
+
+                        # Pattern für Ordner
+                        folder_pattern = r'/drive/folders/([a-zA-Z0-9_-]{20,})'
+                        folders_found = set(re.findall(folder_pattern, html))
+                        folders_found.discard(folder_id)
+
+                        # Pattern für alle IDs mit Namen
+                        all_pattern = r'\["([a-zA-Z0-9_-]{25,})","([^"]+)"'
+                        all_matches = re.findall(all_pattern, html)
+                        valid_items = [(fid, name) for fid, name in all_matches
+                                       if name.lower() not in ['sign in', 'anmelden', 'drive', 'google', 'help']
+                                       and len(name) > 1 and not name.startswith('_')]
+
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Dateien (direkt)", len(files_found))
+                        with col2:
+                            st.metric("Unterordner", len(folders_found))
+                        with col3:
+                            st.metric("Alle Elemente", len(valid_items))
+
+                        if valid_items:
+                            with st.expander(f"📋 Gefundene Elemente ({len(valid_items)})", expanded=True):
+                                for fid, name in valid_items[:20]:
+                                    icon = "📁" if '.' not in name else "📄"
+                                    st.write(f"{icon} {name}")
+                                if len(valid_items) > 20:
+                                    st.caption(f"... und {len(valid_items) - 20} weitere")
+                        else:
+                            st.warning("Keine Elemente gefunden!")
+
+                            # Debug-Info
+                            with st.expander("🔧 Debug-Info (für Entwickler)"):
+                                st.markdown("**Erste 2000 Zeichen des HTML:**")
+                                st.code(html[:2000])
+
+                    except Exception as e:
+                        st.error(f"Fehler: {e}")
+
         # Import starten
-        if st.button("☁️ Import starten", type="primary", disabled=not cloud_link or not detected_provider):
+        if import_clicked:
             if cloud_link and detected_provider:
                 try:
                     # Verbindung erstellen
