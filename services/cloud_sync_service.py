@@ -712,7 +712,27 @@ class CloudSyncService:
                         "size": 0
                     })
 
-            # Strategie 3: Alle Ordner-IDs aus /folders/ Links extrahieren
+            # Strategie 3: Suche alle .pdf Erwähnungen ZUERST (vor Ordnern)
+            pdf_names = re.findall(r'"([^"]{3,80}\.pdf)"', html_content, re.IGNORECASE)
+            for name in pdf_names:
+                if is_valid_name(name) and name not in [f.get('name') for f in files]:
+                    # Suche ID in der Nähe
+                    idx = html_content.find(f'"{name}"')
+                    if idx >= 0:
+                        context = html_content[max(0,idx-150):idx+150]
+                        id_match = re.search(r'"([a-zA-Z0-9_-]{25,})"', context)
+                        if id_match:
+                            file_id = id_match.group(1)
+                            if file_id not in seen_ids:
+                                seen_ids.add(file_id)
+                                files.append({
+                                    "id": file_id,
+                                    "name": name,
+                                    "mimeType": "application/pdf",
+                                    "size": 0
+                                })
+
+            # Strategie 4: Alle Ordner-IDs aus /folders/ Links extrahieren
             folder_ids_found = set(re.findall(r'/folders/([a-zA-Z0-9_-]{20,})', html_content))
             for file_id in folder_ids_found:
                 if file_id not in seen_ids:
@@ -723,11 +743,14 @@ class CloudSyncService:
                         # Suche nach "Name" nach der ID
                         name_match = re.search(rf'{file_id}"[,\]\[null"]*"([^"]+)"', context)
                         if name_match and is_valid_name(name_match.group(1)):
+                            name = name_match.group(1)
+                            # WICHTIG: Prüfen ob es eine Datei ist (hat Erweiterung)
+                            is_file = bool(re.search(r'\.\w{2,5}$', name))
                             seen_ids.add(file_id)
                             files.append({
                                 "id": file_id,
-                                "name": name_match.group(1),
-                                "mimeType": "application/vnd.google-apps.folder",
+                                "name": name,
+                                "mimeType": self._guess_mime_type(name) if is_file else "application/vnd.google-apps.folder",
                                 "size": 0
                             })
                         else:
@@ -740,7 +763,7 @@ class CloudSyncService:
                                 "size": 0
                             })
 
-            # Strategie 4: data-id Attribute mit aria-label/data-tooltip
+            # Strategie 5: data-id Attribute mit aria-label/data-tooltip
             for match in re.finditer(r'data-id="([a-zA-Z0-9_-]{20,})"', html_content):
                 file_id = match.group(1)
                 if file_id not in seen_ids:
@@ -761,7 +784,7 @@ class CloudSyncService:
                             "size": 0
                         })
 
-            # Strategie 5: Kompakte JSON-Struktur ["ID","Name"]
+            # Strategie 6: Kompakte JSON-Struktur ["ID","Name"]
             compact_pattern = r'\["([a-zA-Z0-9_-]{25,})",\s*"([^"]{2,100})"'
             for file_id, name in re.findall(compact_pattern, html_content):
                 if file_id not in seen_ids and is_valid_name(name):
@@ -775,26 +798,6 @@ class CloudSyncService:
                             "mimeType": self._guess_mime_type(name) if is_file else "application/vnd.google-apps.folder",
                             "size": 0
                         })
-
-            # Strategie 6: Suche alle .pdf Erwähnungen und extrahiere Namen
-            pdf_names = re.findall(r'"([^"]{3,80}\.pdf)"', html_content, re.IGNORECASE)
-            for name in pdf_names:
-                if is_valid_name(name) and name not in [f.get('name') for f in files]:
-                    # Suche ID in der Nähe
-                    idx = html_content.find(f'"{name}"')
-                    if idx >= 0:
-                        context = html_content[max(0,idx-150):idx+150]
-                        id_match = re.search(r'"([a-zA-Z0-9_-]{25,})"', context)
-                        if id_match:
-                            file_id = id_match.group(1)
-                            if file_id not in seen_ids:
-                                seen_ids.add(file_id)
-                                files.append({
-                                    "id": file_id,
-                                    "name": name,
-                                    "mimeType": "application/pdf",
-                                    "size": 0
-                                })
 
             # Logge Ergebnis für Debugging
             if files:

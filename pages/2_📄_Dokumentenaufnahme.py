@@ -1568,7 +1568,22 @@ with tab_cloud:
                                 seen_ids.add(fid)
                                 found_items.append((fid, name, "📄"))
 
-                        # Methode 3: Alle Ordner-IDs aus /folders/ Links
+                        # Methode 3: Suche alle .pdf Erwähnungen ZUERST (vor Ordnern)
+                        pdf_names = re.findall(r'"([^"]{3,80}\.pdf)"', html, re.IGNORECASE)
+                        for name in pdf_names:
+                            if is_valid_name(name) and name not in [f[1] for f in found_items]:
+                                # Suche ID in der Nähe
+                                idx = html.find(f'"{name}"')
+                                if idx >= 0:
+                                    context = html[max(0,idx-150):idx+150]
+                                    id_match = re.search(r'"([a-zA-Z0-9_-]{25,})"', context)
+                                    if id_match:
+                                        fid = id_match.group(1)
+                                        if fid not in seen_ids:
+                                            seen_ids.add(fid)
+                                            found_items.append((fid, name, "📄"))
+
+                        # Methode 4: Alle Ordner-IDs aus /folders/ Links
                         folder_ids_found = set(re.findall(r'/folders/([a-zA-Z0-9_-]{20,})', html))
                         folder_ids_found.discard(folder_id)
                         for fid in folder_ids_found:
@@ -1580,13 +1595,16 @@ with tab_cloud:
                                     # Suche nach "Name" nach der ID
                                     name_match = re.search(rf'{fid}"[,\]\[null"]*"([^"]+)"', context)
                                     if name_match and is_valid_name(name_match.group(1)):
+                                        name = name_match.group(1)
+                                        # WICHTIG: Prüfen ob es eine Datei ist (hat Erweiterung)
+                                        is_file = bool(re.search(r'\.\w{2,5}$', name))
                                         seen_ids.add(fid)
-                                        found_items.append((fid, name_match.group(1), "📁"))
+                                        found_items.append((fid, name, "📄" if is_file else "📁"))
                                     else:
                                         seen_ids.add(fid)
                                         found_items.append((fid, f"Ordner {len(found_items)+1}", "📁"))
 
-                        # Methode 4: data-id Attribute mit aria-label/title in der Nähe
+                        # Methode 5: data-id Attribute mit aria-label/title in der Nähe
                         for match in re.finditer(r'data-id="([a-zA-Z0-9_-]{20,})"', html):
                             fid = match.group(1)
                             if fid not in seen_ids:
@@ -1603,28 +1621,13 @@ with tab_cloud:
                                     is_file = bool(re.search(r'\.\w{2,5}$', name))
                                     found_items.append((fid, name, "📄" if is_file else "📁"))
 
-                        # Methode 5: Kompakte JSON-Struktur ["ID","Name"]
+                        # Methode 6: Kompakte JSON-Struktur ["ID","Name"]
                         compact_pattern = r'\["([a-zA-Z0-9_-]{25,})",\s*"([^"]{2,100})"'
                         for fid, name in re.findall(compact_pattern, html):
                             if fid not in seen_ids and is_valid_name(name):
                                 seen_ids.add(fid)
                                 is_file = bool(re.search(r'\.\w{2,5}$', name))
                                 found_items.append((fid, name, "📄" if is_file else "📁"))
-
-                        # Methode 6: Suche alle .pdf Erwähnungen und extrahiere Namen
-                        pdf_names = re.findall(r'"([^"]{3,80}\.pdf)"', html, re.IGNORECASE)
-                        for name in pdf_names:
-                            if is_valid_name(name) and name not in [f[1] for f in found_items]:
-                                # Suche ID in der Nähe
-                                idx = html.find(f'"{name}"')
-                                if idx >= 0:
-                                    context = html[max(0,idx-150):idx+150]
-                                    id_match = re.search(r'"([a-zA-Z0-9_-]{25,})"', context)
-                                    if id_match:
-                                        fid = id_match.group(1)
-                                        if fid not in seen_ids:
-                                            seen_ids.add(fid)
-                                            found_items.append((fid, name, "📄"))
 
                         col1, col2 = st.columns(2)
                         with col1:
