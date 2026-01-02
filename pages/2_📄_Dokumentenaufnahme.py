@@ -1655,7 +1655,7 @@ with tab_cloud:
                             """)
 
                         # Debug-Info
-                        with st.expander("🔧 Debug-Info", expanded=len(found_items) == 0):
+                        with st.expander("🔧 Debug-Info", expanded=True):
                             st.markdown("**Gefundene Marker im HTML:**")
                             markers = {
                                 "data-id Attribute": len(re.findall(r'data-id="[a-zA-Z0-9_-]{20,}"', html)),
@@ -1666,6 +1666,71 @@ with tab_cloud:
                             }
                             for marker, count in markers.items():
                                 st.write(f"- {marker}: {count}")
+
+                            # Zeige was jede Methode findet
+                            st.markdown("---")
+                            st.markdown("**Details pro Methode:**")
+
+                            # Methode 1 Debug
+                            m1_results = re.findall(r'"([a-zA-Z0-9_-]{20,})"[,\]\[null"]*"([^"]+\.(?:pdf|jpg|jpeg|png|gif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|zip|PDF|JPG|PNG|DOC|XLS))"', html)
+                            st.write(f"Methode 1 (ID→Datei): {len(m1_results)} Treffer")
+                            if m1_results[:3]:
+                                for fid, name in m1_results[:3]:
+                                    st.code(f"  {fid[:15]}... → {name}")
+
+                            # Methode 2 Debug
+                            m2_results = re.findall(r'"([^"]+\.(?:pdf|jpg|jpeg|png|doc|docx|xls|xlsx|txt|PDF|JPG|PNG))"[,\]\[null"]*"([a-zA-Z0-9_-]{20,})"', html)
+                            st.write(f"Methode 2 (Datei→ID): {len(m2_results)} Treffer")
+                            if m2_results[:3]:
+                                for name, fid in m2_results[:3]:
+                                    st.code(f"  {name} → {fid[:15]}...")
+
+                            # Methode 3 Debug - PDFs
+                            m3_results = re.findall(r'"([^"]{3,80}\.pdf)"', html, re.IGNORECASE)
+                            st.write(f"Methode 3 (PDF-Namen): {len(m3_results)} Treffer")
+                            valid_pdfs = [n for n in m3_results if is_valid_name(n)]
+                            st.write(f"  Davon gültig: {len(valid_pdfs)}")
+                            if valid_pdfs[:5]:
+                                for name in valid_pdfs[:5]:
+                                    st.code(f"  📄 {name}")
+
+                            # Methode 4 Debug - Ordner
+                            m4_results = set(re.findall(r'/folders/([a-zA-Z0-9_-]{20,})', html))
+                            m4_results.discard(folder_id)
+                            st.write(f"Methode 4 (/folders/ Links): {len(m4_results)} Ordner-IDs")
+
+                            # Zeige Ordnernamen die gefunden werden
+                            folder_names_found = []
+                            for fid in list(m4_results)[:5]:
+                                idx = html.find(fid)
+                                if idx >= 0:
+                                    context = html[max(0,idx-100):idx+200]
+                                    name_match = re.search(rf'{fid}"[,\]\[null"]*"([^"]+)"', context)
+                                    if name_match:
+                                        folder_names_found.append((fid[:15], name_match.group(1)))
+                            if folder_names_found:
+                                for fid, name in folder_names_found:
+                                    is_file = bool(re.search(r'\.\w{2,5}$', name))
+                                    icon = "📄" if is_file else "📁"
+                                    valid = "✓" if is_valid_name(name) else "✗"
+                                    st.code(f"  {icon} {valid} {fid}... → {name}")
+
+                            # Zeige Beispiel-Datenstruktur
+                            st.markdown("---")
+                            st.markdown("**Suche nach JSON-Daten im HTML:**")
+
+                            # Suche nach typischen Google Drive Datenstrukturen
+                            # Google verwendet oft Arrays wie: ["ID","Titel",null,null,...]
+                            json_arrays = re.findall(r'\["([a-zA-Z0-9_-]{25,})","([^"]{2,60})"', html)
+                            st.write(f'JSON-Arrays ["ID","Name"]: {len(json_arrays)} gefunden')
+
+                            # Filtere gültige Namen
+                            valid_arrays = [(fid, name) for fid, name in json_arrays if is_valid_name(name)]
+                            st.write(f"Davon mit gültigen Namen: {len(valid_arrays)}")
+                            if valid_arrays[:5]:
+                                for fid, name in valid_arrays[:5]:
+                                    is_file = bool(re.search(r'\.\w{2,5}$', name))
+                                    st.code(f"  {'📄' if is_file else '📁'} {name}")
 
                             st.markdown("---")
                             st.markdown("**Erste 4000 Zeichen des HTML:**")
