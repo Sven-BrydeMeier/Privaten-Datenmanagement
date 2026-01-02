@@ -61,7 +61,7 @@ from database.models import (
     Document, Folder, CalendarEvent, Contact, InvoiceStatus,
     Receipt, EventType, BankAccount
 )
-from config.settings import get_settings
+from config.settings import get_settings, get_api_key_status
 from utils.components import render_sidebar_with_navigation, apply_custom_css
 from utils.helpers import format_currency, format_date, calculate_days_until, get_local_now
 
@@ -260,6 +260,39 @@ def render_dashboard():
             if st.button("✓ Verstanden, nicht mehr anzeigen"):
                 st.session_state[reminder_key] = True
                 st.rerun()
+
+    # =====================
+    # API-KEY STATUS
+    # =====================
+    api_status = get_api_key_status()
+    configured_keys = [name for name, info in api_status.items() if info['configured']]
+    missing_keys = [name for name, info in api_status.items() if not info['configured']]
+
+    # Kompakte Statusanzeige
+    if configured_keys:
+        with st.expander(f"🔑 API-Keys: {len(configured_keys)} konfiguriert", expanded=False):
+            cols = st.columns(len(api_status))
+            for i, (name, info) in enumerate(api_status.items()):
+                with cols[i]:
+                    if info['configured']:
+                        st.markdown(f"""
+                        <div style="background-color: #d4edda; padding: 8px; border-radius: 6px; text-align: center;">
+                            <span style="color: #155724;">✅ {name}</span><br>
+                            <small style="color: #155724;">{info['source']}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="background-color: #f8d7da; padding: 8px; border-radius: 6px; text-align: center;">
+                            <span style="color: #721c24;">❌ {name}</span><br>
+                            <small style="color: #721c24;">Nicht konfiguriert</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+            if missing_keys:
+                st.info(f"💡 **Tipp:** Fehlende API-Keys können in den [Einstellungen](pages/8_⚙️_Einstellungen.py) oder in Streamlit Secrets hinterlegt werden.")
+    else:
+        st.warning("⚠️ **Keine API-Keys konfiguriert.** KI-Funktionen sind eingeschränkt. [Einstellungen öffnen](pages/8_⚙️_Einstellungen.py)")
 
     # =====================
     # HAUPT-KPIs (Zeile 1)

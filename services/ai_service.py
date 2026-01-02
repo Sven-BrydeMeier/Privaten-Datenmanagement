@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import streamlit as st
 
-from config.settings import get_settings
+from config.settings import get_settings, get_api_key
 
 
 class AIService:
@@ -17,16 +17,30 @@ class AIService:
         self.settings = get_settings()
         self._openai_client = None
         self._anthropic_client = None
+        self._openai_api_key = None
+        self._anthropic_api_key = None
+
+    def _get_openai_key(self) -> str:
+        """Holt OpenAI API Key aus Secrets oder Einstellungen"""
+        if self._openai_api_key is None:
+            self._openai_api_key = get_api_key('openai_api_key') or ''
+        return self._openai_api_key
+
+    def _get_anthropic_key(self) -> str:
+        """Holt Anthropic API Key aus Secrets oder Einstellungen"""
+        if self._anthropic_api_key is None:
+            self._anthropic_api_key = get_api_key('anthropic_api_key') or ''
+        return self._anthropic_api_key
 
     @property
     def openai_available(self) -> bool:
         """Prüft ob OpenAI API verfügbar ist"""
-        return bool(self.settings.openai_api_key)
+        return bool(self._get_openai_key())
 
     @property
     def anthropic_available(self) -> bool:
         """Prüft ob Anthropic API verfügbar ist"""
-        return bool(self.settings.anthropic_api_key)
+        return bool(self._get_anthropic_key())
 
     @property
     def any_ai_available(self) -> bool:
@@ -37,14 +51,14 @@ class AIService:
         """Lazy-Loading des OpenAI Clients"""
         if self._openai_client is None and self.openai_available:
             from openai import OpenAI
-            self._openai_client = OpenAI(api_key=self.settings.openai_api_key)
+            self._openai_client = OpenAI(api_key=self._get_openai_key())
         return self._openai_client
 
     def get_anthropic_client(self):
         """Lazy-Loading des Anthropic Clients"""
         if self._anthropic_client is None and self.anthropic_available:
             import anthropic
-            self._anthropic_client = anthropic.Anthropic(api_key=self.settings.anthropic_api_key)
+            self._anthropic_client = anthropic.Anthropic(api_key=self._get_anthropic_key())
         return self._anthropic_client
 
     def test_connection(self) -> Dict[str, bool]:
