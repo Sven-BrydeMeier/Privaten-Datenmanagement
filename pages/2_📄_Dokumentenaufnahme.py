@@ -1511,7 +1511,7 @@ with tab_cloud:
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                         }
 
-                        # Test 1: Standard-URL
+                        # Standard-URL
                         url = f"https://drive.google.com/drive/folders/{folder_id}"
                         response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
 
@@ -1530,47 +1530,96 @@ with tab_cloud:
                         else:
                             st.success("✓ Ordner scheint zugänglich")
 
-                        # Dateien suchen
-                        st.markdown("**Gefundene Elemente:**")
+                        # Dateien suchen mit verbesserten Methoden
+                        st.markdown("**Suche nach Dateien/Ordnern:**")
 
-                        # Pattern für Dateien
-                        file_pattern = r'"([a-zA-Z0-9_-]{25,})","([^"]+\.(?:pdf|jpg|jpeg|png|doc|docx|xls|xlsx|txt))"'
-                        files_found = re.findall(file_pattern, html, re.IGNORECASE)
+                        found_items = []
+                        seen_ids = set()
 
-                        # Pattern für Ordner
-                        folder_pattern = r'/drive/folders/([a-zA-Z0-9_-]{20,})'
-                        folders_found = set(re.findall(folder_pattern, html))
-                        folders_found.discard(folder_id)
+                        def is_valid_name(name):
+                            """Prüft ob ein Name ein gültiger Datei/Ordnername ist"""
+                            if not name or len(name) < 2:
+                                return False
+                            # Filtere URLs und System-Strings
+                            invalid = ['http', 'https', 'clients', '.com', '.google',
+                                       'sign in', 'anmelden', 'drive', 'null', 'undefined']
+                            name_lower = name.lower()
+                            return not any(inv in name_lower for inv in invalid)
 
-                        # Pattern für alle IDs mit Namen
-                        all_pattern = r'\["([a-zA-Z0-9_-]{25,})","([^"]+)"'
-                        all_matches = re.findall(all_pattern, html)
-                        valid_items = [(fid, name) for fid, name in all_matches
-                                       if name.lower() not in ['sign in', 'anmelden', 'drive', 'google', 'help']
-                                       and len(name) > 1 and not name.startswith('_')]
+                        # Methode 1: Dateinamen mit bekannten Erweiterungen
+                        extensions = r'\.(?:pdf|jpg|jpeg|png|gif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|zip|rar)'
+                        file_pattern = rf'"([a-zA-Z0-9_-]{{20,}})","([^"]*{extensions})"'
+                        for fid, name in re.findall(file_pattern, html, re.IGNORECASE):
+                            if fid not in seen_ids and is_valid_name(name):
+                                seen_ids.add(fid)
+                                found_items.append((fid, name, "📄"))
 
-                        col1, col2, col3 = st.columns(3)
+                        # Methode 2: Ordner-Links im HTML
+                        folder_links = re.findall(r'href="[^"]*folders/([a-zA-Z0-9_-]{20,})"[^>]*>([^<]+)<', html)
+                        for fid, name in folder_links:
+                            name = name.strip()
+                            if fid not in seen_ids and fid != folder_id and is_valid_name(name):
+                                seen_ids.add(fid)
+                                found_items.append((fid, name, "📁"))
+
+                        # Methode 3: Datei-Links im HTML
+                        file_links = re.findall(r'href="[^"]*file/d/([a-zA-Z0-9_-]{20,})[^"]*"[^>]*>([^<]+)<', html)
+                        for fid, name in file_links:
+                            name = name.strip()
+                            if fid not in seen_ids and is_valid_name(name):
+                                seen_ids.add(fid)
+                                found_items.append((fid, name, "📄"))
+
+                        # Methode 4: data-id mit nachfolgendem Text
+                        data_id_pattern = r'data-id="([a-zA-Z0-9_-]{20,})"[^>]*>([^<]{2,60})<'
+                        for fid, name in re.findall(data_id_pattern, html):
+                            name = name.strip()
+                            if fid not in seen_ids and is_valid_name(name):
+                                seen_ids.add(fid)
+                                is_file = bool(re.search(r'\.\w{2,4}$', name))
+                                found_items.append((fid, name, "📄" if is_file else "📁"))
+
+                        col1, col2 = st.columns(2)
                         with col1:
-                            st.metric("Dateien (direkt)", len(files_found))
+                            st.metric("Gefundene Elemente", len(found_items))
                         with col2:
-                            st.metric("Unterordner", len(folders_found))
-                        with col3:
-                            st.metric("Alle Elemente", len(valid_items))
+                            files_count = len([f for f in found_items if f[2] == "📄"])
+                            folders_count = len([f for f in found_items if f[2] == "📁"])
+                            st.metric("Dateien / Ordner", f"{files_count} / {folders_count}")
 
-                        if valid_items:
-                            with st.expander(f"📋 Gefundene Elemente ({len(valid_items)})", expanded=True):
-                                for fid, name in valid_items[:20]:
-                                    icon = "📁" if '.' not in name else "📄"
+                        if found_items:
+                            with st.expander(f"📋 Gefundene Elemente ({len(found_items)})", expanded=True):
+                                for fid, name, icon in found_items[:30]:
                                     st.write(f"{icon} {name}")
-                                if len(valid_items) > 20:
-                                    st.caption(f"... und {len(valid_items) - 20} weitere")
+                                if len(found_items) > 30:
+                                    st.caption(f"... und {len(found_items) - 30} weitere")
                         else:
-                            st.warning("Keine Elemente gefunden!")
+                            st.warning("⚠️ Keine Dateien/Ordner im HTML gefunden!")
+                            st.markdown("""
+**Mögliche Ursachen:**
+1. **Google lädt Inhalte mit JavaScript** - nicht direkt im HTML
+2. Der Ordner ist leer
+3. Das HTML-Format hat sich geändert
 
-                            # Debug-Info
-                            with st.expander("🔧 Debug-Info (für Entwickler)"):
-                                st.markdown("**Erste 2000 Zeichen des HTML:**")
-                                st.code(html[:2000])
+**Empfehlung:** Teilen Sie die Debug-Info unten mit dem Entwickler.
+                            """)
+
+                        # Debug-Info
+                        with st.expander("🔧 Debug-Info", expanded=len(found_items) == 0):
+                            st.markdown("**Gefundene Marker im HTML:**")
+                            markers = {
+                                "data-id Attribute": len(re.findall(r'data-id="[a-zA-Z0-9_-]{20,}"', html)),
+                                "file/d/ Links": len(re.findall(r'/file/d/[a-zA-Z0-9_-]{20,}', html)),
+                                "folders/ Links": len(re.findall(r'/folders/[a-zA-Z0-9_-]{20,}', html)),
+                                "PDF im Text": html.lower().count('.pdf'),
+                                "Ordner-ID im HTML": html.count(folder_id),
+                            }
+                            for marker, count in markers.items():
+                                st.write(f"- {marker}: {count}")
+
+                            st.markdown("---")
+                            st.markdown("**Erste 4000 Zeichen des HTML:**")
+                            st.code(html[:4000])
 
                     except Exception as e:
                         st.error(f"Fehler: {e}")
