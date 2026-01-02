@@ -597,11 +597,15 @@ class CloudSyncService:
         Listet Dateien in einem öffentlich freigegebenen Google Drive-Ordner.
         Verwendet mehrere Methoden in Reihenfolge der Zuverlässigkeit.
         """
+        logger.info(f"_google_public_list_folder aufgerufen für: {folder_id}")
+
         # Methode 0: Versuche die offizielle Google Drive API (beste Methode)
         api_key = self._get_google_api_key()
+        logger.info(f"API Key verfügbar: {bool(api_key)}")
         if api_key:
-            logger.info("Verwende Google Drive API mit API Key")
+            logger.info(f"Verwende Google Drive API mit API Key: {api_key[:10]}...")
             api_result = self._google_api_list_folder(folder_id, api_key)
+            logger.info(f"API Ergebnis: success={api_result.get('success')}, files={len(api_result.get('files', []))}")
             if api_result.get("success") and api_result.get("files") is not None:
                 return api_result
             logger.warning(f"API-Methode fehlgeschlagen: {api_result.get('error')}, versuche Fallback...")
@@ -1264,24 +1268,29 @@ class CloudSyncService:
         # Versuche Folder-ID zu extrahieren
         folder_id = None
 
+        logger.info(f"Google Drive Public: remote_folder_id={connection.remote_folder_id}, remote_folder_path={connection.remote_folder_path}")
+
         # Prüfe ob remote_folder_id eine URL ist oder eine echte ID
         if connection.remote_folder_id:
             if 'drive.google.com' in connection.remote_folder_id:
                 # Es ist eine URL, extrahiere die ID
                 folder_id = self._google_get_folder_id_from_link(connection.remote_folder_id)
+                logger.info(f"Extrahierte Folder-ID aus remote_folder_id URL: {folder_id}")
             elif len(connection.remote_folder_id) > 10 and not connection.remote_folder_id.startswith('http'):
                 # Sieht wie eine echte Folder-ID aus
                 folder_id = connection.remote_folder_id
+                logger.info(f"Verwende remote_folder_id als Folder-ID: {folder_id}")
 
         # Fallback auf remote_folder_path
         if not folder_id and connection.remote_folder_path:
             folder_id = self._google_get_folder_id_from_link(connection.remote_folder_path)
+            logger.info(f"Extrahierte Folder-ID aus remote_folder_path: {folder_id}")
 
         if not folder_id:
-            logger.error("Keine Ordner-ID gefunden")
+            logger.error("Keine Ordner-ID gefunden - weder in remote_folder_id noch remote_folder_path")
             return files
 
-        logger.info(f"Verwende Folder-ID: {folder_id}")
+        logger.info(f"Starte rekursive Sammlung mit Folder-ID: {folder_id}")
 
         # Rekursiv alle Dateien sammeln
         self._collect_public_folder_recursive(
@@ -1332,8 +1341,12 @@ class CloudSyncService:
             filename = file_info.get("name", "")
             file_id = file_info.get("id", "")
 
+            logger.debug(f"Prüfe: {filename} (MIME: {mime_type}, ID: {file_id})")
+
             # Unterordner rekursiv durchsuchen
-            if mime_type == "application/vnd.google-apps.folder" or not '.' in filename:
+            is_folder = mime_type == "application/vnd.google-apps.folder"
+            has_no_extension = '.' not in filename
+            if is_folder or (has_no_extension and not mime_type.startswith("application/")):
                 # Könnte ein Ordner sein - versuche rekursiv zu laden
                 subfolder_path = f"{folder_path}/{filename}" if folder_path else filename
                 logger.info(f"Unterordner gefunden: {subfolder_path}")
@@ -1351,12 +1364,14 @@ class CloudSyncService:
 
             # Google Docs/Sheets etc. überspringen
             if mime_type.startswith("application/vnd.google-apps"):
+                logger.debug(f"Überspringe Google App-Datei: {filename} ({mime_type})")
                 continue
 
             ext = Path(filename).suffix.lower()
 
             # Dateiendung prüfen
             if connection.file_extensions and ext and ext not in connection.file_extensions:
+                logger.debug(f"Überspringe wegen Dateiendung: {filename} ({ext} nicht in {connection.file_extensions})")
                 continue
 
             # Prüfen ob bereits synchronisiert
@@ -1366,7 +1381,10 @@ class CloudSyncService:
             ).first()
 
             if existing_log:
+                logger.debug(f"Überspringe bereits synchronisiert: {filename}")
                 continue
+
+            logger.info(f"Datei erkannt (wird importiert): {filename} ({mime_type})")
 
             # Vollständigen Pfad für die Datei erstellen
             full_path = f"{folder_path}/{filename}" if folder_path else filename

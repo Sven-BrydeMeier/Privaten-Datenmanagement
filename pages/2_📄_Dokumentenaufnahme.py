@@ -1963,6 +1963,15 @@ with tab_cloud:
                                 # Zeige den verwendeten Link zur Kontrolle
                                 st.markdown(f"**Verwendeter Link:** `{cloud_link}`")
 
+                                # Debug-Info zur Verbindung
+                                with st.expander("🔧 Verbindungs-Details", expanded=True):
+                                    st.code(f"""Connection ID: {conn.id}
+Provider: {conn.provider}
+Remote Folder ID: {conn.folder_id}
+Remote Folder Path: {conn.folder_path}
+Is Active: {conn.is_active}
+File Extensions: {conn.file_extensions}""")
+
                                 # Hilfreiche Tipps anzeigen
                                 with st.expander("🔍 Mögliche Ursachen & Lösungen", expanded=True):
                                     st.markdown("""
