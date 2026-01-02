@@ -1,5 +1,6 @@
 streamlit>=1.28.0
 sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0  # PostgreSQL-Unterstützung für Cloud-Datenbanken
 cryptography>=41.0.0
 PyPDF2>=3.0.0
 Pillow>=10.0.0

@@ -1,6 +1,18 @@
 """
 Datenbankverbindung und Session-Management
+
+Unterstützt:
+- SQLite (lokal, Standard)
+- PostgreSQL (über DATABASE_URL in Streamlit Secrets oder Umgebungsvariable)
+- MySQL (über DATABASE_URL)
+
+Für persistente Daten auf Streamlit Cloud:
+1. Erstelle kostenloses Konto bei Supabase, Neon, oder PlanetScale
+2. Füge DATABASE_URL in Streamlit Secrets hinzu:
+   DATABASE_URL = "postgresql://user:password@host:port/database"
 """
+import os
+import logging
 from sqlalchemy import create_engine, event, text, inspect
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
@@ -8,6 +20,8 @@ import streamlit as st
 
 from config.settings import DATABASE_PATH, DEFAULT_FOLDERS
 from .models import Base, User, Folder
+
+logger = logging.getLogger(__name__)
 
 # Import extended models so their tables get registered with Base.metadata
 try:
@@ -22,9 +36,70 @@ except ImportError:
     pass
 
 
+def get_database_url() -> str:
+    """
+    Ermittelt die Datenbank-URL aus verschiedenen Quellen.
+
+    Priorität:
+    1. Streamlit Secrets (DATABASE_URL)
+    2. Umgebungsvariable (DATABASE_URL)
+    3. Lokale SQLite-Datei (Standard)
+
+    Returns:
+        Database URL string
+    """
+    # 1. Versuche Streamlit Secrets
+    try:
+        if hasattr(st, 'secrets') and 'DATABASE_URL' in st.secrets:
+            db_url = st.secrets['DATABASE_URL']
+            logger.info("Verwende Datenbank aus Streamlit Secrets")
+            return db_url
+    except Exception:
+        pass
+
+    # 2. Versuche Umgebungsvariable
+    db_url = os.environ.get('DATABASE_URL')
+    if db_url:
+        # Heroku-Style postgres:// -> postgresql://
+        if db_url.startswith('postgres://'):
+            db_url = db_url.replace('postgres://', 'postgresql://', 1)
+        logger.info("Verwende Datenbank aus Umgebungsvariable")
+        return db_url
+
+    # 3. Fallback auf lokale SQLite
+    logger.info("Verwende lokale SQLite-Datenbank")
+    return f"sqlite:///{DATABASE_PATH}"
+
+
+def create_db_engine():
+    """
+    Erstellt den Datenbank-Engine basierend auf der URL.
+
+    Konfiguriert automatisch die richtigen Optionen für SQLite vs PostgreSQL.
+    """
+    db_url = get_database_url()
+
+    if db_url.startswith('sqlite'):
+        # SQLite-spezifische Optionen
+        engine = create_engine(
+            db_url,
+            echo=False,
+            connect_args={"check_same_thread": False}
+        )
+    else:
+        # PostgreSQL/MySQL Optionen
+        engine = create_engine(
+            db_url,
+            echo=False,
+            pool_pre_ping=True,  # Verbindung vor Nutzung prüfen
+            pool_recycle=300,    # Verbindungen alle 5 Minuten recyceln
+        )
+
+    return engine
+
+
 # Datenbank-Engine
-DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+engine = create_db_engine()
 
 # Session-Factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -397,3 +472,62 @@ def get_current_user_id() -> int:
             user = ensure_user_exists(session)
             st.session_state.user_id = user.id
     return st.session_state.user_id
+
+
+def get_database_status() -> dict:
+    """
+    Gibt Informationen über die aktuelle Datenbankverbindung zurück.
+
+    Returns:
+        Dict mit:
+        - type: 'sqlite', 'postgresql', 'mysql'
+        - persistent: True wenn Cloud-DB, False wenn lokale SQLite
+        - host: Hostname (bei Cloud-DB) oder Dateipfad (bei SQLite)
+        - connected: True wenn Verbindung funktioniert
+    """
+    db_url = get_database_url()
+
+    status = {
+        'type': 'unknown',
+        'persistent': False,
+        'host': '',
+        'connected': False,
+        'warning': None
+    }
+
+    try:
+        if db_url.startswith('sqlite'):
+            status['type'] = 'sqlite'
+            status['persistent'] = False
+            status['host'] = str(DATABASE_PATH)
+            status['warning'] = 'Lokale SQLite-Datenbank wird bei Neustart gelöscht!'
+        elif db_url.startswith('postgresql'):
+            status['type'] = 'postgresql'
+            status['persistent'] = True
+            # Host aus URL extrahieren (ohne Passwort)
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(db_url)
+                status['host'] = parsed.hostname or 'unknown'
+            except:
+                status['host'] = 'cloud'
+        elif db_url.startswith('mysql'):
+            status['type'] = 'mysql'
+            status['persistent'] = True
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(db_url)
+                status['host'] = parsed.hostname or 'unknown'
+            except:
+                status['host'] = 'cloud'
+
+        # Verbindung testen
+        with engine.connect() as conn:
+            conn.execute(text('SELECT 1'))
+            status['connected'] = True
+
+    except Exception as e:
+        status['connected'] = False
+        status['warning'] = f'Verbindungsfehler: {str(e)}'
+
+    return status

@@ -295,6 +295,25 @@ def render_dashboard():
         st.warning("⚠️ **Keine API-Keys konfiguriert.** KI-Funktionen sind eingeschränkt. [Einstellungen öffnen](pages/8_⚙️_Einstellungen.py)")
 
     # =====================
+    # DATENBANK-STATUS
+    # =====================
+    from database.db import get_database_status
+    db_status = get_database_status()
+
+    if not db_status['persistent']:
+        st.warning(f"""
+        ⚠️ **Daten nicht persistent!** Du verwendest SQLite (lokal).
+        Alle Daten gehen bei App-Neustart verloren!
+
+        **Lösung:** Füge `DATABASE_URL` in Streamlit Secrets hinzu:
+        1. Erstelle kostenloses Konto bei [Supabase](https://supabase.com) oder [Neon](https://neon.tech)
+        2. Kopiere die PostgreSQL-Verbindungs-URL
+        3. Füge in Streamlit Secrets hinzu: `DATABASE_URL = "postgresql://..."`
+        """)
+    else:
+        st.success(f"✅ **Persistente Datenbank:** {db_status['type'].upper()} @ {db_status['host']}")
+
+    # =====================
     # HAUPT-KPIs (Zeile 1)
     # =====================
     col1, col2, col3, col4, col5 = st.columns(5)
