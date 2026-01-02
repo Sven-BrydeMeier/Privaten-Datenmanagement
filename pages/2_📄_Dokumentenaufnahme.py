@@ -1491,6 +1491,7 @@ with tab_cloud:
         if diagnose_clicked and cloud_link and detected_provider == "google_drive":
             import requests
             import re
+            from config.settings import get_api_key
 
             # Folder-ID extrahieren
             folder_id = None
@@ -1504,6 +1505,103 @@ with tab_cloud:
                 st.markdown("---")
                 st.subheader("🔍 Google Drive Diagnose")
                 st.code(f"Folder-ID: {folder_id}")
+
+                # ========== API TEST ==========
+                api_key = get_api_key('GOOGLE_API_KEY')
+                if api_key:
+                    st.markdown("### 🔑 Google Drive API Test")
+                    st.success(f"API Key gefunden: `{api_key[:10]}...`")
+
+                    with st.spinner("Teste Google Drive API..."):
+                        try:
+                            BASE = "https://www.googleapis.com/drive/v3/files"
+                            params = {
+                                "q": f"'{folder_id}' in parents and trashed=false",
+                                "fields": "files(id,name,mimeType,size)",
+                                "pageSize": 100,
+                                "key": api_key,
+                            }
+                            api_response = requests.get(BASE, params=params, timeout=30)
+
+                            st.markdown(f"**API Status:** {api_response.status_code}")
+
+                            if api_response.status_code == 200:
+                                data = api_response.json()
+                                files = data.get("files", [])
+                                st.success(f"✅ API funktioniert! {len(files)} Einträge gefunden")
+
+                                if files:
+                                    folders = [f for f in files if f.get('mimeType') == 'application/vnd.google-apps.folder']
+                                    docs = [f for f in files if f.get('mimeType') != 'application/vnd.google-apps.folder']
+
+                                    st.markdown(f"**Ordner:** {len(folders)} | **Dateien:** {len(docs)}")
+
+                                    with st.expander(f"📋 API-Ergebnisse ({len(files)} Einträge)", expanded=True):
+                                        for f in files[:20]:
+                                            mime = f.get('mimeType', '')
+                                            icon = "📁" if 'folder' in mime else "📄"
+                                            st.write(f"{icon} {f.get('name')} (`{mime[:30]}`)")
+                                        if len(files) > 20:
+                                            st.caption(f"... und {len(files) - 20} weitere")
+
+                                    # Test Unterordner
+                                    if folders:
+                                        st.markdown("### 📂 Test Unterordner-Zugriff")
+                                        test_folder = folders[0]
+                                        st.markdown(f"Teste Zugriff auf: **{test_folder.get('name')}**")
+
+                                        subfolder_params = {
+                                            "q": f"'{test_folder.get('id')}' in parents and trashed=false",
+                                            "fields": "files(id,name,mimeType)",
+                                            "pageSize": 50,
+                                            "key": api_key,
+                                        }
+                                        sub_response = requests.get(BASE, params=subfolder_params, timeout=30)
+
+                                        if sub_response.status_code == 200:
+                                            sub_data = sub_response.json()
+                                            sub_files = sub_data.get("files", [])
+                                            st.success(f"✅ Unterordner-Zugriff OK! {len(sub_files)} Einträge in '{test_folder.get('name')}'")
+
+                                            if sub_files:
+                                                with st.expander(f"Inhalt von '{test_folder.get('name')}'"):
+                                                    for sf in sub_files[:10]:
+                                                        mime = sf.get('mimeType', '')
+                                                        icon = "📁" if 'folder' in mime else "📄"
+                                                        st.write(f"{icon} {sf.get('name')}")
+                                            else:
+                                                st.info("Unterordner ist leer oder enthält nur Google Docs")
+                                        else:
+                                            st.error(f"❌ Unterordner-Zugriff fehlgeschlagen: {sub_response.status_code}")
+                                            st.code(sub_response.text[:500])
+                                else:
+                                    st.warning("Ordner ist leer oder API hat keine Berechtigung")
+
+                            elif api_response.status_code == 404:
+                                st.error("❌ **404 - Ordner nicht gefunden**")
+                                st.markdown("""
+                                **Mögliche Ursachen:**
+                                1. Der Ordner ist nicht mit "Jeder mit dem Link" geteilt
+                                2. Die Google Drive API ist nicht aktiviert
+                                3. Der API Key hat keine Berechtigung
+
+                                **Lösung:** Öffnen Sie den Ordner in Google Drive → Rechtsklick → Freigeben → "Jeder mit dem Link" → "Betrachter"
+                                """)
+                            elif api_response.status_code == 403:
+                                st.error("❌ **403 - Zugriff verweigert**")
+                                st.code(api_response.text[:500])
+                            else:
+                                st.error(f"❌ API Fehler: {api_response.status_code}")
+                                st.code(api_response.text[:500])
+
+                        except Exception as e:
+                            st.error(f"API Fehler: {e}")
+                else:
+                    st.warning("⚠️ Kein Google API Key in Streamlit Secrets gefunden")
+                    st.markdown("Bitte `GOOGLE_API_KEY` in Streamlit Secrets hinterlegen")
+
+                st.markdown("---")
+                st.markdown("### 🌐 Web-Scraping Fallback")
 
                 with st.spinner("Lade Ordner-Inhalt..."):
                     try:
