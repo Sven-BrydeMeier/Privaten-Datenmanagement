@@ -370,11 +370,90 @@ class CloudSyncService:
 
     # ==================== PUBLIC GOOGLE DRIVE API ====================
 
+    def _get_google_api_key(self) -> Optional[str]:
+        """Holt den Google API Key aus Streamlit Secrets oder Umgebungsvariablen"""
+        # Versuche Streamlit Secrets
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets'):
+                # Versuche verschiedene Formate
+                if 'GOOGLE_API_KEY' in st.secrets:
+                    return st.secrets['GOOGLE_API_KEY']
+                if 'google' in st.secrets and 'api_key' in st.secrets['google']:
+                    return st.secrets['google']['api_key']
+        except Exception:
+            pass
+
+        # Fallback auf Umgebungsvariable
+        return os.environ.get('GOOGLE_API_KEY')
+
+    def _google_api_list_folder(self, folder_id: str, api_key: str) -> Dict:
+        """
+        Listet Dateien über die offizielle Google Drive API.
+        Zuverlässigste Methode wenn ein API Key verfügbar ist.
+        """
+        try:
+            items = []
+            token = None
+            BASE = "https://www.googleapis.com/drive/v3/files"
+
+            while True:
+                params = {
+                    "q": f"'{folder_id}' in parents and trashed=false",
+                    "fields": "nextPageToken, files(id,name,mimeType,size)",
+                    "pageSize": 1000,
+                    "supportsAllDrives": "true",
+                    "includeItemsFromAllDrives": "true",
+                    "key": api_key,
+                }
+                if token:
+                    params["pageToken"] = token
+
+                response = requests.get(BASE, params=params, timeout=30)
+
+                if response.status_code == 403:
+                    logger.warning("Google API: Zugriff verweigert (403) - Key ungültig oder Ordner nicht öffentlich")
+                    return {"error": "API Key ungültig oder Ordner nicht öffentlich", "success": False}
+                elif response.status_code == 404:
+                    logger.warning("Google API: Ordner nicht gefunden (404)")
+                    return {"error": "Ordner nicht gefunden", "success": False}
+
+                response.raise_for_status()
+                data = response.json()
+
+                for file_info in data.get("files", []):
+                    items.append({
+                        "id": file_info.get("id"),
+                        "name": file_info.get("name"),
+                        "mimeType": file_info.get("mimeType", "application/octet-stream"),
+                        "size": int(file_info.get("size", 0)) if file_info.get("size") else 0
+                    })
+
+                token = data.get("nextPageToken")
+                if not token:
+                    break
+
+            logger.info(f"Google API: {len(items)} Dateien/Ordner gefunden in {folder_id}")
+            return {"files": items, "success": True}
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Google API Fehler: {e}")
+            return {"error": str(e), "success": False}
+
     def _google_public_list_folder(self, folder_id: str) -> Dict:
         """
         Listet Dateien in einem öffentlich freigegebenen Google Drive-Ordner.
         Verwendet mehrere Methoden in Reihenfolge der Zuverlässigkeit.
         """
+        # Methode 0: Versuche die offizielle Google Drive API (beste Methode)
+        api_key = self._get_google_api_key()
+        if api_key:
+            logger.info("Verwende Google Drive API mit API Key")
+            api_result = self._google_api_list_folder(folder_id, api_key)
+            if api_result.get("success") and api_result.get("files") is not None:
+                return api_result
+            logger.warning(f"API-Methode fehlgeschlagen: {api_result.get('error')}, versuche Fallback...")
+
         # Methode 1: Versuche die Embed-API (zuverlässiger als Web-Scraping)
         embed_result = self._google_public_list_folder_embed(folder_id)
         if embed_result.get("success") and embed_result.get("files"):
