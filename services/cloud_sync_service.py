@@ -1186,6 +1186,73 @@ class CloudSyncService:
             logger.error(f"Fehler beim Download von Datei {file_id}: {e}")
             return b'', False
 
+    def _collect_dropbox_files_public(self, connection: CloudSyncConnection,
+                                       session) -> List[Dict]:
+        """
+        Sammelt Dateien aus einem öffentlich geteilten Dropbox-Ordner.
+        """
+        files = []
+        shared_link = connection.remote_folder_path
+
+        if not shared_link:
+            logger.error("Kein Dropbox Shared Link angegeben")
+            return files
+
+        logger.info(f"Lade öffentlichen Dropbox-Ordner: {shared_link}")
+
+        # Lade Ordnerinhalt
+        response = self._dropbox_public_list_folder(shared_link)
+
+        if "error" in response:
+            logger.error(f"Fehler beim Laden des Dropbox-Ordners: {response['error']}")
+            return files
+
+        file_list = response.get("files", [])
+        logger.info(f"Gefunden: {len(file_list)} Einträge in Dropbox-Ordner")
+
+        for file_info in file_list:
+            mime_type = file_info.get("mimeType", "")
+            filename = file_info.get("name", "")
+            file_path = file_info.get("path", filename)
+
+            # Ordner überspringen (keine rekursive Unterstützung für öffentliche Dropbox)
+            if 'folder' in mime_type.lower():
+                logger.info(f"Unterordner übersprungen: {filename}")
+                continue
+
+            ext = Path(filename).suffix.lower()
+
+            # Dateiendung prüfen
+            if connection.file_extensions and ext and ext not in connection.file_extensions:
+                continue
+
+            # Prüfen ob bereits synchronisiert
+            from database.extended_models import CloudSyncLog
+            existing_log = session.query(CloudSyncLog).filter(
+                CloudSyncLog.connection_id == connection.id,
+                CloudSyncLog.remote_file_id == file_path
+            ).first()
+
+            if existing_log:
+                continue
+
+            files.append({
+                "name": filename,
+                "path": file_path,
+                "id": file_path,
+                "size": file_info.get("size", 0),
+                "hash": None,
+                "modified": None,
+                "mime_type": mime_type,
+                "provider": "dropbox_public",
+                "shared_link": shared_link
+            })
+
+            logger.info(f"Datei gefunden: {filename}")
+
+        logger.info(f"Insgesamt {len(files)} Dateien in öffentlichem Dropbox-Ordner gefunden")
+        return files
+
     def _collect_google_drive_files_public(self, connection: CloudSyncConnection,
                                             session) -> List[Dict]:
         """
@@ -1194,13 +1261,27 @@ class CloudSyncService:
         """
         files = []
 
-        folder_id = connection.remote_folder_id
+        # Versuche Folder-ID zu extrahieren
+        folder_id = None
+
+        # Prüfe ob remote_folder_id eine URL ist oder eine echte ID
+        if connection.remote_folder_id:
+            if 'drive.google.com' in connection.remote_folder_id:
+                # Es ist eine URL, extrahiere die ID
+                folder_id = self._google_get_folder_id_from_link(connection.remote_folder_id)
+            elif len(connection.remote_folder_id) > 10 and not connection.remote_folder_id.startswith('http'):
+                # Sieht wie eine echte Folder-ID aus
+                folder_id = connection.remote_folder_id
+
+        # Fallback auf remote_folder_path
         if not folder_id and connection.remote_folder_path:
             folder_id = self._google_get_folder_id_from_link(connection.remote_folder_path)
 
         if not folder_id:
             logger.error("Keine Ordner-ID gefunden")
             return files
+
+        logger.info(f"Verwende Folder-ID: {folder_id}")
 
         # Rekursiv alle Dateien sammeln
         self._collect_public_folder_recursive(
@@ -1384,14 +1465,21 @@ class CloudSyncService:
                 yield result
                 return
 
-            # Prüfen ob Access Token vorhanden (außer bei öffentlichen Google Drive Ordnern)
+            # Prüfen ob Access Token vorhanden (außer bei öffentlichen Ordnern)
             is_public_google_drive = (
                 connection.provider == CloudProvider.GOOGLE_DRIVE and
                 not connection.access_token and
                 (connection.remote_folder_id or connection.remote_folder_path)
             )
 
-            if not connection.access_token and not is_public_google_drive:
+            is_public_dropbox = (
+                connection.provider == CloudProvider.DROPBOX and
+                not connection.access_token and
+                connection.remote_folder_path and
+                ('dropbox.com' in connection.remote_folder_path)
+            )
+
+            if not connection.access_token and not is_public_google_drive and not is_public_dropbox:
                 result["phase"] = "error"
                 result["error"] = "Kein Access Token konfiguriert. Bitte API-Konfiguration in Einstellungen prüfen."
                 result["errors"].append(result["error"])
@@ -1409,8 +1497,11 @@ class CloudSyncService:
                 yield result.copy()
 
                 if connection.provider == CloudProvider.DROPBOX:
-                    # Erst alle Dateien sammeln
-                    files_to_sync = self._collect_dropbox_files(connection, session)
+                    # Öffentliche oder authentifizierte Dropbox
+                    if is_public_dropbox:
+                        files_to_sync = self._collect_dropbox_files_public(connection, session)
+                    else:
+                        files_to_sync = self._collect_dropbox_files(connection, session)
                 elif connection.provider == CloudProvider.GOOGLE_DRIVE:
                     # Öffentliche Ordner verwenden andere Methode
                     if is_public_google_drive:
@@ -1582,7 +1673,14 @@ class CloudSyncService:
         """Sammelt alle zu synchronisierenden Google Drive-Dateien"""
         files = []
 
-        folder_id = connection.remote_folder_id
+        # Versuche Folder-ID zu extrahieren (kann URL oder echte ID sein)
+        folder_id = None
+        if connection.remote_folder_id:
+            if 'drive.google.com' in connection.remote_folder_id:
+                folder_id = self._google_get_folder_id_from_link(connection.remote_folder_id)
+            elif len(connection.remote_folder_id) > 10 and not connection.remote_folder_id.startswith('http'):
+                folder_id = connection.remote_folder_id
+
         if not folder_id and connection.remote_folder_path:
             folder_id = self._google_get_folder_id_from_link(connection.remote_folder_path)
 
@@ -1897,8 +1995,14 @@ class CloudSyncService:
             "synced_files": []
         }
 
-        # Folder-ID aus Pfad/Link extrahieren
-        folder_id = connection.remote_folder_id
+        # Folder-ID aus Pfad/Link extrahieren (kann URL oder echte ID sein)
+        folder_id = None
+        if connection.remote_folder_id:
+            if 'drive.google.com' in connection.remote_folder_id:
+                folder_id = self._google_get_folder_id_from_link(connection.remote_folder_id)
+            elif len(connection.remote_folder_id) > 10 and not connection.remote_folder_id.startswith('http'):
+                folder_id = connection.remote_folder_id
+
         if not folder_id and connection.remote_folder_path:
             folder_id = self._google_get_folder_id_from_link(connection.remote_folder_path)
 
