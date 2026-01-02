@@ -506,7 +506,12 @@ class CloudSyncService:
         return response.content
 
     def _google_get_folder_id_from_link(self, link: str) -> Optional[str]:
-        """Extrahiert Folder-ID aus Google Drive Link"""
+        """Extrahiert Folder-ID aus Google Drive Link oder Text"""
+        import re
+
+        if not link:
+            return None
+
         # Format: https://drive.google.com/drive/folders/FOLDER_ID
         # oder: https://drive.google.com/drive/u/0/folders/FOLDER_ID
         parsed = urlparse(link)
@@ -516,10 +521,34 @@ class CloudSyncService:
             if "folders" in path_parts:
                 idx = path_parts.index("folders")
                 if idx + 1 < len(path_parts):
-                    return path_parts[idx + 1].split("?")[0]
+                    folder_id = path_parts[idx + 1].split("?")[0]
+                    if len(folder_id) > 10:
+                        logger.info(f"Folder-ID aus URL extrahiert: {folder_id}")
+                        return folder_id
         except:
             pass
 
+        # Fallback: Suche nach "Folder-ID: XXXX" im Text (für Copy-Paste Fehler)
+        folder_id_match = re.search(r'Folder-ID:\s*([a-zA-Z0-9_-]{20,})', link)
+        if folder_id_match:
+            folder_id = folder_id_match.group(1)
+            logger.info(f"Folder-ID aus 'Folder-ID:' Pattern extrahiert: {folder_id}")
+            return folder_id
+
+        # Fallback: Suche nach /folders/XXXX im Text
+        folders_match = re.search(r'/folders/([a-zA-Z0-9_-]{20,})', link)
+        if folders_match:
+            folder_id = folders_match.group(1)
+            logger.info(f"Folder-ID aus '/folders/' Pattern extrahiert: {folder_id}")
+            return folder_id
+
+        # Fallback: Wenn der String selbst wie eine Folder-ID aussieht
+        if re.match(r'^[a-zA-Z0-9_-]{20,}$', link.strip()):
+            folder_id = link.strip()
+            logger.info(f"String direkt als Folder-ID verwendet: {folder_id}")
+            return folder_id
+
+        logger.warning(f"Keine Folder-ID gefunden in: {link[:100]}...")
         return None
 
     # ==================== PUBLIC GOOGLE DRIVE API ====================
