@@ -311,6 +311,158 @@ class CloudSyncService:
 
         return response.json()
 
+    # ==================== PUBLIC DROPBOX API ====================
+
+    def _dropbox_public_list_folder(self, shared_link: str, path: str = "") -> Dict:
+        """
+        Listet Dateien in einem öffentlich geteilten Dropbox-Ordner.
+        Verwendet die Dropbox API für Shared Links (kein OAuth erforderlich).
+        """
+        try:
+            # Dropbox Shared Link Metadata API
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+            # Erst Metadaten des Shared Links holen
+            metadata_response = requests.post(
+                "https://api.dropboxapi.com/2/sharing/get_shared_link_metadata",
+                headers=headers,
+                json={
+                    "url": shared_link,
+                    "path": path
+                },
+                timeout=30
+            )
+
+            if metadata_response.status_code != 200:
+                # Versuche alternative Web-Scraping Methode
+                return self._dropbox_public_scrape(shared_link)
+
+            metadata = metadata_response.json()
+
+            # Wenn es ein Ordner ist, Liste den Inhalt
+            if metadata.get(".tag") == "folder":
+                list_response = requests.post(
+                    "https://api.dropboxapi.com/2/files/list_folder",
+                    headers=headers,
+                    json={
+                        "shared_link": {"url": shared_link},
+                        "path": path
+                    },
+                    timeout=30
+                )
+
+                if list_response.status_code == 200:
+                    data = list_response.json()
+                    files = []
+                    for entry in data.get("entries", []):
+                        files.append({
+                            "id": entry.get("id", ""),
+                            "name": entry.get("name", ""),
+                            "path": entry.get("path_display", ""),
+                            "mimeType": "application/vnd.dropbox.folder" if entry.get(".tag") == "folder" else self._guess_mime_type(entry.get("name", "")),
+                            "size": entry.get("size", 0)
+                        })
+                    return {"files": files, "success": True}
+
+            return {"files": [], "success": True, "message": "Kein Ordner oder leer"}
+
+        except Exception as e:
+            logger.error(f"Dropbox Public API Fehler: {e}")
+            return self._dropbox_public_scrape(shared_link)
+
+    def _dropbox_public_scrape(self, shared_link: str) -> Dict:
+        """
+        Fallback: Web-Scraping für öffentliche Dropbox-Ordner.
+        """
+        try:
+            # Füge ?dl=0 hinzu für Web-Ansicht
+            if "?dl=" not in shared_link:
+                shared_link = shared_link.rstrip("/") + "?dl=0"
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
+
+            response = requests.get(shared_link, headers=headers, timeout=30, allow_redirects=True)
+
+            if response.status_code != 200:
+                return {"error": f"HTTP {response.status_code}", "success": False}
+
+            html = response.text
+            files = []
+            seen = set()
+
+            # Dropbox verwendet JSON-Daten im HTML
+            # Suche nach Datei-Einträgen
+            import re
+
+            # Pattern für Dropbox Datei-Einträge
+            # Format: {"filename":"xxx","bytes":123,"icon":"page_white_acrobat",...}
+            file_pattern = r'"filename"\s*:\s*"([^"]+)"[^}]*"bytes"\s*:\s*(\d+)'
+            for match in re.finditer(file_pattern, html):
+                name = match.group(1)
+                size = int(match.group(2))
+                if name not in seen:
+                    seen.add(name)
+                    files.append({
+                        "id": name,
+                        "name": name,
+                        "path": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": size
+                    })
+
+            # Alternative: Suche nach sl-preview Links
+            preview_pattern = r'href="(/previews/[^"]+)"[^>]*>([^<]+)<'
+            for match in re.finditer(preview_pattern, html):
+                name = match.group(2).strip()
+                if name and name not in seen and len(name) > 2:
+                    seen.add(name)
+                    files.append({
+                        "id": name,
+                        "name": name,
+                        "path": name,
+                        "mimeType": self._guess_mime_type(name),
+                        "size": 0
+                    })
+
+            if files:
+                logger.info(f"Dropbox Scraping: {len(files)} Dateien gefunden")
+                return {"files": files, "success": True}
+            else:
+                logger.warning("Dropbox Scraping: Keine Dateien gefunden")
+                return {"files": [], "success": True}
+
+        except Exception as e:
+            logger.error(f"Dropbox Scraping Fehler: {e}")
+            return {"error": str(e), "success": False}
+
+    def _dropbox_public_download_file(self, shared_link: str, path: str) -> Tuple[bytes, bool]:
+        """
+        Lädt eine Datei von einem öffentlich geteilten Dropbox-Ordner herunter.
+        """
+        try:
+            # Dropbox Direct Download Link
+            download_url = shared_link.replace("?dl=0", "?dl=1").replace("www.dropbox.com", "dl.dropboxusercontent.com")
+
+            if path:
+                # Wenn Pfad angegeben, füge ihn hinzu
+                download_url = f"{download_url}&path={path}"
+
+            response = requests.get(download_url, timeout=60, allow_redirects=True)
+
+            if response.status_code == 200:
+                return response.content, True
+            else:
+                logger.error(f"Dropbox Download fehlgeschlagen: {response.status_code}")
+                return b'', False
+
+        except Exception as e:
+            logger.error(f"Dropbox Download Fehler: {e}")
+            return b'', False
+
     # ==================== GOOGLE DRIVE API ====================
 
     def _google_list_folder(self, access_token: str, folder_id: str = None,
