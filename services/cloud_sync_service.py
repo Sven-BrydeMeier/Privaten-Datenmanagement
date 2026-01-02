@@ -757,7 +757,8 @@ class CloudSyncService:
             invalid = ['http', 'https', 'clients', '.com', '.google',
                        'sign in', 'anmelden', 'null', 'undefined',
                        'function', 'return', 'var ', 'const ', 'window.',
-                       '();', '{}', 'prototype', 'throw', 'catch']
+                       '();', '{}', 'prototype', 'throw', 'catch',
+                       'script', 'style', 'meta', 'link']
             name_lower = name.lower()
             if any(inv in name_lower for inv in invalid):
                 return False
@@ -766,7 +767,32 @@ class CloudSyncService:
                 return False
             return True
 
+        def is_file_extension(name):
+            """Prüft ob der Name eine Dateiendung hat"""
+            return bool(re.search(r'\.\w{2,5}$', name))
+
         try:
+            # ============ NEUE STRATEGIE: Suche nach Google's Datenstrukturen ============
+
+            # Google Drive verwendet oft dieses Format in Script-Tags:
+            # null,["FILE_ID","FILENAME",["MIMETYPE"],...
+            # oder: ["FILE_ID",["PARENT_ID","FILENAME",...
+
+            # Strategie 0: Suche nach MIME-Type-Zuordnungen im HTML
+            # Format: "FILE_ID"... "application/vnd.google-apps.folder" oder andere MIME-Types
+            mime_patterns = [
+                (r'"([a-zA-Z0-9_-]{25,})"[^"]{0,200}"application/vnd\.google-apps\.folder"', 'folder'),
+                (r'"([a-zA-Z0-9_-]{25,})"[^"]{0,200}"application/pdf"', 'application/pdf'),
+                (r'"([a-zA-Z0-9_-]{25,})"[^"]{0,200}"image/(?:jpeg|png|gif)"', 'image'),
+            ]
+
+            id_to_type = {}
+            for pattern, file_type in mime_patterns:
+                for match in re.finditer(pattern, html_content):
+                    file_id = match.group(1)
+                    if file_id not in id_to_type:
+                        id_to_type[file_id] = file_type
+
             # Strategie 1: Suche nach Dateinamen mit Erweiterungen
             ext_pattern = r'"([a-zA-Z0-9_-]{20,})"[,\]\[null"]*"([^"]+\.(?:pdf|jpg|jpeg|png|gif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|zip|PDF|JPG|PNG|DOC|XLS))"'
             for file_id, name in re.findall(ext_pattern, html_content):
@@ -811,76 +837,83 @@ class CloudSyncService:
                                     "size": 0
                                 })
 
-            # Strategie 4: Alle Ordner-IDs aus /folders/ Links extrahieren
-            folder_ids_found = set(re.findall(r'/folders/([a-zA-Z0-9_-]{20,})', html_content))
-            for file_id in folder_ids_found:
-                if file_id not in seen_ids:
-                    # Suche Namen in der Nähe der ID
-                    idx = html_content.find(file_id)
-                    if idx >= 0:
-                        context = html_content[max(0,idx-100):idx+200]
-                        # Suche nach "Name" nach der ID
-                        name_match = re.search(rf'{file_id}"[,\]\[null"]*"([^"]+)"', context)
-                        if name_match and is_valid_name(name_match.group(1)):
-                            name = name_match.group(1)
-                            # WICHTIG: Prüfen ob es eine Datei ist (hat Erweiterung)
-                            is_file = bool(re.search(r'\.\w{2,5}$', name))
-                            seen_ids.add(file_id)
-                            files.append({
-                                "id": file_id,
-                                "name": name,
-                                "mimeType": self._guess_mime_type(name) if is_file else "application/vnd.google-apps.folder",
-                                "size": 0
-                            })
-                        else:
-                            # Ordner ohne Namen gefunden - trotzdem hinzufügen
-                            seen_ids.add(file_id)
-                            files.append({
-                                "id": file_id,
-                                "name": f"Ordner_{file_id[:8]}",
-                                "mimeType": "application/vnd.google-apps.folder",
-                                "size": 0
-                            })
-
-            # Strategie 5: data-id Attribute mit aria-label/data-tooltip
+            # Strategie 4: Suche nach data-id Attributen mit Namen in aria-label/title
             for match in re.finditer(r'data-id="([a-zA-Z0-9_-]{20,})"', html_content):
                 file_id = match.group(1)
                 if file_id not in seen_ids:
-                    # Hole Kontext um das Attribut
-                    start = max(0, match.start() - 300)
-                    end = min(len(html_content), match.end() + 300)
+                    # Hole größeren Kontext um das Attribut
+                    start = max(0, match.start() - 500)
+                    end = min(len(html_content), match.end() + 500)
                     context = html_content[start:end]
-                    # Suche nach aria-label oder data-tooltip
+
+                    # Suche nach aria-label, data-tooltip oder title
                     label = re.search(r'(?:aria-label|data-tooltip|title)="([^"]+)"', context)
                     if label and is_valid_name(label.group(1)):
                         name = label.group(1)
                         seen_ids.add(file_id)
-                        is_file = bool(re.search(r'\.\w{2,5}$', name))
+
+                        # Bestimme Typ basierend auf MIME-Type-Map oder Dateiendung
+                        if file_id in id_to_type:
+                            if id_to_type[file_id] == 'folder':
+                                mime_type = "application/vnd.google-apps.folder"
+                            else:
+                                mime_type = id_to_type[file_id]
+                        elif is_file_extension(name):
+                            mime_type = self._guess_mime_type(name)
+                        else:
+                            mime_type = "application/vnd.google-apps.folder"
+
                         files.append({
                             "id": file_id,
                             "name": name,
-                            "mimeType": self._guess_mime_type(name) if is_file else "application/vnd.google-apps.folder",
+                            "mimeType": mime_type,
                             "size": 0
                         })
 
-            # Strategie 6: Kompakte JSON-Struktur ["ID","Name"]
+            # Strategie 5: Kompakte JSON-Struktur ["ID","Name"]
             compact_pattern = r'\["([a-zA-Z0-9_-]{25,})",\s*"([^"]{2,100})"'
             for file_id, name in re.findall(compact_pattern, html_content):
                 if file_id not in seen_ids and is_valid_name(name):
                     # Zusätzliche Prüfung: Name sollte keine JS-Syntax sein
                     if not re.match(r'^[a-z]+\(|^[A-Z_]+$|^\d+$', name):
                         seen_ids.add(file_id)
-                        is_file = bool(re.search(r'\.\w{2,5}$', name))
+
+                        # Bestimme Typ
+                        if file_id in id_to_type:
+                            if id_to_type[file_id] == 'folder':
+                                mime_type = "application/vnd.google-apps.folder"
+                            else:
+                                mime_type = id_to_type[file_id]
+                        elif is_file_extension(name):
+                            mime_type = self._guess_mime_type(name)
+                        else:
+                            mime_type = "application/vnd.google-apps.folder"
+
                         files.append({
                             "id": file_id,
                             "name": name,
-                            "mimeType": self._guess_mime_type(name) if is_file else "application/vnd.google-apps.folder",
+                            "mimeType": mime_type,
                             "size": 0
                         })
 
+            # Strategie 6: Suche nach Ordner-Links in href
+            folder_pattern = r'href="[^"]*?/folders/([a-zA-Z0-9_-]{20,})[^"]*"[^>]*>([^<]+)<'
+            for file_id, name in re.findall(folder_pattern, html_content):
+                name = name.strip()
+                if file_id not in seen_ids and is_valid_name(name):
+                    seen_ids.add(file_id)
+                    files.append({
+                        "id": file_id,
+                        "name": name,
+                        "mimeType": "application/vnd.google-apps.folder",
+                        "size": 0
+                    })
+
             # Logge Ergebnis für Debugging
             if files:
-                logger.info(f"Gefunden: {len(files)} Dateien/Ordner via HTML-Extraktion")
+                folders = len([f for f in files if f.get('mimeType') == 'application/vnd.google-apps.folder'])
+                docs = len(files) - folders
+                logger.info(f"Gefunden: {len(files)} Einträge ({folders} Ordner, {docs} Dateien) via HTML-Extraktion")
             else:
                 logger.warning(f"Keine Dateien via HTML-Extraktion gefunden. HTML-Länge: {len(html_content)}")
 
