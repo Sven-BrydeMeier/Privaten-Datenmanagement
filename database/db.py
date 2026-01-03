@@ -76,6 +76,7 @@ def create_db_engine():
     Erstellt den Datenbank-Engine basierend auf der URL.
 
     Konfiguriert automatisch die richtigen Optionen für SQLite vs PostgreSQL.
+    Unterstützt Supabase mit pgbouncer (Port 6543).
     """
     db_url = get_database_url()
 
@@ -88,11 +89,31 @@ def create_db_engine():
         )
     else:
         # PostgreSQL/MySQL Optionen
+        # Für Supabase pgbouncer: prepared statements deaktivieren
+        connect_args = {}
+
+        # Prüfe ob pgbouncer verwendet wird (Port 6543 oder ?pgbouncer=true)
+        if 'pgbouncer=true' in db_url or ':6543/' in db_url:
+            # pgbouncer benötigt spezielle Einstellungen
+            connect_args = {
+                "options": "-c statement_timeout=60000"
+            }
+            # Entferne pgbouncer=true aus URL da es kein gültiger PostgreSQL Parameter ist
+            if '?pgbouncer=true' in db_url:
+                db_url = db_url.replace('?pgbouncer=true', '')
+            elif '&pgbouncer=true' in db_url:
+                db_url = db_url.replace('&pgbouncer=true', '')
+
+            logger.info("Supabase pgbouncer-Modus erkannt")
+
         engine = create_engine(
             db_url,
             echo=False,
             pool_pre_ping=True,  # Verbindung vor Nutzung prüfen
             pool_recycle=300,    # Verbindungen alle 5 Minuten recyceln
+            pool_size=5,         # Max 5 Verbindungen
+            max_overflow=10,     # Max 10 zusätzliche bei Bedarf
+            connect_args=connect_args if connect_args else {}
         )
 
     return engine

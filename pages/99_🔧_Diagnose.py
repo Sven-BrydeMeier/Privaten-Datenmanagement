@@ -3,18 +3,26 @@ Diagnose-Seite für Cloud-Services
 Zeigt detaillierte Verbindungsinformationen und Fehler
 """
 import streamlit as st
+import traceback
 
 st.set_page_config(page_title="Diagnose", page_icon="🔧", layout="wide")
 st.title("🔧 Cloud-Services Diagnose")
 
 st.markdown("Diese Seite hilft bei der Fehlersuche für Datenbankverbindungen.")
 
+# Refresh Button
+if st.button("🔄 Neu laden"):
+    st.rerun()
+
 # ==========================================
 # 1. SECRETS PRÜFEN
 # ==========================================
 st.header("1️⃣ Secrets-Konfiguration")
 
+st.info("**Hinweis:** Secrets müssen in Streamlit Cloud unter 'Settings → Secrets' konfiguriert werden.")
+
 secrets_status = {}
+secrets_found = {}
 
 # DATABASE_URL
 try:
@@ -22,12 +30,15 @@ try:
     if db_url:
         # Passwort maskieren
         import re
-        masked = re.sub(r':([^:@]+)@', ':****@', db_url)
+        masked = re.sub(r':([^:@]+)@', ':****@', str(db_url))
         secrets_status["DATABASE_URL"] = f"✅ Vorhanden: `{masked}`"
+        secrets_found["DATABASE_URL"] = db_url
     else:
         secrets_status["DATABASE_URL"] = "❌ Nicht konfiguriert"
+except FileNotFoundError:
+    secrets_status["DATABASE_URL"] = "⚠️ secrets.toml nicht gefunden (normal bei lokalem Start)"
 except Exception as e:
-    secrets_status["DATABASE_URL"] = f"❌ Fehler: {e}"
+    secrets_status["DATABASE_URL"] = f"❌ Fehler beim Lesen: {type(e).__name__}: {e}"
 
 # UPSTASH_REDIS_URL
 try:
@@ -67,47 +78,105 @@ st.divider()
 st.header("2️⃣ Datenbank-Verbindung")
 
 try:
-    from database.db import get_database_url, create_db_engine, get_database_status
+    from database.db import get_database_url, get_database_status
+    from sqlalchemy import create_engine, text, inspect
+    import re
 
+    # URL aus Secrets direkt lesen
+    raw_db_url = secrets_found.get("DATABASE_URL", None)
+
+    if raw_db_url:
+        st.markdown("**Aus Secrets gelesene URL:**")
+        masked = re.sub(r':([^:@]+)@', ':****@', str(raw_db_url))
+        st.code(masked)
+
+        # Prüfe URL-Format
+        if ':6543/' in raw_db_url:
+            st.success("✅ Port 6543 (Supabase Pooler) erkannt")
+        elif ':5432/' in raw_db_url:
+            st.warning("⚠️ Port 5432 (Direct Connection) - Kann bei Streamlit Cloud blockiert sein!")
+
+        if 'pgbouncer=true' in raw_db_url:
+            st.info("ℹ️ pgbouncer=true Parameter erkannt - wird automatisch verarbeitet")
+
+    # Funktion get_database_url verwenden
     db_url = get_database_url()
-    st.markdown(f"**Verwendete URL:** `{db_url[:50]}...`" if len(db_url) > 50 else f"**Verwendete URL:** `{db_url}`")
+    st.markdown("**Von get_database_url() zurückgegeben:**")
+    masked_used = re.sub(r':([^:@]+)@', ':****@', str(db_url))
+    st.code(masked_used[:100] + "..." if len(masked_used) > 100 else masked_used)
 
-    status = get_database_status()
-    st.json(status)
+    # Direkte Verbindung testen
+    st.subheader("Verbindungstest:")
 
-    if status.get('connected'):
-        st.success("✅ Datenbank ist verbunden!")
+    try:
+        # pgbouncer Parameter entfernen
+        clean_url = db_url
+        if '?pgbouncer=true' in clean_url:
+            clean_url = clean_url.replace('?pgbouncer=true', '')
+        elif '&pgbouncer=true' in clean_url:
+            clean_url = clean_url.replace('&pgbouncer=true', '')
 
-        # Tabellen prüfen
-        st.subheader("Tabellen in der Datenbank:")
-        try:
-            from sqlalchemy import inspect
-            engine = create_db_engine()
-            inspector = inspect(engine)
+        test_engine = create_engine(
+            clean_url,
+            pool_pre_ping=True,
+            pool_size=1,
+            connect_args={"connect_timeout": 10}
+        )
+
+        with test_engine.connect() as conn:
+            result = conn.execute(text("SELECT version()"))
+            version = result.scalar()
+            st.success(f"✅ **Verbindung erfolgreich!**")
+            st.markdown(f"**PostgreSQL Version:** `{version}`")
+
+            # Tabellen auflisten
+            inspector = inspect(test_engine)
             tables = inspector.get_table_names()
 
             if tables:
-                for table in tables:
-                    st.markdown(f"- `{table}`")
+                st.markdown(f"**{len(tables)} Tabellen gefunden:**")
+                cols = st.columns(4)
+                for i, table in enumerate(sorted(tables)):
+                    cols[i % 4].markdown(f"- `{table}`")
             else:
-                st.warning("⚠️ Keine Tabellen gefunden!")
+                st.warning("⚠️ **Keine Tabellen gefunden!**")
+                st.markdown("Die Datenbank ist leer. Tabellen werden beim ersten App-Start erstellt.")
 
                 if st.button("🔨 Tabellen jetzt erstellen"):
                     from database.models import Base
-                    from database.extended_models import ExtendedBase
-                    Base.metadata.create_all(engine)
-                    ExtendedBase.metadata.create_all(engine)
+                    try:
+                        from database.extended_models import ExtendedBase
+                        has_extended = True
+                    except:
+                        has_extended = False
+
+                    Base.metadata.create_all(test_engine)
+                    if has_extended:
+                        ExtendedBase.metadata.create_all(test_engine)
                     st.success("✅ Tabellen wurden erstellt!")
                     st.rerun()
-        except Exception as e:
-            st.error(f"Fehler beim Prüfen der Tabellen: {e}")
-    else:
-        st.error("❌ Datenbank nicht verbunden!")
-        st.markdown(f"**Fehler:** {status.get('error', 'Unbekannt')}")
+
+    except Exception as e:
+        st.error(f"❌ **Verbindung fehlgeschlagen!**")
+        st.markdown(f"**Fehlertyp:** `{type(e).__name__}`")
+        st.markdown(f"**Fehlermeldung:** `{str(e)}`")
+
+        # Hilfreiche Tipps basierend auf Fehler
+        error_str = str(e).lower()
+        if "password" in error_str or "authentication" in error_str:
+            st.warning("💡 **Tipp:** Passwort überprüfen! Stelle sicher, dass `[YOUR-PASSWORD]` durch das echte Passwort ersetzt wurde.")
+        elif "timeout" in error_str or "timed out" in error_str:
+            st.warning("💡 **Tipp:** Verbindungs-Timeout. Prüfe ob die IP von Streamlit Cloud erlaubt ist (Supabase: Database → Settings → Allowed IP addresses).")
+        elif "could not connect" in error_str or "connection refused" in error_str:
+            st.warning("💡 **Tipp:** Server nicht erreichbar. Prüfe die URL und den Port (6543 für Pooler, 5432 für Direct).")
+        elif "ssl" in error_str:
+            st.warning("💡 **Tipp:** SSL-Fehler. Versuche `?sslmode=require` am Ende der URL hinzuzufügen.")
+
+        with st.expander("🔍 Vollständiger Traceback"):
+            st.code(traceback.format_exc())
 
 except Exception as e:
-    st.error(f"❌ Datenbank-Fehler: {e}")
-    import traceback
+    st.error(f"❌ Allgemeiner Fehler: {e}")
     st.code(traceback.format_exc())
 
 st.divider()
