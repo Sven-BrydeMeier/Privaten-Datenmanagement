@@ -77,8 +77,8 @@ class CacheService:
                 self._redis_client = redis.from_url(
                     redis_url,
                     decode_responses=True,
-                    socket_timeout=5,
-                    socket_connect_timeout=5
+                    socket_timeout=2,
+                    socket_connect_timeout=2
                 )
                 # Test connection
                 self._redis_client.ping()

@@ -295,24 +295,37 @@ def render_dashboard():
         st.warning("⚠️ **Keine API-Keys konfiguriert.** KI-Funktionen sind eingeschränkt. [Einstellungen öffnen](pages/8_⚙️_Einstellungen.py)")
 
     # =====================
-    # WARNLAMPEN - VERBINDUNGSSTATUS
+    # WARNLAMPEN - VERBINDUNGSSTATUS (gecached für Performance)
     # =====================
     from database.db import get_database_status
 
-    # Hole Status aller Komponenten
-    db_status = get_database_status()
+    # Status nur einmal pro Session prüfen (nicht bei jedem Rerun)
+    if '_connection_status_checked' not in st.session_state:
+        with st.spinner("Verbindungen werden geprüft..."):
+            db_status = get_database_status()
 
-    try:
-        from services.cache_service import get_cache_service
-        cache_status = get_cache_service().get_status()
-    except Exception:
-        cache_status = {'type': 'memory', 'connected': False}
+            try:
+                from services.cache_service import get_cache_service
+                cache_status = get_cache_service().get_status()
+            except Exception:
+                cache_status = {'type': 'memory', 'connected': False}
 
-    try:
-        from services.storage_service import get_storage_service
-        storage_status = get_storage_service().get_status()
-    except Exception:
-        storage_status = {'type': 'local', 'connected': False}
+            try:
+                from services.storage_service import get_storage_service
+                storage_status = get_storage_service().get_status()
+            except Exception:
+                storage_status = {'type': 'local', 'connected': False}
+
+            # In Session speichern
+            st.session_state['_db_status'] = db_status
+            st.session_state['_cache_status'] = cache_status
+            st.session_state['_storage_status'] = storage_status
+            st.session_state['_connection_status_checked'] = True
+    else:
+        # Aus Session laden (schnell!)
+        db_status = st.session_state.get('_db_status', {'connected': False, 'persistent': False})
+        cache_status = st.session_state.get('_cache_status', {'type': 'memory', 'connected': False})
+        storage_status = st.session_state.get('_storage_status', {'type': 'local', 'connected': False})
 
     # Status-Werte ermitteln
     db_connected = db_status.get('connected', False)
@@ -402,6 +415,9 @@ def render_dashboard():
             | Cache | [Upstash](https://upstash.com) | `UPSTASH_REDIS_URL` | """ + ("✅" if cache_connected else "❌") + """ |
             | Storage | Supabase | `SUPABASE_URL`, `SUPABASE_KEY` | """ + ("✅" if storage_connected else "❌") + """ |
             """)
+            if st.button("🔄 Status aktualisieren"):
+                st.session_state.pop('_connection_status_checked', None)
+                st.rerun()
 
     # =====================
     # HAUPT-KPIs (Zeile 1)
