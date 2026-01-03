@@ -295,23 +295,68 @@ def render_dashboard():
         st.warning("⚠️ **Keine API-Keys konfiguriert.** KI-Funktionen sind eingeschränkt. [Einstellungen öffnen](pages/8_⚙️_Einstellungen.py)")
 
     # =====================
-    # DATENBANK-STATUS
+    # HYBRID STORAGE STATUS
     # =====================
     from database.db import get_database_status
+
+    # Hole Status aller Komponenten
     db_status = get_database_status()
 
-    if not db_status['persistent']:
-        st.warning(f"""
-        ⚠️ **Daten nicht persistent!** Du verwendest SQLite (lokal).
-        Alle Daten gehen bei App-Neustart verloren!
+    try:
+        from services.cache_service import get_cache_service
+        cache_status = get_cache_service().get_status()
+    except Exception:
+        cache_status = {'type': 'memory', 'connected': False}
 
-        **Lösung:** Füge `DATABASE_URL` in Streamlit Secrets hinzu:
-        1. Erstelle kostenloses Konto bei [Supabase](https://supabase.com) oder [Neon](https://neon.tech)
-        2. Kopiere die PostgreSQL-Verbindungs-URL
-        3. Füge in Streamlit Secrets hinzu: `DATABASE_URL = "postgresql://..."`
-        """)
+    try:
+        from services.storage_service import get_storage_service
+        storage_status = get_storage_service().get_status()
+    except Exception:
+        storage_status = {'type': 'local', 'connected': False}
+
+    # Zähle persistente Komponenten
+    persistent_components = sum([
+        db_status.get('persistent', False),
+        cache_status.get('type') == 'redis',
+        storage_status.get('type') == 'supabase'
+    ])
+
+    if persistent_components == 0:
+        # Keine Cloud-Services konfiguriert
+        with st.expander("⚠️ **Daten nicht persistent** - Klicken für Setup-Anleitung", expanded=False):
+            st.markdown("""
+            Alle Daten gehen bei App-Neustart verloren!
+
+            **Setup für persistente Daten:**
+
+            | Komponente | Service | Secrets-Variable |
+            |------------|---------|------------------|
+            | Datenbank | [Supabase](https://supabase.com) | `DATABASE_URL` |
+            | Cache | [Upstash](https://upstash.com) | `UPSTASH_REDIS_URL` |
+            | Dateien | Supabase Storage | `SUPABASE_URL`, `SUPABASE_KEY` |
+            """)
     else:
-        st.success(f"✅ **Persistente Datenbank:** {db_status['type'].upper()} @ {db_status['host']}")
+        # Mindestens eine Komponente ist persistent
+        with st.expander(f"💾 **Hybrid Storage:** {persistent_components}/3 Cloud-Services", expanded=False):
+            cols = st.columns(3)
+
+            with cols[0]:
+                if db_status.get('persistent'):
+                    st.markdown(f"✅ **Datenbank**<br><small>{db_status['type'].upper()} @ {db_status.get('host', '?')}</small>", unsafe_allow_html=True)
+                else:
+                    st.markdown("❌ **Datenbank**<br><small>Lokal (SQLite)</small>", unsafe_allow_html=True)
+
+            with cols[1]:
+                if cache_status.get('type') == 'redis':
+                    st.markdown("✅ **Cache**<br><small>Redis (Upstash)</small>", unsafe_allow_html=True)
+                else:
+                    st.markdown("⚪ **Cache**<br><small>Memory (Fallback)</small>", unsafe_allow_html=True)
+
+            with cols[2]:
+                if storage_status.get('type') == 'supabase':
+                    st.markdown("✅ **Storage**<br><small>Supabase Storage</small>", unsafe_allow_html=True)
+                else:
+                    st.markdown("❌ **Storage**<br><small>Lokal (flüchtig)</small>", unsafe_allow_html=True)
 
     # =====================
     # HAUPT-KPIs (Zeile 1)
