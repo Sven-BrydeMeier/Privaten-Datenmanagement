@@ -84,7 +84,7 @@ def create_db_engine():
 
     if db_url.startswith('sqlite'):
         # SQLite-spezifische Optionen
-        engine = create_engine(
+        eng = create_engine(
             db_url,
             echo=False,
             connect_args={"check_same_thread": False}
@@ -120,7 +120,7 @@ def create_db_engine():
                 parsed.fragment
             ))
 
-        engine = create_engine(
+        eng = create_engine(
             db_url,
             echo=False,
             pool_pre_ping=True,  # Verbindung vor Nutzung prüfen
@@ -130,11 +130,18 @@ def create_db_engine():
             connect_args=connect_args if connect_args else {}
         )
 
-    return engine
+    return eng
+
+
+# Gecachter Engine (wird nur einmal erstellt)
+@st.cache_resource
+def get_engine():
+    """Gibt den gecachten Datenbank-Engine zurück."""
+    return create_db_engine()
 
 
 # Datenbank-Engine
-engine = create_db_engine()
+engine = get_engine()
 
 # Session-Factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -407,8 +414,9 @@ def _collect_index_info():
     return _cached_indexes
 
 
+@st.cache_resource
 def init_db():
-    """Initialisiert die Datenbank und erstellt alle Tabellen"""
+    """Initialisiert die Datenbank und erstellt alle Tabellen (wird nur einmal ausgeführt)"""
     # Index-Informationen sammeln BEVOR wir sie entfernen
     indexes_info = _collect_index_info()
 
