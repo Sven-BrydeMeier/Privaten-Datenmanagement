@@ -15,7 +15,7 @@ from urllib.parse import urlencode, urlparse, parse_qs
 import re
 from bs4 import BeautifulSoup
 
-from database.models import Document, Folder
+from database.models import Document, Folder, DocumentStatus
 from database.db import get_db
 from database.extended_models import (
     CloudSyncConnection, CloudSyncLog, CloudProvider, SyncStatus
@@ -2196,7 +2196,7 @@ class CloudSyncService:
             file_size=file_size,
             mime_type=self._get_mime_type(filename),
             content_hash=content_hash,
-            status="pending" if process_documents else "completed",
+            status=DocumentStatus.PENDING if process_documents else DocumentStatus.COMPLETED,
             category="Cloud-Import"
         )
 
@@ -2287,7 +2287,7 @@ class CloudSyncService:
             file_size=file_size,
             mime_type=self._get_mime_type(filename),
             content_hash=content_hash,
-            status="pending" if process_documents else "completed",
+            status=DocumentStatus.PENDING if process_documents else DocumentStatus.COMPLETED,
             category="Cloud-Import"
         )
 
@@ -2535,7 +2535,7 @@ class CloudSyncService:
                         "detail": f"📝 Titel: {doc.title[:40]}..."
                     })
 
-                doc.status = "completed"
+                doc.status = DocumentStatus.COMPLETED
 
                 processing_steps.append({
                     "step": "analysis_complete",
