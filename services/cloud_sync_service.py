@@ -2354,6 +2354,8 @@ class CloudSyncService:
         if not cached_ocr:
             try:
                 from services.ocr import OCRService
+                from PIL import Image
+                import io
                 ocr_service = OCRService()
 
                 mime_type = doc.mime_type or self._get_mime_type(filename)
@@ -2363,10 +2365,17 @@ class CloudSyncService:
                         "step": "ocr_pdf",
                         "detail": f"📄 Verarbeite PDF mit OCR..."
                     })
-                    ocr_result = ocr_service.process_pdf(doc.file_path)
-                    ocr_text = ocr_result.get("text", "")
-                    doc.ocr_text = ocr_text
-                    doc.ocr_confidence = ocr_result.get("confidence", 0)
+                    # extract_text_from_pdf erwartet bytes und gibt List[Tuple[str, float]] zurück
+                    ocr_results = ocr_service.extract_text_from_pdf(content)
+                    if ocr_results:
+                        # Texte aller Seiten zusammenfügen
+                        ocr_text = "\n\n".join([text for text, conf in ocr_results if text])
+                        avg_confidence = sum([conf for text, conf in ocr_results]) / len(ocr_results) if ocr_results else 0
+                        doc.ocr_text = ocr_text
+                        doc.ocr_confidence = avg_confidence
+                    else:
+                        ocr_text = ""
+                        doc.ocr_confidence = 0
 
                     # Cache OCR-Ergebnis
                     if cache and content_hash and ocr_text:
@@ -2383,10 +2392,11 @@ class CloudSyncService:
                         "step": "ocr_image",
                         "detail": f"🖼️ Verarbeite Bild mit OCR..."
                     })
-                    ocr_result = ocr_service.process_image(doc.file_path)
-                    ocr_text = ocr_result.get("text", "")
+                    # Bild aus Bytes laden
+                    image = Image.open(io.BytesIO(content))
+                    ocr_text, confidence = ocr_service.extract_text_from_image(image)
                     doc.ocr_text = ocr_text
-                    doc.ocr_confidence = ocr_result.get("confidence", 0)
+                    doc.ocr_confidence = confidence
 
                     # Cache OCR-Ergebnis
                     if cache and content_hash and ocr_text:
