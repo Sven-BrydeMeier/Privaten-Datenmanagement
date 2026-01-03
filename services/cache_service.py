@@ -40,6 +40,7 @@ class CacheService:
         self._memory_cache = {}
         self._memory_expiry = {}
         self._initialized = False
+        self._last_error = None  # Speichert den letzten Fehler
 
     def _init_redis(self):
         """Initialisiert Redis-Verbindung wenn verfügbar."""
@@ -49,6 +50,7 @@ class CacheService:
         self._initialized = True
 
         if not REDIS_AVAILABLE:
+            self._last_error = "Redis-Bibliothek nicht installiert"
             logger.info("Redis-Bibliothek nicht installiert, verwende Memory-Cache")
             return
 
@@ -63,8 +65,8 @@ class CacheService:
                     redis_url = st.secrets['UPSTASH_REDIS_URL']
                 elif 'REDIS_URL' in st.secrets:
                     redis_url = st.secrets['REDIS_URL']
-        except Exception:
-            pass
+        except Exception as e:
+            self._last_error = f"Secrets Fehler: {e}"
 
         # 2. Umgebungsvariablen
         if not redis_url:
@@ -80,11 +82,14 @@ class CacheService:
                 )
                 # Test connection
                 self._redis_client.ping()
+                self._last_error = None
                 logger.info("Redis-Verbindung erfolgreich hergestellt")
             except Exception as e:
+                self._last_error = f"Verbindungsfehler: {type(e).__name__}: {e}"
                 logger.warning(f"Redis-Verbindung fehlgeschlagen: {e}, verwende Memory-Cache")
                 self._redis_client = None
         else:
+            self._last_error = "Keine Redis-URL konfiguriert"
             logger.info("Keine Redis-URL konfiguriert, verwende Memory-Cache")
 
     @property
@@ -260,7 +265,8 @@ class CacheService:
             'type': 'redis' if self._redis_client else 'memory',
             'connected': self._redis_client is not None,
             'memory_entries': len(self._memory_cache),
-            'redis_info': None
+            'redis_info': None,
+            'error': self._last_error  # Zeigt den letzten Fehler
         }
 
         if self._redis_client:
