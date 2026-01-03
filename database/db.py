@@ -78,6 +78,8 @@ def create_db_engine():
     Konfiguriert automatisch die richtigen Optionen für SQLite vs PostgreSQL.
     Unterstützt Supabase mit pgbouncer (Port 6543).
     """
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
     db_url = get_database_url()
 
     if db_url.startswith('sqlite'):
@@ -89,7 +91,6 @@ def create_db_engine():
         )
     else:
         # PostgreSQL/MySQL Optionen
-        # Für Supabase pgbouncer: prepared statements deaktivieren
         connect_args = {}
 
         # Prüfe ob pgbouncer verwendet wird (Port 6543 oder ?pgbouncer=true)
@@ -98,13 +99,26 @@ def create_db_engine():
             connect_args = {
                 "options": "-c statement_timeout=60000"
             }
-            # Entferne pgbouncer=true aus URL da es kein gültiger PostgreSQL Parameter ist
-            if '?pgbouncer=true' in db_url:
-                db_url = db_url.replace('?pgbouncer=true', '')
-            elif '&pgbouncer=true' in db_url:
-                db_url = db_url.replace('&pgbouncer=true', '')
-
             logger.info("Supabase pgbouncer-Modus erkannt")
+
+        # URL-Parameter sauber verarbeiten (pgbouncer entfernen)
+        if '?' in db_url:
+            parsed = urlparse(db_url)
+            query_params = parse_qs(parsed.query)
+
+            # Entferne pgbouncer Parameter
+            query_params.pop('pgbouncer', None)
+
+            # Baue URL neu zusammen
+            new_query = urlencode(query_params, doseq=True) if query_params else ''
+            db_url = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                new_query,
+                parsed.fragment
+            ))
 
         engine = create_engine(
             db_url,

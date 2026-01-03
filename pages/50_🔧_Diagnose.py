@@ -144,12 +144,31 @@ try:
     st.subheader("Verbindungstest:")
 
     try:
-        # pgbouncer Parameter entfernen
+        # URL-Parameter sauber verarbeiten
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
         clean_url = db_url
-        if '?pgbouncer=true' in clean_url:
-            clean_url = clean_url.replace('?pgbouncer=true', '')
-        elif '&pgbouncer=true' in clean_url:
-            clean_url = clean_url.replace('&pgbouncer=true', '')
+
+        # Parse URL um Query-Parameter korrekt zu behandeln
+        if '?' in clean_url:
+            parsed = urlparse(clean_url)
+            query_params = parse_qs(parsed.query)
+
+            # Entferne pgbouncer Parameter
+            query_params.pop('pgbouncer', None)
+
+            # Baue URL neu zusammen
+            new_query = urlencode(query_params, doseq=True) if query_params else ''
+            clean_url = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                new_query,
+                parsed.fragment
+            ))
+
+        log_success("DATABASE", f"Bereinigte URL: {clean_url[:50]}...")
 
         test_engine = create_engine(
             clean_url,
