@@ -295,7 +295,7 @@ def render_dashboard():
         st.warning("⚠️ **Keine API-Keys konfiguriert.** KI-Funktionen sind eingeschränkt. [Einstellungen öffnen](pages/8_⚙️_Einstellungen.py)")
 
     # =====================
-    # HYBRID STORAGE STATUS
+    # WARNLAMPEN - VERBINDUNGSSTATUS
     # =====================
     from database.db import get_database_status
 
@@ -314,49 +314,94 @@ def render_dashboard():
     except Exception:
         storage_status = {'type': 'local', 'connected': False}
 
-    # Zähle persistente Komponenten
-    persistent_components = sum([
-        db_status.get('persistent', False),
-        cache_status.get('type') == 'redis',
-        storage_status.get('type') == 'supabase'
-    ])
+    # Status-Werte ermitteln
+    db_connected = db_status.get('connected', False)
+    db_persistent = db_status.get('persistent', False)
+    cache_connected = cache_status.get('type') == 'redis'
+    storage_connected = storage_status.get('type') == 'supabase'
 
-    if persistent_components == 0:
-        # Keine Cloud-Services konfiguriert
-        with st.expander("⚠️ **Daten nicht persistent** - Klicken für Setup-Anleitung", expanded=False):
+    # Warnlampen-Anzeige (immer sichtbar)
+    status_cols = st.columns([1, 1, 1, 2])
+
+    with status_cols[0]:
+        if db_connected and db_persistent:
+            st.markdown(
+                '<div style="background: #0d6efd; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '🟢 <b>Datenbank</b><br><small>PostgreSQL</small></div>',
+                unsafe_allow_html=True
+            )
+        elif db_connected:
+            st.markdown(
+                '<div style="background: #ffc107; color: black; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '🟡 <b>Datenbank</b><br><small>Lokal (SQLite)</small></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="background: #dc3545; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '🔴 <b>Datenbank</b><br><small>Nicht verbunden!</small></div>',
+                unsafe_allow_html=True
+            )
+
+    with status_cols[1]:
+        if cache_connected:
+            st.markdown(
+                '<div style="background: #0d6efd; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '🟢 <b>Cache</b><br><small>Redis</small></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="background: #6c757d; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '⚪ <b>Cache</b><br><small>Memory</small></div>',
+                unsafe_allow_html=True
+            )
+
+    with status_cols[2]:
+        if storage_connected:
+            st.markdown(
+                '<div style="background: #0d6efd; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '🟢 <b>Storage</b><br><small>Supabase</small></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="background: #ffc107; color: black; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '🟡 <b>Storage</b><br><small>Lokal</small></div>',
+                unsafe_allow_html=True
+            )
+
+    with status_cols[3]:
+        persistent_count = sum([db_persistent, cache_connected, storage_connected])
+        if persistent_count == 3:
+            st.markdown(
+                '<div style="background: #198754; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '✅ <b>Vollständig persistent</b><br><small>Alle Daten werden gespeichert</small></div>',
+                unsafe_allow_html=True
+            )
+        elif persistent_count > 0:
+            st.markdown(
+                '<div style="background: #fd7e14; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                f'⚠️ <b>Teilweise persistent</b><br><small>{persistent_count}/3 Cloud-Services</small></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="background: #dc3545; color: white; padding: 8px 12px; border-radius: 8px; text-align: center;">'
+                '🚨 <b>Nicht persistent!</b><br><small>Daten gehen bei Neustart verloren</small></div>',
+                unsafe_allow_html=True
+            )
+
+    # Setup-Hinweis wenn nicht vollständig konfiguriert
+    if persistent_count < 3:
+        with st.expander("🔧 Cloud-Services einrichten", expanded=False):
             st.markdown("""
-            Alle Daten gehen bei App-Neustart verloren!
-
-            **Setup für persistente Daten:**
-
-            | Komponente | Service | Secrets-Variable |
-            |------------|---------|------------------|
-            | Datenbank | [Supabase](https://supabase.com) | `DATABASE_URL` |
-            | Cache | [Upstash](https://upstash.com) | `UPSTASH_REDIS_URL` |
-            | Dateien | Supabase Storage | `SUPABASE_URL`, `SUPABASE_KEY` |
+            | Komponente | Service | Secrets-Variable | Status |
+            |------------|---------|------------------|--------|
+            | Datenbank | [Supabase](https://supabase.com) | `DATABASE_URL` | """ + ("✅" if db_persistent else "❌") + """ |
+            | Cache | [Upstash](https://upstash.com) | `UPSTASH_REDIS_URL` | """ + ("✅" if cache_connected else "❌") + """ |
+            | Storage | Supabase | `SUPABASE_URL`, `SUPABASE_KEY` | """ + ("✅" if storage_connected else "❌") + """ |
             """)
-    else:
-        # Mindestens eine Komponente ist persistent
-        with st.expander(f"💾 **Hybrid Storage:** {persistent_components}/3 Cloud-Services", expanded=False):
-            cols = st.columns(3)
-
-            with cols[0]:
-                if db_status.get('persistent'):
-                    st.markdown(f"✅ **Datenbank**<br><small>{db_status['type'].upper()} @ {db_status.get('host', '?')}</small>", unsafe_allow_html=True)
-                else:
-                    st.markdown("❌ **Datenbank**<br><small>Lokal (SQLite)</small>", unsafe_allow_html=True)
-
-            with cols[1]:
-                if cache_status.get('type') == 'redis':
-                    st.markdown("✅ **Cache**<br><small>Redis (Upstash)</small>", unsafe_allow_html=True)
-                else:
-                    st.markdown("⚪ **Cache**<br><small>Memory (Fallback)</small>", unsafe_allow_html=True)
-
-            with cols[2]:
-                if storage_status.get('type') == 'supabase':
-                    st.markdown("✅ **Storage**<br><small>Supabase Storage</small>", unsafe_allow_html=True)
-                else:
-                    st.markdown("❌ **Storage**<br><small>Lokal (flüchtig)</small>", unsafe_allow_html=True)
 
     # =====================
     # HAUPT-KPIs (Zeile 1)
