@@ -2390,24 +2390,24 @@ class CloudSyncService:
                         "step": "ocr_complete",
                         "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
                     })
-            else:
-                processing_steps.append({
-                    "step": "ocr_skipped",
-                    "detail": f"⏭️ OCR übersprungen (kein PDF/Bild)"
-                })
+                else:
+                    processing_steps.append({
+                        "step": "ocr_skipped",
+                        "detail": f"⏭️ OCR übersprungen (kein PDF/Bild)"
+                    })
 
-        except ImportError:
-            logger.warning("OCR Service nicht verfügbar")
-            processing_steps.append({
-                "step": "ocr_unavailable",
-                "detail": f"⚠️ OCR Service nicht verfügbar"
-            })
-        except Exception as e:
-            logger.error(f"OCR fehlgeschlagen: {e}")
-            processing_steps.append({
-                "step": "ocr_error",
-                "detail": f"⚠️ OCR Fehler: {str(e)[:50]}"
-            })
+            except ImportError:
+                logger.warning("OCR Service nicht verfügbar")
+                processing_steps.append({
+                    "step": "ocr_unavailable",
+                    "detail": f"⚠️ OCR Service nicht verfügbar"
+                })
+            except Exception as e:
+                logger.error(f"OCR fehlgeschlagen: {e}")
+                processing_steps.append({
+                    "step": "ocr_error",
+                    "detail": f"⚠️ OCR Fehler: {str(e)[:50]}"
+                })
 
         # 2. Intelligente Analyse mit Document Intelligence Service
         if ocr_text and len(ocr_text) > 50:
