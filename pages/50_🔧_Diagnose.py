@@ -248,6 +248,87 @@ except Exception as e:
     st.error(f"❌ Allgemeiner Fehler: {e}")
     st.code(traceback.format_exc())
 
+# Speichernutzung anzeigen (PostgreSQL)
+st.subheader("📊 Speichernutzung")
+
+try:
+    from database.db import get_database_url
+    from sqlalchemy import create_engine, text
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+    db_url = get_database_url()
+
+    if not db_url.startswith('sqlite'):
+        # URL bereinigen
+        clean_url = db_url
+        if '?' in clean_url:
+            parsed = urlparse(clean_url)
+            query_params = parse_qs(parsed.query)
+            query_params.pop('pgbouncer', None)
+            new_query = urlencode(query_params, doseq=True) if query_params else ''
+            clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+
+        test_engine = create_engine(clean_url, pool_pre_ping=True, pool_size=1)
+
+        with test_engine.connect() as conn:
+            # Datenbankgröße abfragen
+            size_result = conn.execute(text("""
+                SELECT pg_size_pretty(pg_database_size(current_database())) as db_size,
+                       pg_database_size(current_database()) as db_size_bytes
+            """))
+            row = size_result.fetchone()
+            db_size = row[0] if row else "Unbekannt"
+            db_size_bytes = row[1] if row else 0
+
+            # Tabellen-Größen
+            tables_result = conn.execute(text("""
+                SELECT relname as table_name,
+                       pg_size_pretty(pg_total_relation_size(relid)) as size,
+                       pg_total_relation_size(relid) as size_bytes
+                FROM pg_catalog.pg_statio_user_tables
+                ORDER BY pg_total_relation_size(relid) DESC
+                LIMIT 10
+            """))
+            tables = tables_result.fetchall()
+
+            # Dokumenten-Statistik
+            doc_result = conn.execute(text("""
+                SELECT COUNT(*) as count,
+                       COALESCE(SUM(file_size), 0) as total_size
+                FROM documents
+            """))
+            doc_row = doc_result.fetchone()
+            doc_count = doc_row[0] if doc_row else 0
+            doc_total_size = doc_row[1] if doc_row else 0
+
+            # Anzeige
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("🗄️ Datenbank-Größe", db_size)
+            with col2:
+                st.metric("📄 Dokumente", f"{doc_count}")
+            with col3:
+                size_mb = doc_total_size / (1024 * 1024) if doc_total_size else 0
+                st.metric("📦 Dateien-Größe", f"{size_mb:.1f} MB")
+
+            # Supabase Free Tier Info
+            st.info("ℹ️ **Supabase Free Tier:** 500 MB Datenbank, 1 GB Storage")
+
+            # Fortschrittsbalken für DB-Nutzung (500 MB Limit)
+            db_limit_bytes = 500 * 1024 * 1024  # 500 MB
+            usage_percent = min((db_size_bytes / db_limit_bytes) * 100, 100)
+            st.progress(usage_percent / 100, text=f"Datenbank: {db_size} von 500 MB ({usage_percent:.1f}%)")
+
+            if tables:
+                with st.expander("📊 Top 10 Tabellen nach Größe"):
+                    for table in tables:
+                        st.text(f"• {table[0]}: {table[1]}")
+    else:
+        st.warning("SQLite - Lokale Datenbank ohne Cloud-Limits")
+
+except Exception as e:
+    st.warning(f"Speichernutzung konnte nicht abgefragt werden: {e}")
+
 st.divider()
 
 # ==========================================
@@ -303,6 +384,49 @@ try:
     if status.get('type') == 'supabase':
         st.success("✅ Supabase Storage ist verbunden!")
 
+        # Storage-Statistiken
+        try:
+            bucket_name = status.get('bucket', 'documents')
+            from supabase import create_client
+            supa_url = st.secrets.get("SUPABASE_URL")
+            supa_key = st.secrets.get("SUPABASE_KEY")
+
+            if supa_url and supa_key:
+                client = create_client(supa_url, supa_key)
+                # Bucket-Dateien auflisten
+                stats = {'files': 0, 'size': 0}
+
+                def count_files(prefix=""):
+                    try:
+                        items = client.storage.from_(bucket_name).list(prefix)
+                        for item in items:
+                            if item.get('id') is None:  # Ordner
+                                count_files(f"{prefix}{item['name']}/")
+                            else:  # Datei
+                                stats['files'] += 1
+                                stats['size'] += item.get('metadata', {}).get('size', 0)
+                    except:
+                        pass
+
+                count_files()
+                total_files = stats['files']
+                total_size = stats['size']
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("📁 Dateien im Storage", total_files)
+                with col2:
+                    size_mb = total_size / (1024 * 1024)
+                    st.metric("💾 Storage-Größe", f"{size_mb:.1f} MB")
+
+                # Fortschrittsbalken (1 GB Limit)
+                storage_limit = 1024 * 1024 * 1024  # 1 GB
+                storage_percent = min((total_size / storage_limit) * 100, 100)
+                st.progress(storage_percent / 100, text=f"Storage: {size_mb:.1f} MB von 1 GB ({storage_percent:.1f}%)")
+
+        except Exception as e:
+            st.warning(f"Storage-Statistiken nicht verfügbar: {e}")
+
         # Bucket prüfen
         if st.button("🧪 Storage testen"):
             try:
@@ -330,6 +454,109 @@ try:
 except Exception as e:
     st.error(f"❌ Storage-Fehler: {e}")
     import traceback
+    st.code(traceback.format_exc())
+
+st.divider()
+
+# ==========================================
+# 4.5 DOKUMENTEN-DIAGNOSE
+# ==========================================
+st.header("📄 Dokumenten-Diagnose")
+
+try:
+    from database.db import get_db
+    from database.models import Document
+    import os
+
+    with get_db() as session:
+        docs = session.query(Document).order_by(Document.created_at.desc()).limit(50).all()
+
+        if docs:
+            st.markdown(f"**Letzte {len(docs)} Dokumente:**")
+
+            # Statistik
+            cloud_docs = 0
+            local_docs = 0
+            missing_docs = 0
+            accessible_docs = 0
+
+            doc_issues = []
+
+            for doc in docs:
+                file_path = doc.file_path or ""
+
+                if file_path.startswith("cloud://"):
+                    cloud_docs += 1
+                    # Cloud-Dokument - prüfen ob abrufbar
+                    try:
+                        storage = get_storage_service()
+                        success, _ = storage.download_file(file_path)
+                        if success:
+                            accessible_docs += 1
+                        else:
+                            missing_docs += 1
+                            doc_issues.append((doc.id, doc.filename, file_path, "Cloud-Datei nicht gefunden"))
+                    except Exception as e:
+                        missing_docs += 1
+                        doc_issues.append((doc.id, doc.filename, file_path, str(e)))
+                else:
+                    local_docs += 1
+                    # Lokales Dokument - prüfen ob Datei existiert
+                    if file_path and os.path.exists(file_path):
+                        accessible_docs += 1
+                    else:
+                        missing_docs += 1
+                        doc_issues.append((doc.id, doc.filename, file_path, "Lokale Datei nicht gefunden"))
+
+            # Statistik anzeigen
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("☁️ Cloud", cloud_docs)
+            with col2:
+                st.metric("💾 Lokal", local_docs)
+            with col3:
+                st.metric("✅ Verfügbar", accessible_docs)
+            with col4:
+                st.metric("❌ Fehlen", missing_docs, delta=f"-{missing_docs}" if missing_docs > 0 else None, delta_color="inverse")
+
+            if local_docs > 0 and missing_docs > 0:
+                st.warning(f"""
+                ⚠️ **{local_docs} Dokumente wurden lokal gespeichert!**
+
+                Diese Dateien sind nicht in Supabase Storage und gehen bei App-Neustart verloren.
+
+                **Ursache:** Die Dokumente wurden importiert, bevor der Storage-Bucket korrekt konfiguriert war.
+
+                **Lösung:** Dokumente erneut importieren (nach Bucket-Konfiguration).
+                """)
+
+            if doc_issues:
+                with st.expander(f"❌ {len(doc_issues)} Dokumente mit Problemen", expanded=True):
+                    for doc_id, filename, path, issue in doc_issues[:10]:
+                        st.markdown(f"**ID {doc_id}:** `{filename}`")
+                        st.caption(f"Pfad: `{path[:80]}...`" if len(path) > 80 else f"Pfad: `{path}`")
+                        st.caption(f"Problem: {issue}")
+                        st.divider()
+
+                    if len(doc_issues) > 10:
+                        st.caption(f"... und {len(doc_issues) - 10} weitere")
+
+                # Bereinigung anbieten
+                if st.button("🗑️ Fehlende Dokumente aus Datenbank entfernen"):
+                    removed = 0
+                    for doc_id, _, _, _ in doc_issues:
+                        doc_to_delete = session.query(Document).filter(Document.id == doc_id).first()
+                        if doc_to_delete:
+                            session.delete(doc_to_delete)
+                            removed += 1
+                    session.commit()
+                    st.success(f"✅ {removed} Dokument-Einträge entfernt. Bitte erneut importieren!")
+                    st.rerun()
+        else:
+            st.info("Keine Dokumente in der Datenbank")
+
+except Exception as e:
+    st.error(f"❌ Dokumenten-Diagnose Fehler: {e}")
     st.code(traceback.format_exc())
 
 st.divider()
