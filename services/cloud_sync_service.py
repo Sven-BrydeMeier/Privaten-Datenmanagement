@@ -1611,6 +1611,13 @@ class CloudSyncService:
                             result["files_skipped"] += 1
                         else:
                             result["files_error"] += 1
+                            # Füge letzten Fehler-Schritt zu Fehlerliste hinzu
+                            error_detail = "Unbekannter Fehler"
+                            for step in reversed(processing_steps):
+                                if step.get("step") == "error" or "❌" in step.get("detail", ""):
+                                    error_detail = step.get("detail", error_detail)
+                                    break
+                            result["errors"].append(f"{file_info.get('name')}: {error_detail}")
 
                     except Exception as e:
                         logger.error(f"Fehler beim Import von {file_info.get('name')}: {e}")

@@ -2013,6 +2013,20 @@ File Extensions: {conn.file_extensions}""")
                             if skipped > 0:
                                 st.caption(f"ℹ️ {skipped} Dateien übersprungen (bereits vorhanden oder nicht unterstützt)")
 
+                            # Fehler anzeigen wenn vorhanden
+                            errors_list = final_result.get("errors", [])
+                            files_error = final_result.get("files_error", 0)
+                            if files_error > 0 or errors_list:
+                                st.error(f"❌ **{files_error} Dateien konnten nicht importiert werden**")
+                                with st.expander(f"🔍 Fehlerdetails ({len(errors_list)} Fehler)", expanded=True):
+                                    if errors_list:
+                                        for i, err in enumerate(errors_list[:20]):  # Nur erste 20 anzeigen
+                                            st.text(f"• {err}")
+                                        if len(errors_list) > 20:
+                                            st.caption(f"... und {len(errors_list) - 20} weitere Fehler")
+                                    else:
+                                        st.text("Keine detaillierten Fehlermeldungen verfügbar")
+
                             if final_result.get("error") and not final_result.get("success"):
                                 error_msg = final_result.get("error", "Unbekannter Fehler")
                                 if "token" in error_msg.lower() or "auth" in error_msg.lower():
