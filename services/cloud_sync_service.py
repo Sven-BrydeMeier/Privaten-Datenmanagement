@@ -1607,10 +1607,23 @@ class CloudSyncService:
                         if sync_status == "synced":
                             result["files_synced"] += 1
                             result["synced_files"].append(file_info.get("name"))
+                            # Commit nach jedem erfolgreichen Import!
+                            try:
+                                session.commit()
+                            except Exception as commit_err:
+                                logger.error(f"Commit Fehler für {file_info.get('name')}: {commit_err}")
+                                session.rollback()
+                                result["files_error"] += 1
+                                result["errors"].append(f"{file_info.get('name')}: Commit fehlgeschlagen")
                         elif sync_status == "skipped":
                             result["files_skipped"] += 1
                         else:
                             result["files_error"] += 1
+                            # Rollback bei Fehler, damit nächste Datei funktioniert
+                            try:
+                                session.rollback()
+                            except:
+                                pass
                             # Füge letzten Fehler-Schritt zu Fehlerliste hinzu
                             error_detail = "Unbekannter Fehler"
                             for step in reversed(processing_steps):
@@ -1623,6 +1636,11 @@ class CloudSyncService:
                         logger.error(f"Fehler beim Import von {file_info.get('name')}: {e}")
                         result["files_error"] += 1
                         result["errors"].append(f"{file_info.get('name')}: {str(e)}")
+                        # Rollback bei Exception
+                        try:
+                            session.rollback()
+                        except:
+                            pass
 
                 # Phase 3: Abschluss
                 result["phase"] = "completed"
