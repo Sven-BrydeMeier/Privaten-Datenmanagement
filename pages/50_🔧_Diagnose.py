@@ -105,6 +105,23 @@ try:
     masked_used = re.sub(r':([^:@]+)@', ':****@', str(db_url))
     st.code(masked_used[:100] + "..." if len(masked_used) > 100 else masked_used)
 
+    # WARNUNG wenn SQLite verwendet wird
+    if db_url.startswith('sqlite'):
+        st.error("""
+        🚨 **PROBLEM: SQLite wird verwendet statt PostgreSQL!**
+
+        Das bedeutet: Die `DATABASE_URL` aus den Secrets wird NICHT gelesen.
+
+        **Mögliche Ursachen:**
+        1. Secrets sind nicht in Streamlit Cloud konfiguriert
+        2. Der Key heißt nicht exakt `DATABASE_URL`
+        3. Es gibt Syntaxfehler in der secrets.toml
+
+        **Prüfe in Streamlit Cloud:**
+        - Settings → Secrets
+        - Stelle sicher dass `DATABASE_URL = "postgresql://..."` korrekt ist
+        """)
+
     # Direkte Verbindung testen
     st.subheader("Verbindungstest:")
 
@@ -123,10 +140,18 @@ try:
         )
 
         with test_engine.connect() as conn:
-            result = conn.execute(text("SELECT version()"))
-            version = result.scalar()
-            st.success(f"✅ **Verbindung erfolgreich!**")
-            st.markdown(f"**PostgreSQL Version:** `{version}`")
+            # Query die für SQLite und PostgreSQL funktioniert
+            if db_url.startswith('sqlite'):
+                result = conn.execute(text("SELECT sqlite_version()"))
+                version = f"SQLite {result.scalar()}"
+                st.warning(f"⚠️ **Verbunden mit lokaler SQLite-Datenbank**")
+                st.markdown(f"**Version:** `{version}`")
+                st.info("💡 Daten gehen bei App-Neustart verloren! Konfiguriere DATABASE_URL für persistente Daten.")
+            else:
+                result = conn.execute(text("SELECT version()"))
+                version = result.scalar()
+                st.success(f"✅ **PostgreSQL verbunden!**")
+                st.markdown(f"**Version:** `{version}`")
 
             # Tabellen auflisten
             inspector = inspect(test_engine)
