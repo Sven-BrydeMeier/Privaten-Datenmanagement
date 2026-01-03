@@ -119,8 +119,7 @@ try:
         test_engine = create_engine(
             clean_url,
             pool_pre_ping=True,
-            pool_size=1,
-            connect_args={"connect_timeout": 10}
+            pool_size=1
         )
 
         with test_engine.connect() as conn:
