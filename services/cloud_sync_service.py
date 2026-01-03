@@ -2214,29 +2214,61 @@ class CloudSyncService:
                                   process_documents: bool) -> Tuple[Optional[Document], List[Dict]]:
         """
         Importiert eine Datei mit Status-Updates für die Fortschrittsanzeige.
+        Verwendet StorageService für Cloud-Speicher wenn verfügbar.
 
         Returns:
             Tuple von (Document, Liste von Status-Updates)
         """
         processing_steps = []
 
-        # Speicherpfad erstellen
-        upload_dir = Path("data/uploads") / str(self.user_id) / "cloud_sync"
-        upload_dir.mkdir(parents=True, exist_ok=True)
+        # Verwende Storage Service für hybride Speicherung
+        try:
+            from services.storage_service import get_storage_service
+            storage = get_storage_service()
+        except ImportError:
+            storage = None
 
         # Eindeutigen Dateinamen erstellen
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_filename = f"{timestamp}_{filename}"
-        file_path = upload_dir / safe_filename
 
-        # Datei speichern
-        with open(file_path, "wb") as f:
-            f.write(content)
+        # Datei speichern (Cloud oder Lokal)
+        if storage:
+            success, file_path = storage.upload_file(
+                file_data=content,
+                filename=safe_filename,
+                user_id=self.user_id,
+                subfolder="cloud_sync",
+                content_type=self._get_mime_type(filename)
+            )
 
-        processing_steps.append({
-            "step": "saved",
-            "detail": f"💾 Datei gespeichert"
-        })
+            if success:
+                if file_path.startswith("cloud://"):
+                    processing_steps.append({
+                        "step": "saved",
+                        "detail": f"☁️ Datei in Cloud gespeichert"
+                    })
+                else:
+                    processing_steps.append({
+                        "step": "saved",
+                        "detail": f"💾 Datei lokal gespeichert"
+                    })
+            else:
+                logger.error(f"Speichern fehlgeschlagen: {file_path}")
+                return None, [{"step": "error", "detail": f"❌ Speichern fehlgeschlagen"}]
+        else:
+            # Fallback: Direkt lokal speichern
+            upload_dir = Path("data/uploads") / str(self.user_id) / "cloud_sync"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = str(upload_dir / safe_filename)
+
+            with open(file_path, "wb") as f:
+                f.write(content)
+
+            processing_steps.append({
+                "step": "saved",
+                "detail": f"💾 Datei lokal gespeichert"
+            })
 
         # Dokument in DB erstellen
         doc = Document(
@@ -2276,6 +2308,7 @@ class CloudSyncService:
                                                    filename: str) -> List[Dict]:
         """
         Führt intelligente Dokumentenverarbeitung mit Status-Updates durch.
+        Verwendet Cache-Service für OCR-Ergebnisse.
 
         Returns:
             Liste von Status-Updates für Fortschrittsanzeige
@@ -2283,49 +2316,80 @@ class CloudSyncService:
         processing_steps = []
         ocr_text = ""
 
-        # 1. OCR durchführen
+        # Cache Service für OCR-Ergebnisse
+        try:
+            from services.cache_service import get_cache_service
+            cache = get_cache_service()
+            content_hash = cache._hash_content(content)
+        except ImportError:
+            cache = None
+            content_hash = None
+
+        # 1. OCR durchführen (mit Cache-Prüfung)
         processing_steps.append({
             "step": "ocr_starting",
             "detail": f"🔍 Starte Texterkennung (OCR)..."
         })
 
-        try:
-            from services.ocr import OCRService
-            ocr_service = OCRService()
-
-            mime_type = doc.mime_type or self._get_mime_type(filename)
-
-            if mime_type == "application/pdf":
+        # Prüfe Cache für OCR-Ergebnis
+        cached_ocr = None
+        if cache and content_hash:
+            cached_ocr = cache.get_ocr_result(content_hash)
+            if cached_ocr:
                 processing_steps.append({
-                    "step": "ocr_pdf",
-                    "detail": f"📄 Verarbeite PDF mit OCR..."
+                    "step": "ocr_cached",
+                    "detail": f"⚡ OCR aus Cache geladen"
                 })
-                ocr_result = ocr_service.process_pdf(doc.file_path)
-                ocr_text = ocr_result.get("text", "")
+                ocr_text = cached_ocr
                 doc.ocr_text = ocr_text
-                doc.ocr_confidence = ocr_result.get("confidence", 0)
+                doc.ocr_confidence = 0.95  # Hohe Konfidenz für Cache
 
-                text_length = len(ocr_text)
-                processing_steps.append({
-                    "step": "ocr_complete",
-                    "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
-                })
+        if not cached_ocr:
+            try:
+                from services.ocr import OCRService
+                ocr_service = OCRService()
 
-            elif mime_type.startswith("image/"):
-                processing_steps.append({
-                    "step": "ocr_image",
-                    "detail": f"🖼️ Verarbeite Bild mit OCR..."
-                })
-                ocr_result = ocr_service.process_image(doc.file_path)
-                ocr_text = ocr_result.get("text", "")
-                doc.ocr_text = ocr_text
-                doc.ocr_confidence = ocr_result.get("confidence", 0)
+                mime_type = doc.mime_type or self._get_mime_type(filename)
 
-                text_length = len(ocr_text)
-                processing_steps.append({
-                    "step": "ocr_complete",
-                    "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
-                })
+                if mime_type == "application/pdf":
+                    processing_steps.append({
+                        "step": "ocr_pdf",
+                        "detail": f"📄 Verarbeite PDF mit OCR..."
+                    })
+                    ocr_result = ocr_service.process_pdf(doc.file_path)
+                    ocr_text = ocr_result.get("text", "")
+                    doc.ocr_text = ocr_text
+                    doc.ocr_confidence = ocr_result.get("confidence", 0)
+
+                    # Cache OCR-Ergebnis
+                    if cache and content_hash and ocr_text:
+                        cache.set_ocr_result(content_hash, ocr_text)
+
+                    text_length = len(ocr_text)
+                    processing_steps.append({
+                        "step": "ocr_complete",
+                        "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
+                    })
+
+                elif mime_type.startswith("image/"):
+                    processing_steps.append({
+                        "step": "ocr_image",
+                        "detail": f"🖼️ Verarbeite Bild mit OCR..."
+                    })
+                    ocr_result = ocr_service.process_image(doc.file_path)
+                    ocr_text = ocr_result.get("text", "")
+                    doc.ocr_text = ocr_text
+                    doc.ocr_confidence = ocr_result.get("confidence", 0)
+
+                    # Cache OCR-Ergebnis
+                    if cache and content_hash and ocr_text:
+                        cache.set_ocr_result(content_hash, ocr_text)
+
+                    text_length = len(ocr_text)
+                    processing_steps.append({
+                        "step": "ocr_complete",
+                        "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
+                    })
             else:
                 processing_steps.append({
                     "step": "ocr_skipped",

@@ -633,3 +633,70 @@ def create_share_text_for_expense_split(group_name: str, members: list, expenses
                 lines.append(f"  ❌ {member} schuldet {format_currency(abs(diff))}")
 
     return "\n".join(lines)
+
+
+def get_document_file_content(file_path: str, user_id: int = None) -> tuple[bool, bytes | str]:
+    """
+    Lädt Dateiinhalt aus Cloud oder lokalem Speicher.
+
+    Unterstützt:
+    - Cloud-Pfade (cloud://bucket/path)
+    - Lokale Pfade
+
+    Args:
+        file_path: Dateipfad (cloud:// oder lokal)
+        user_id: Benutzer-ID für Zugriffsrechte
+
+    Returns:
+        Tuple (success: bool, data_or_error: bytes|str)
+    """
+    from pathlib import Path
+
+    if not file_path:
+        return False, "Kein Dateipfad angegeben"
+
+    # Cloud-Speicher
+    if file_path.startswith("cloud://"):
+        try:
+            from services.storage_service import get_storage_service
+            storage = get_storage_service()
+            return storage.download_file(file_path, user_id)
+        except ImportError:
+            return False, "Storage-Service nicht verfügbar"
+        except Exception as e:
+            return False, str(e)
+
+    # Lokaler Speicher
+    try:
+        local_path = Path(file_path)
+        if not local_path.exists():
+            return False, "Datei nicht gefunden"
+
+        with open(local_path, 'rb') as f:
+            return True, f.read()
+    except Exception as e:
+        return False, str(e)
+
+
+def document_file_exists(file_path: str) -> bool:
+    """
+    Prüft ob eine Dokument-Datei existiert (Cloud oder lokal).
+
+    Args:
+        file_path: Dateipfad (cloud:// oder lokal)
+
+    Returns:
+        True wenn Datei existiert
+    """
+    from pathlib import Path
+
+    if not file_path:
+        return False
+
+    # Cloud-Speicher - wir gehen davon aus dass cloud:// Pfade existieren
+    # (die Prüfung würde einen API-Call erfordern)
+    if file_path.startswith("cloud://"):
+        return True
+
+    # Lokaler Speicher
+    return Path(file_path).exists()

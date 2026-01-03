@@ -50,14 +50,17 @@ def stamp_invoice_pdf(document, payment_date: datetime, bank_account_name: str) 
             # Kein PDF - Stempel nicht möglich
             return True  # Trotzdem Erfolg zurückgeben
 
+        from utils.helpers import get_document_file_content
         encryption = get_encryption_service()
 
         # PDF entschlüsseln
-        with open(document.file_path, 'rb') as f:
-            encrypted_data = f.read()
+        success, result = get_document_file_content(document.file_path, document.user_id)
+        if not success:
+            logger.error(f"Datei nicht gefunden: {result}")
+            return False
 
         decrypted_pdf = encryption.decrypt_file(
-            encrypted_data,
+            result,
             document.encryption_iv,
             document.filename
         )
@@ -72,9 +75,29 @@ def stamp_invoice_pdf(document, payment_date: datetime, bank_account_name: str) 
         # Neu verschlüsseln (mit neuem IV)
         encrypted_stamped, new_iv = encryption.encrypt_file(stamped_pdf, document.filename)
 
-        # Datei speichern
-        with open(document.file_path, 'wb') as f:
-            f.write(encrypted_stamped)
+        # Datei speichern (Cloud oder lokal)
+        if document.file_path.startswith("cloud://"):
+            try:
+                from services.storage_service import get_storage_service
+                storage = get_storage_service()
+                # Re-upload stamped file
+                parts = document.file_path.replace("cloud://", "").split("/", 1)
+                filename = parts[1].split("/")[-1] if len(parts) > 1 else document.filename
+                success, new_path = storage.upload_file(
+                    file_data=encrypted_stamped,
+                    filename=filename,
+                    user_id=document.user_id,
+                    subfolder="cloud_sync"
+                )
+                if not success:
+                    logger.error(f"Cloud-Upload fehlgeschlagen: {new_path}")
+                    return False
+            except Exception as e:
+                logger.error(f"Cloud-Speicher Fehler: {e}")
+                return False
+        else:
+            with open(document.file_path, 'wb') as f:
+                f.write(encrypted_stamped)
 
         # IV in Datenbank aktualisieren
         document.encryption_iv = new_iv

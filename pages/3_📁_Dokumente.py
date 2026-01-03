@@ -460,31 +460,35 @@ if 'view_document_id' in st.session_state:
 
         with col_doc:
             st.markdown("### 📄 Dokument-Vorschau")
-            if doc_data['file_path'] and Path(doc_data['file_path']).exists():
+            from utils.helpers import get_document_file_content, document_file_exists
+            if doc_data['file_path'] and document_file_exists(doc_data['file_path']):
                 encryption = get_encryption_service()
                 try:
-                    with open(doc_data['file_path'], 'rb') as f:
-                        encrypted_data = f.read()
-                    decrypted = encryption.decrypt_file(encrypted_data, doc_data['encryption_iv'], doc_data['filename'])
+                    success, result = get_document_file_content(doc_data['file_path'], doc_data.get('user_id'))
+                    if not success:
+                        st.error(f"Fehler beim Laden: {result}")
+                    else:
+                        encrypted_data = result
+                        decrypted = encryption.decrypt_file(encrypted_data, doc_data['encryption_iv'], doc_data['filename'])
 
-                    # Bild-Vorschau
-                    if doc_data['mime_type'] and doc_data['mime_type'].startswith('image/'):
-                        from PIL import Image
-                        img = Image.open(io.BytesIO(decrypted))
-                        st.image(img, width="stretch")
-                    elif doc_data['mime_type'] == 'application/pdf':
-                        st.info("📄 PDF-Dokument - Vorschau unten")
-                        # PDF Info
-                        st.caption(f"Größe: {len(decrypted) / 1024:.1f} KB")
+                        # Bild-Vorschau
+                        if doc_data['mime_type'] and doc_data['mime_type'].startswith('image/'):
+                            from PIL import Image
+                            img = Image.open(io.BytesIO(decrypted))
+                            st.image(img, width="stretch")
+                        elif doc_data['mime_type'] == 'application/pdf':
+                            st.info("📄 PDF-Dokument - Vorschau unten")
+                            # PDF Info
+                            st.caption(f"Größe: {len(decrypted) / 1024:.1f} KB")
 
-                    # Download
-                    st.download_button(
-                        "⬇️ Herunterladen",
-                        data=decrypted,
-                        file_name=doc_data['filename'],
-                        mime=doc_data['mime_type'],
-                        key="download_preview"
-                    )
+                        # Download
+                        st.download_button(
+                            "⬇️ Herunterladen",
+                            data=decrypted,
+                            file_name=doc_data['filename'],
+                            mime=doc_data['mime_type'],
+                            key="download_preview"
+                        )
                 except Exception as e:
                     st.error(f"Fehler beim Laden: {e}")
             else:

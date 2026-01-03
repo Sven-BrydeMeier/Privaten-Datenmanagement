@@ -172,14 +172,14 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
         # Vorschau für bestehendes Dokument laden
         if existing_doc['file_path']:
             try:
+                from utils.helpers import get_document_file_content
                 encryption = get_encryption_service()
-                with open(existing_doc['file_path'], 'rb') as f:
-                    encrypted_data = f.read()
+                success, result = get_document_file_content(existing_doc['file_path'], existing_doc.get('user_id'))
 
                 with get_db() as session:
                     doc = session.get(Document, existing_doc['id'])
-                    if doc and doc.encryption_iv:
-                        decrypted_data = encryption.decrypt_file(encrypted_data, doc.encryption_iv, doc.filename)
+                    if doc and doc.encryption_iv and success:
+                        decrypted_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
 
                         if existing_doc['filename'].lower().endswith('.pdf'):
                             try:
@@ -2063,32 +2063,35 @@ with tab_process:
                 with col3:
                     if st.button("Verarbeiten", key=f"process_{doc.id}"):
                         # Datei entschlüsseln
+                        from utils.helpers import get_document_file_content
                         encryption = get_encryption_service()
-                        with open(doc.file_path, 'rb') as f:
-                            encrypted_data = f.read()
-                        file_data = encryption.decrypt_file(encrypted_data, doc.encryption_iv, doc.filename)
+                        success, result = get_document_file_content(doc.file_path, user_id)
+                        if not success:
+                            st.error(f"Datei nicht gefunden: {result}")
+                        else:
+                            file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
 
-                        with st.spinner("Verarbeite..."):
-                            try:
-                                process_document(doc.id, file_data, user_id)
-                                st.success("Erfolgreich!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Fehler: {e}")
+                            with st.spinner("Verarbeite..."):
+                                try:
+                                    process_document(doc.id, file_data, user_id)
+                                    st.success("Erfolgreich!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Fehler: {e}")
 
             if st.button("Alle verarbeiten", type="primary"):
+                from utils.helpers import get_document_file_content
                 progress = st.progress(0)
                 for i, doc in enumerate(pending_docs):
                     progress.progress((i + 1) / len(pending_docs))
                     encryption = get_encryption_service()
-                    with open(doc.file_path, 'rb') as f:
-                        encrypted_data = f.read()
-                    file_data = encryption.decrypt_file(encrypted_data, doc.encryption_iv, doc.filename)
-
-                    try:
-                        process_document(doc.id, file_data, user_id)
-                    except:
-                        pass
+                    success, result = get_document_file_content(doc.file_path, user_id)
+                    if success:
+                        file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                        try:
+                            process_document(doc.id, file_data, user_id)
+                        except:
+                            pass
                 st.success("Verarbeitung abgeschlossen!")
                 st.rerun()
         else:

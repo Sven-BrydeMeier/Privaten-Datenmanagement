@@ -192,15 +192,16 @@ else:
                     from services.encryption import get_encryption_service
                     encryption = get_encryption_service()
 
+                    from utils.helpers import get_document_file_content
                     with get_db() as session:
                         for doc_id in cart_items:
                             doc = session.get(Document, doc_id)
                             if doc and doc.file_path:
                                 try:
-                                    with open(doc.file_path, 'rb') as f:
-                                        encrypted = f.read()
-                                    decrypted = encryption.decrypt_file(encrypted, doc.encryption_iv, doc.filename)
-                                    attachment_data.append((doc.filename, decrypted))
+                                    success, result = get_document_file_content(doc.file_path, doc.user_id)
+                                    if success:
+                                        decrypted = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                                        attachment_data.append((doc.filename, decrypted))
                                 except:
                                     pass
 

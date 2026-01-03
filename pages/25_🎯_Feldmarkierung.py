@@ -47,16 +47,18 @@ FIELD_TYPE_OPTIONS = {
 def load_document_image(document) -> Image.Image:
     """Lädt ein Dokument als Bild für die Annotation"""
     try:
-        if not document.file_path or not Path(document.file_path).exists():
+        from utils.helpers import get_document_file_content, document_file_exists
+        if not document.file_path or not document_file_exists(document.file_path):
             return None
 
         encryption = get_encryption_service()
 
-        with open(document.file_path, 'rb') as f:
-            encrypted_data = f.read()
+        success, result = get_document_file_content(document.file_path, document.user_id)
+        if not success:
+            return None
 
         decrypted_data = encryption.decrypt_file(
-            encrypted_data,
+            result,
             document.encryption_iv,
             document.filename
         )
