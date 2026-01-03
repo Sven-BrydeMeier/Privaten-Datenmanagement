@@ -4,11 +4,25 @@ Zeigt detaillierte Verbindungsinformationen und Fehler
 """
 import streamlit as st
 import traceback
+import sys
 
 st.set_page_config(page_title="Diagnose", page_icon="🔧", layout="wide")
 st.title("🔧 Cloud-Services Diagnose")
 
 st.markdown("Diese Seite hilft bei der Fehlersuche für Datenbankverbindungen.")
+
+# Fehlerlog sammeln
+error_log = []
+
+def log_error(component: str, error: str, details: str = ""):
+    """Fügt Fehler zum Log hinzu"""
+    error_log.append(f"[{component}] {error}")
+    if details:
+        error_log.append(f"  Details: {details}")
+
+def log_success(component: str, message: str):
+    """Fügt Erfolg zum Log hinzu"""
+    error_log.append(f"[{component}] ✓ {message}")
 
 # Refresh Button
 if st.button("🔄 Neu laden"):
@@ -33,12 +47,16 @@ try:
         masked = re.sub(r':([^:@]+)@', ':****@', str(db_url))
         secrets_status["DATABASE_URL"] = f"✅ Vorhanden: `{masked}`"
         secrets_found["DATABASE_URL"] = db_url
+        log_success("SECRETS", f"DATABASE_URL gefunden: {masked[:50]}...")
     else:
         secrets_status["DATABASE_URL"] = "❌ Nicht konfiguriert"
+        log_error("SECRETS", "DATABASE_URL nicht gefunden!", "Variable existiert nicht in st.secrets")
 except FileNotFoundError:
     secrets_status["DATABASE_URL"] = "⚠️ secrets.toml nicht gefunden (normal bei lokalem Start)"
+    log_error("SECRETS", "secrets.toml nicht gefunden", "Lokal ist das normal")
 except Exception as e:
     secrets_status["DATABASE_URL"] = f"❌ Fehler beim Lesen: {type(e).__name__}: {e}"
+    log_error("SECRETS", f"Fehler: {type(e).__name__}", str(e))
 
 # UPSTASH_REDIS_URL
 try:
@@ -185,16 +203,24 @@ try:
         st.markdown(f"**Fehlertyp:** `{type(e).__name__}`")
         st.markdown(f"**Fehlermeldung:** `{str(e)}`")
 
+        # Fehler loggen
+        log_error("DATABASE", f"Verbindung fehlgeschlagen: {type(e).__name__}", str(e))
+        log_error("DATABASE", "Traceback", traceback.format_exc())
+
         # Hilfreiche Tipps basierend auf Fehler
         error_str = str(e).lower()
         if "password" in error_str or "authentication" in error_str:
             st.warning("💡 **Tipp:** Passwort überprüfen! Stelle sicher, dass `[YOUR-PASSWORD]` durch das echte Passwort ersetzt wurde.")
+            log_error("DATABASE", "Vermutlich falsches Passwort")
         elif "timeout" in error_str or "timed out" in error_str:
             st.warning("💡 **Tipp:** Verbindungs-Timeout. Prüfe ob die IP von Streamlit Cloud erlaubt ist (Supabase: Database → Settings → Allowed IP addresses).")
+            log_error("DATABASE", "Timeout - IP-Freigabe prüfen")
         elif "could not connect" in error_str or "connection refused" in error_str:
             st.warning("💡 **Tipp:** Server nicht erreichbar. Prüfe die URL und den Port (6543 für Pooler, 5432 für Direct).")
+            log_error("DATABASE", "Server nicht erreichbar")
         elif "ssl" in error_str:
             st.warning("💡 **Tipp:** SSL-Fehler. Versuche `?sslmode=require` am Ende der URL hinzuzufügen.")
+            log_error("DATABASE", "SSL-Fehler")
 
         with st.expander("🔍 Vollständiger Traceback"):
             st.code(traceback.format_exc())
@@ -338,3 +364,37 @@ SUPABASE_URL = "https://xxxxx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.xxxxx"
 SUPABASE_STORAGE_BUCKET = "documents"
     """, language="toml")
+
+st.divider()
+
+# ==========================================
+# 6. FEHLERLOG ZUM KOPIEREN
+# ==========================================
+st.header("6️⃣ Fehlerlog (zum Kopieren)")
+
+st.markdown("**Kopiere diesen Text und teile ihn zur Fehleranalyse:**")
+
+# Systeminformationen hinzufügen
+error_log.insert(0, "=" * 50)
+error_log.insert(1, "DIAGNOSE-LOG")
+error_log.insert(2, "=" * 50)
+error_log.insert(3, f"Python: {sys.version}")
+error_log.insert(4, f"Streamlit Secrets verfügbar: {hasattr(st, 'secrets')}")
+try:
+    error_log.insert(5, f"Anzahl Secrets: {len(st.secrets) if hasattr(st, 'secrets') else 0}")
+    error_log.insert(6, f"Secret Keys: {list(st.secrets.keys()) if hasattr(st, 'secrets') else []}")
+except:
+    error_log.insert(5, "Secrets konnten nicht gelesen werden")
+error_log.insert(7, "=" * 50)
+
+# Log anzeigen
+log_text = "\n".join(error_log)
+st.code(log_text, language="text")
+
+# Kopier-Button
+st.download_button(
+    label="📋 Log als Datei herunterladen",
+    data=log_text,
+    file_name="diagnose_log.txt",
+    mime="text/plain"
+)
