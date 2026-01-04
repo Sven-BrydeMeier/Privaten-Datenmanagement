@@ -2104,17 +2104,37 @@ with tab_process:
             if st.button("Alle verarbeiten", type="primary"):
                 from utils.helpers import get_document_file_content
                 progress = st.progress(0)
+                processed = 0
+                errors = 0
                 for i, doc in enumerate(pending_docs):
                     progress.progress((i + 1) / len(pending_docs))
-                    encryption = get_encryption_service()
-                    success, result = get_document_file_content(doc.file_path, user_id)
-                    if success:
-                        file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
-                        try:
+                    try:
+                        encryption = get_encryption_service()
+                        success, result = get_document_file_content(doc.file_path, user_id)
+                        if success:
+                            # Nur entschlüsseln wenn verschlüsselt UND IV vorhanden
+                            if doc.is_encrypted and doc.encryption_iv:
+                                try:
+                                    file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                                except Exception as decrypt_err:
+                                    # Entschlüsselung fehlgeschlagen - versuche unverschlüsselt
+                                    file_data = result
+                            else:
+                                # Nicht verschlüsselt oder kein IV
+                                file_data = result
+
                             process_document(doc.id, file_data, user_id)
-                        except:
-                            pass
-                st.success("Verarbeitung abgeschlossen!")
+                            processed += 1
+                        else:
+                            errors += 1
+                    except Exception as e:
+                        errors += 1
+                        continue
+
+                if processed > 0:
+                    st.success(f"✅ {processed} Dokumente verarbeitet!")
+                if errors > 0:
+                    st.warning(f"⚠️ {errors} Dokumente konnten nicht verarbeitet werden")
                 st.rerun()
         else:
             st.success("Keine unverarbeiteten Dokumente")
