@@ -2076,6 +2076,19 @@ with tab_process:
     user_id = get_current_user_id()
 
     with get_db() as session:
+        # Korrigiere falsch markierte Dokumente (is_encrypted=True ohne IV)
+        # Dies passiert bei Cloud-Importen vor dem Fix
+        mismarked = session.query(Document).filter(
+            Document.user_id == user_id,
+            Document.is_encrypted == True,
+            Document.encryption_iv == None
+        ).all()
+        if mismarked:
+            for doc in mismarked:
+                doc.is_encrypted = False
+            session.commit()
+            st.info(f"🔧 {len(mismarked)} Dokumente korrigiert (waren fälschlich als verschlüsselt markiert)")
+
         pending_docs = session.query(Document).filter(
             Document.user_id == user_id,
             Document.status.in_([DocumentStatus.PENDING, DocumentStatus.ERROR])
@@ -2095,14 +2108,20 @@ with tab_process:
                     st.caption(format_date(doc.created_at))
                 with col3:
                     if st.button("Verarbeiten", key=f"process_{doc.id}"):
-                        # Datei entschlüsseln
                         from utils.helpers import get_document_file_content
-                        encryption = get_encryption_service()
                         success, result = get_document_file_content(doc.file_path, user_id)
                         if not success:
                             st.error(f"Datei nicht gefunden: {result}")
                         else:
-                            file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                            # Nur entschlüsseln wenn verschlüsselt UND IV vorhanden
+                            if doc.is_encrypted and doc.encryption_iv:
+                                try:
+                                    encryption = get_encryption_service()
+                                    file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                                except Exception as decrypt_err:
+                                    file_data = result  # Fallback
+                            else:
+                                file_data = result
 
                             with st.spinner("Verarbeite..."):
                                 try:

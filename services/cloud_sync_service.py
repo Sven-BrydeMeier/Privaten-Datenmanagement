@@ -2318,6 +2318,7 @@ class CloudSyncService:
             })
 
         # Dokument in DB erstellen
+        # is_encrypted=False: Cloud-importierte Dateien werden nicht verschlüsselt
         doc = Document(
             user_id=self.user_id,
             folder_id=connection.local_folder_id,
@@ -2328,7 +2329,9 @@ class CloudSyncService:
             mime_type=self._get_mime_type(filename),
             content_hash=content_hash,
             status=DocumentStatus.PENDING if process_documents else DocumentStatus.COMPLETED,
-            category="Cloud-Import"
+            category="Cloud-Import",
+            is_encrypted=False,
+            encryption_iv=None
         )
 
         session.add(doc)
