@@ -256,9 +256,19 @@ Der Text ist auf Deutsch."""
 
         try:
             from PyPDF2 import PdfReader
+            from PyPDF2.errors import PdfReadError
 
             # Erst versuchen, eingebetteten Text zu extrahieren
-            reader = PdfReader(io.BytesIO(pdf_bytes))
+            try:
+                reader = PdfReader(io.BytesIO(pdf_bytes))
+            except (PdfReadError, Exception) as pdf_err:
+                # PDF ist beschädigt oder unvollständig - versuche Bild-OCR
+                logger.warning(f"PDF-Lesefehler: {pdf_err}, versuche Bild-OCR...")
+                results = self._ocr_pdf_images(pdf_bytes)
+                if results:
+                    return results
+                # Fallback: Leeres Ergebnis mit Fehlermeldung
+                return [("", 0.0)]
 
             # Prüfen ob PDF verschlüsselt ist
             if reader.is_encrypted:
@@ -267,7 +277,7 @@ Der Text ist auf Deutsch."""
                     reader.decrypt("")
                 except Exception:
                     # Verschlüsseltes PDF - versuche OCR auf Bilder
-                    st.info("📄 Verschlüsseltes PDF - verwende Bildverarbeitung...")
+                    logger.info("Verschlüsseltes PDF - verwende Bildverarbeitung...")
                     results = self._ocr_pdf_images(pdf_bytes)
                     return results if results else []
 
