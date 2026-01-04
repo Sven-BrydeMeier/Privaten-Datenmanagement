@@ -2213,6 +2213,20 @@ class CloudSyncService:
         - Erstellt automatisch passende Ordnerstruktur
         - Verknüpft mit Versicherungen/Verträgen
         """
+        # Duplikat-Prüfung: Existiert bereits ein Dokument mit gleichem Inhalt?
+        if content_hash:
+            existing_doc = session.query(Document).filter(
+                Document.user_id == self.user_id,
+                Document.content_hash == content_hash
+            ).first()
+
+            if existing_doc:
+                logger.info(f"Duplikat übersprungen: {filename} (Hash: {content_hash[:16]}...)")
+                # Dokument als COMPLETED markieren falls PENDING
+                if existing_doc.status == DocumentStatus.PENDING:
+                    existing_doc.status = DocumentStatus.COMPLETED
+                return existing_doc
+
         # Speicherpfad erstellen
         upload_dir = Path("data/uploads") / str(self.user_id) / "cloud_sync"
         upload_dir.mkdir(parents=True, exist_ok=True)
@@ -2267,6 +2281,24 @@ class CloudSyncService:
             Tuple von (Document, Liste von Status-Updates)
         """
         processing_steps = []
+
+        # Duplikat-Prüfung: Existiert bereits ein Dokument mit gleichem Inhalt?
+        if content_hash:
+            existing_doc = session.query(Document).filter(
+                Document.user_id == self.user_id,
+                Document.content_hash == content_hash
+            ).first()
+
+            if existing_doc:
+                logger.info(f"Duplikat übersprungen: {filename} (Hash: {content_hash[:16]}...)")
+                processing_steps.append({
+                    "step": "skipped",
+                    "detail": f"⏭️ Übersprungen - Dokument bereits vorhanden als '{existing_doc.title or existing_doc.filename}'"
+                })
+                # Dokument als COMPLETED markieren falls PENDING
+                if existing_doc.status == DocumentStatus.PENDING:
+                    existing_doc.status = DocumentStatus.COMPLETED
+                return existing_doc, processing_steps
 
         # Verwende Storage Service für hybride Speicherung
         try:

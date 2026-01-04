@@ -528,8 +528,8 @@ with tab_docs:
                                     except Exception as excel_err:
                                         st.warning(f"Excel-Vorschau nicht möglich: {excel_err}")
 
-                                # Word-Vorschau (nur Text)
-                                elif filename_lower.endswith((".docx", ".doc")):
+                                # Word-Vorschau
+                                elif filename_lower.endswith(".docx"):
                                     try:
                                         from docx import Document as DocxDocument
                                         import io
@@ -537,16 +537,43 @@ with tab_docs:
                                         docx_file = io.BytesIO(file_data)
                                         doc_content = DocxDocument(docx_file)
 
+                                        # Absätze extrahieren
                                         full_text = []
                                         for para in doc_content.paragraphs:
-                                            full_text.append(para.text)
+                                            if para.text.strip():
+                                                # Überschriften hervorheben
+                                                if para.style and para.style.name.startswith('Heading'):
+                                                    full_text.append(f"\n### {para.text}\n")
+                                                else:
+                                                    full_text.append(para.text)
+
+                                        # Tabellen extrahieren
+                                        if doc_content.tables:
+                                            full_text.append("\n---\n**Tabellen:**\n")
+                                            for table in doc_content.tables:
+                                                table_data = []
+                                                for row in table.rows:
+                                                    row_data = [cell.text.strip() for cell in row.cells]
+                                                    table_data.append(" | ".join(row_data))
+                                                full_text.append("\n".join(table_data))
+                                                full_text.append("\n")
 
                                         text_content = "\n".join(full_text)
-                                        st.text_area("Word-Inhalt", text_content, height=400, disabled=True)
+                                        st.markdown(text_content)
+                                    except ImportError:
+                                        st.warning("python-docx nicht installiert. Bitte installieren: pip install python-docx")
                                     except Exception as word_err:
                                         st.warning(f"Word-Vorschau nicht möglich: {word_err}")
                                         if doc.ocr_text:
                                             st.info("OCR-Text wird als Fallback angezeigt")
+                                            st.text_area("OCR-Text", doc.ocr_text, height=300, disabled=True)
+
+                                # Ältere .doc Dateien
+                                elif filename_lower.endswith(".doc"):
+                                    st.info("📄 Älteres Word-Format (.doc) - Bitte herunterladen und in Word öffnen")
+                                    if doc.ocr_text:
+                                        with st.expander("OCR-Text anzeigen"):
+                                            st.text_area("OCR-Text", doc.ocr_text, height=300, disabled=True)
 
                                 # Bild-Vorschau
                                 elif mime_type.startswith("image/") or filename_lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
