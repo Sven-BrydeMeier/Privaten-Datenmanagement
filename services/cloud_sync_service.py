@@ -1545,26 +1545,48 @@ class CloudSyncService:
                 result["phase"] = "scanning"
                 yield result.copy()
 
-                if connection.provider == CloudProvider.DROPBOX:
-                    # Öffentliche oder authentifizierte Dropbox
-                    if is_public_dropbox:
-                        files_to_sync = self._collect_dropbox_files_public(connection, session)
+                try:
+                    if connection.provider == CloudProvider.DROPBOX:
+                        # Öffentliche oder authentifizierte Dropbox
+                        if is_public_dropbox:
+                            files_to_sync = self._collect_dropbox_files_public(connection, session)
+                        else:
+                            files_to_sync = self._collect_dropbox_files(connection, session)
+                    elif connection.provider == CloudProvider.GOOGLE_DRIVE:
+                        # Öffentliche Ordner verwenden andere Methode
+                        if is_public_google_drive:
+                            logger.info("Starte öffentliche Google Drive Sammlung...")
+                            files_to_sync = self._collect_google_drive_files_public(connection, session)
+                            logger.info(f"Sammlung abgeschlossen: {len(files_to_sync)} Dateien")
+                        else:
+                            files_to_sync = self._collect_google_drive_files(connection, session)
                     else:
-                        files_to_sync = self._collect_dropbox_files(connection, session)
-                elif connection.provider == CloudProvider.GOOGLE_DRIVE:
-                    # Öffentliche Ordner verwenden andere Methode
-                    if is_public_google_drive:
-                        files_to_sync = self._collect_google_drive_files_public(connection, session)
-                    else:
-                        files_to_sync = self._collect_google_drive_files(connection, session)
-                else:
+                        result["phase"] = "error"
+                        result["error"] = f"Provider {connection.provider} nicht unterstützt"
+                        result["errors"].append(result["error"])
+                        yield result
+                        return
+                except Exception as collect_error:
+                    logger.error(f"Fehler beim Sammeln der Dateien: {collect_error}")
                     result["phase"] = "error"
-                    result["error"] = f"Provider {connection.provider} nicht unterstützt"
+                    result["error"] = f"Fehler beim Scannen: {str(collect_error)}"
                     result["errors"].append(result["error"])
                     yield result
                     return
 
                 result["files_total"] = len(files_to_sync)
+                logger.info(f"Dateien gefunden: {result['files_total']}")
+
+                if result["files_total"] == 0:
+                    result["phase"] = "completed"
+                    result["success"] = True
+                    result["error"] = None
+                    connection.status = SyncStatus.COMPLETED
+                    connection.last_sync_at = datetime.now()
+                    session.commit()
+                    yield result
+                    return
+
                 result["phase"] = "downloading"
                 yield result.copy()
 
