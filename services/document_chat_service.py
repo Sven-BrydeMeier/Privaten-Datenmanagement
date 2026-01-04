@@ -1,19 +1,48 @@
 """
 Document Chat Service
-KI-basierte Konversation über Dokumentinhalte
+KI-basierte Konversation über Dokumentinhalte mit Aktions-Vorschlägen
 """
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import json
+import re
 
 from database.models import get_session, Document
 from config.settings import get_settings, get_api_key
 
 
 class DocumentChatService:
-    """Service für KI-gestützte Dokumenten-Konversation"""
+    """Service für KI-gestützte Dokumenten-Konversation mit Aktions-Vorschlägen"""
 
-    # System-Prompt für den Chat-Assistenten
+    # Aktionstypen die erkannt werden können
+    ACTION_TYPES = {
+        "cancellation": {
+            "keywords": ["kündigen", "kündigung", "abo beenden", "vertrag beenden", "abbestellen"],
+            "template": "Kündigung Allgemein",
+            "label": "Kündigung vorbereiten",
+            "icon": "✉️"
+        },
+        "objection": {
+            "keywords": ["widerspruch", "widersprechen", "einspruch", "anfechten"],
+            "template": "Widerspruch",
+            "label": "Widerspruch verfassen",
+            "icon": "⚖️"
+        },
+        "complaint": {
+            "keywords": ["reklamation", "reklamieren", "beschwerde", "mangel", "defekt"],
+            "template": "Reklamation",
+            "label": "Reklamation schreiben",
+            "icon": "📝"
+        },
+        "sepa_revoke": {
+            "keywords": ["lastschrift", "rückbuchung", "sepa widerruf", "abbuchung"],
+            "template": "SEPA-Lastschrift Widerruf",
+            "label": "SEPA-Widerruf erstellen",
+            "icon": "🏦"
+        }
+    }
+
+    # System-Prompt für den Chat-Assistenten mit Aktions-Empfehlungen
     SYSTEM_PROMPT = """Du bist ein hilfreicher Assistent für Dokumentenverwaltung.
 Du analysierst Dokumente und beantwortest Fragen dazu präzise und auf Deutsch.
 
@@ -24,6 +53,16 @@ Deine Aufgaben:
 - Bei Verträgen auf Kündigungsfristen hinweisen
 - Bei Rechnungen den Zahlungsstatus erklären
 - Handlungsempfehlungen geben
+
+WICHTIG - Aktions-Vorschläge:
+Wenn es sinnvoll ist, schlage dem Benutzer konkrete Aktionen vor und frage nach, ob er diese durchführen möchte:
+- Bei Abos/Verträgen: "Möchten Sie diesen Vertrag kündigen? Ich kann ein Kündigungsschreiben vorbereiten."
+- Bei Bescheiden: "Möchten Sie Widerspruch einlegen? Ich kann das Schreiben erstellen."
+- Bei fehlerhaften Produkten: "Soll ich eine Reklamation vorbereiten?"
+- Bei unberechtigten Abbuchungen: "Möchten Sie die Lastschrift widerrufen?"
+
+Wenn du eine Aktion vorschlägst, markiere dies am Ende deiner Antwort mit:
+[AKTION:typ] wobei typ einer der folgenden ist: cancellation, objection, complaint, sepa_revoke
 
 Sei präzise und hilfreich. Wenn du etwas nicht im Dokument findest, sage das ehrlich."""
 
@@ -575,3 +614,192 @@ Frage: {message}"""
 def get_document_chat_service() -> DocumentChatService:
     """Factory-Funktion für den DocumentChatService"""
     return DocumentChatService()
+
+
+class DocumentActionService:
+    """Service für Aktionen basierend auf Dokumenten (Kündigungen, Widersprüche, etc.)"""
+
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+
+    def parse_action_from_response(self, response: str) -> Optional[Dict[str, Any]]:
+        """
+        Erkennt Aktions-Vorschläge in der KI-Antwort
+
+        Args:
+            response: Die KI-Antwort
+
+        Returns:
+            Dict mit Aktionstyp und Metadaten oder None
+        """
+        # Suche nach [AKTION:typ] Markierung
+        pattern = r'\[AKTION:(\w+)\]'
+        match = re.search(pattern, response)
+
+        if match:
+            action_type = match.group(1)
+            if action_type in DocumentChatService.ACTION_TYPES:
+                action_info = DocumentChatService.ACTION_TYPES[action_type]
+                return {
+                    "type": action_type,
+                    "template_name": action_info["template"],
+                    "label": action_info["label"],
+                    "icon": action_info["icon"]
+                }
+
+        # Fallback: Keyword-basierte Erkennung
+        response_lower = response.lower()
+        for action_type, action_info in DocumentChatService.ACTION_TYPES.items():
+            for keyword in action_info["keywords"]:
+                if keyword in response_lower and ("möchten" in response_lower or "soll ich" in response_lower):
+                    return {
+                        "type": action_type,
+                        "template_name": action_info["template"],
+                        "label": action_info["label"],
+                        "icon": action_info["icon"]
+                    }
+
+        return None
+
+    def extract_document_data_for_template(self, document_id: int) -> Dict[str, Any]:
+        """
+        Extrahiert Daten aus einem Dokument für Template-Vorausfüllung
+
+        Args:
+            document_id: ID des Dokuments
+
+        Returns:
+            Dict mit extrahierten Daten für Template-Platzhalter
+        """
+        session = get_session()
+        try:
+            doc = session.query(Document).filter_by(
+                id=document_id,
+                user_id=self.user_id
+            ).first()
+
+            if not doc:
+                return {}
+
+            # Daten aus Dokument extrahieren
+            data = {
+                "datum": datetime.now().strftime("%d.%m.%Y"),
+                "empfaenger_name": doc.sender or "",
+                "vertragsnummer": doc.contract_number or "",
+                "kundennummer": doc.customer_number or "",
+                "aktenzeichen": doc.reference_number or "",
+                "betrag": str(doc.invoice_amount) if doc.invoice_amount else "",
+                "iban": doc.iban or "",
+            }
+
+            # Vertragsart aus Kategorie ableiten
+            category_to_vertragsart = {
+                "Versicherung": "Versicherungsvertrag",
+                "Telefon & Internet": "Telekommunikationsvertrag",
+                "Abonnement": "Abonnement",
+                "Mitgliedschaft": "Mitgliedschaft",
+                "Strom & Gas": "Energieliefervertrag",
+            }
+            data["vertragsart"] = category_to_vertragsart.get(doc.category, "Vertrag")
+
+            # Bescheid-Datum aus Dokumentdatum
+            if doc.document_date:
+                data["bescheid_datum"] = doc.document_date.strftime("%d.%m.%Y")
+                data["abbuchungsdatum"] = doc.document_date.strftime("%d.%m.%Y")
+                data["kaufdatum"] = doc.document_date.strftime("%d.%m.%Y")
+
+            return data
+
+        finally:
+            session.close()
+
+    def generate_letter(
+        self,
+        document_id: int,
+        action_type: str,
+        user_data: Dict[str, str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generiert ein Schreiben basierend auf Dokument und Aktionstyp
+
+        Args:
+            document_id: ID des Quelldokuments
+            action_type: Art der Aktion (cancellation, objection, etc.)
+            user_data: Benutzerdaten (Name, Adresse, etc.)
+
+        Returns:
+            Dict mit generiertem Schreiben und Metadaten
+        """
+        from services.template_service import TemplateService
+
+        if action_type not in DocumentChatService.ACTION_TYPES:
+            return {"error": f"Unbekannter Aktionstyp: {action_type}"}
+
+        action_info = DocumentChatService.ACTION_TYPES[action_type]
+        template_name = action_info["template"]
+
+        # Template-Service initialisieren
+        template_service = TemplateService(self.user_id)
+        template_service.initialize_default_templates()
+
+        # Template finden
+        templates = template_service.get_all_templates(category="letter")
+        template = None
+        for t in templates:
+            if t.name == template_name:
+                template = t
+                break
+
+        if not template:
+            return {"error": f"Vorlage '{template_name}' nicht gefunden"}
+
+        # Dokumentdaten extrahieren
+        doc_data = self.extract_document_data_for_template(document_id)
+
+        # Mit Benutzerdaten zusammenführen
+        values = {**doc_data}
+        if user_data:
+            values.update(user_data)
+
+        # Template rendern
+        rendered = template_service.render_template(template.id, values)
+
+        # Fehlende Platzhalter identifizieren
+        missing = []
+        for placeholder in template.placeholders or []:
+            key = placeholder["key"]
+            if not values.get(key) and "{{" + key + "}}" in rendered:
+                missing.append(placeholder)
+
+        return {
+            "success": True,
+            "letter_content": rendered,
+            "template_name": template_name,
+            "template_id": template.id,
+            "missing_fields": missing,
+            "extracted_data": doc_data,
+            "action_type": action_type,
+            "action_label": action_info["label"]
+        }
+
+    def get_user_profile_data(self) -> Dict[str, str]:
+        """
+        Lädt gespeicherte Benutzerdaten für Briefvorlagen
+
+        Returns:
+            Dict mit Benutzerdaten (Name, Adresse, etc.)
+        """
+        # Aus den Einstellungen oder User-Profil laden
+        settings = get_settings()
+
+        return {
+            "absender_name": getattr(settings, 'user_display_name', '') or '',
+            "absender_adresse": getattr(settings, 'user_address', '') or '',
+            "absender_plz": getattr(settings, 'user_postal_code', '') or '',
+            "absender_ort": getattr(settings, 'user_city', '') or '',
+        }
+
+
+def get_document_action_service(user_id: int) -> DocumentActionService:
+    """Factory-Funktion für den DocumentActionService"""
+    return DocumentActionService(user_id)

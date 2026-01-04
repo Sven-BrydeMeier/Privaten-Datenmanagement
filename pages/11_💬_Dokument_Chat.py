@@ -1,12 +1,17 @@
 """
 Dokument-Chat
-KI-gestützte Konversation über Dokumentinhalte
+KI-gestützte Konversation über Dokumentinhalte mit Aktions-Vorschlägen
 """
 import streamlit as st
 from datetime import datetime
+import re
 
 from utils.components import render_sidebar_cart, apply_custom_css
-from services.document_chat_service import get_document_chat_service
+from services.document_chat_service import (
+    get_document_chat_service,
+    get_document_action_service,
+    DocumentChatService
+)
 from database.db import get_current_user_id, get_db
 from database.models import Document, Folder, SmartFolder
 from config.settings import DOCUMENT_CATEGORIES
@@ -38,6 +43,47 @@ if 'chat_scope_ids' not in st.session_state:
     st.session_state.chat_scope_ids = []
 if 'compare_docs' not in st.session_state:
     st.session_state.compare_docs = []
+if 'pending_action' not in st.session_state:
+    st.session_state.pending_action = None
+if 'generated_letter' not in st.session_state:
+    st.session_state.generated_letter = None
+
+
+def parse_action_from_response(response: str):
+    """Erkennt Aktions-Vorschläge in der KI-Antwort"""
+    # Suche nach [AKTION:typ] Markierung
+    pattern = r'\[AKTION:(\w+)\]'
+    match = re.search(pattern, response)
+
+    if match:
+        action_type = match.group(1)
+        if action_type in DocumentChatService.ACTION_TYPES:
+            action_info = DocumentChatService.ACTION_TYPES[action_type]
+            return {
+                "type": action_type,
+                "template_name": action_info["template"],
+                "label": action_info["label"],
+                "icon": action_info["icon"]
+            }
+
+    # Fallback: Keyword-basierte Erkennung
+    response_lower = response.lower()
+    for action_type, action_info in DocumentChatService.ACTION_TYPES.items():
+        for keyword in action_info["keywords"]:
+            if keyword in response_lower and ("möchten" in response_lower or "soll ich" in response_lower):
+                return {
+                    "type": action_type,
+                    "template_name": action_info["template"],
+                    "label": action_info["label"],
+                    "icon": action_info["icon"]
+                }
+
+    return None
+
+
+def clean_response_text(response: str) -> str:
+    """Entfernt Aktions-Marker aus der Antwort für die Anzeige"""
+    return re.sub(r'\s*\[AKTION:\w+\]\s*', '', response).strip()
 
 # Sidebar: Bereichsauswahl
 with st.sidebar:
@@ -255,6 +301,42 @@ with st.sidebar:
                         else:
                             st.error(result.get("error"))
 
+            # Direkte Aktions-Buttons
+            st.divider()
+            st.write("**✉️ Schreiben erstellen:**")
+
+            act_col1, act_col2 = st.columns(2)
+            with act_col1:
+                if st.button("📝 Kündigung", use_container_width=True, help="Kündigungsschreiben vorbereiten"):
+                    st.session_state.pending_action = {
+                        "type": "cancellation",
+                        "doc_id": st.session_state.selected_doc_id
+                    }
+                    st.rerun()
+            with act_col2:
+                if st.button("⚖️ Widerspruch", use_container_width=True, help="Widerspruchsschreiben erstellen"):
+                    st.session_state.pending_action = {
+                        "type": "objection",
+                        "doc_id": st.session_state.selected_doc_id
+                    }
+                    st.rerun()
+
+            act_col3, act_col4 = st.columns(2)
+            with act_col3:
+                if st.button("📋 Reklamation", use_container_width=True, help="Reklamation verfassen"):
+                    st.session_state.pending_action = {
+                        "type": "complaint",
+                        "doc_id": st.session_state.selected_doc_id
+                    }
+                    st.rerun()
+            with act_col4:
+                if st.button("🏦 SEPA-Widerruf", use_container_width=True, help="Lastschrift widerrufen"):
+                    st.session_state.pending_action = {
+                        "type": "sepa_revoke",
+                        "doc_id": st.session_state.selected_doc_id
+                    }
+                    st.rerun()
+
 # Hauptbereich: Chat
 if st.session_state.chat_scope_ids:
     scope = st.session_state.chat_scope
@@ -315,11 +397,38 @@ if st.session_state.chat_scope_ids:
                 - *"Suche alle Erwähnungen von [Begriff]."*
                 """)
         else:
-            for msg in st.session_state.chat_history:
+            for i, msg in enumerate(st.session_state.chat_history):
                 if msg["role"] == "user":
                     st.markdown(f"**🧑 Sie:** {msg['content']}")
                 else:
-                    st.markdown(f"**🤖 Assistent:** {msg['content']}")
+                    # Prüfen ob Aktions-Vorschlag in der Antwort
+                    action = parse_action_from_response(msg['content'])
+                    display_text = clean_response_text(msg['content'])
+
+                    st.markdown(f"**🤖 Assistent:** {display_text}")
+
+                    # Aktions-Button anzeigen wenn Aktion erkannt wurde
+                    # Nur beim letzten Assistenten-Nachricht
+                    if action and i == len(st.session_state.chat_history) - 1:
+                        st.markdown("---")
+                        action_col1, action_col2, action_col3 = st.columns([2, 1, 1])
+
+                        with action_col1:
+                            st.info(f"{action['icon']} **Vorgeschlagene Aktion:** {action['label']}")
+
+                        with action_col2:
+                            if st.button(f"✅ {action['label']}", type="primary", key=f"action_btn_{i}"):
+                                st.session_state.pending_action = {
+                                    "type": action["type"],
+                                    "doc_id": st.session_state.selected_doc_id
+                                }
+                                st.rerun()
+
+                        with action_col3:
+                            if st.button("❌ Nein danke", key=f"dismiss_action_{i}"):
+                                # Aktion ablehnen, weiter chatten
+                                pass
+
                 st.write("")
 
     # Vergleichsergebnis anzeigen
@@ -447,6 +556,164 @@ if st.session_state.chat_scope_ids:
 
 else:
     st.info("👈 Bitte wählen Sie einen Bereich und Dokumente aus der Seitenleiste aus.")
+
+# ============================================================
+# HANDLER FÜR AKTIONS-AUSFÜHRUNG (Kündigung, Widerspruch, etc.)
+# ============================================================
+if st.session_state.pending_action:
+    action = st.session_state.pending_action
+    action_type = action["type"]
+    doc_id = action["doc_id"]
+
+    action_service = get_document_action_service(user_id)
+    action_info = DocumentChatService.ACTION_TYPES.get(action_type, {})
+
+    st.divider()
+    st.subheader(f"{action_info.get('icon', '📝')} {action_info.get('label', 'Aktion ausführen')}")
+
+    # Benutzerdaten-Formular anzeigen
+    with st.expander("📋 Ihre Absenderdaten (für das Schreiben)", expanded=True):
+        col_abs1, col_abs2 = st.columns(2)
+
+        with col_abs1:
+            absender_name = st.text_input("Ihr Name", key="letter_absender_name")
+            absender_adresse = st.text_input("Ihre Straße", key="letter_absender_adresse")
+
+        with col_abs2:
+            absender_plz = st.text_input("PLZ", key="letter_absender_plz")
+            absender_ort = st.text_input("Ort", key="letter_absender_ort")
+
+    col_gen, col_cancel = st.columns(2)
+
+    with col_gen:
+        if st.button("📝 Schreiben generieren", type="primary", use_container_width=True):
+            user_data = {
+                "absender_name": absender_name,
+                "absender_adresse": absender_adresse,
+                "absender_plz": absender_plz,
+                "absender_ort": absender_ort
+            }
+
+            with st.spinner("Generiere Schreiben..."):
+                result = action_service.generate_letter(doc_id, action_type, user_data)
+
+                if result.get("success"):
+                    st.session_state.generated_letter = result
+                    st.rerun()
+                else:
+                    st.error(f"❌ Fehler: {result.get('error')}")
+
+    with col_cancel:
+        if st.button("❌ Abbrechen", use_container_width=True):
+            st.session_state.pending_action = None
+            st.rerun()
+
+# ============================================================
+# ANZEIGE DES GENERIERTEN SCHREIBENS
+# ============================================================
+if st.session_state.generated_letter:
+    letter = st.session_state.generated_letter
+
+    st.divider()
+    st.subheader(f"📄 {letter.get('action_label', 'Schreiben')}")
+
+    # Info zu fehlenden Feldern
+    if letter.get("missing_fields"):
+        st.warning("⚠️ Einige Felder sind noch nicht ausgefüllt. Bitte ergänzen Sie diese im Text.")
+        with st.expander("Fehlende Felder anzeigen"):
+            for field in letter["missing_fields"]:
+                st.caption(f"• {field['label']} (`{{{{{field['key']}}}}}`)")
+
+    # Schreiben anzeigen und bearbeiten
+    letter_content = st.text_area(
+        "Schreiben (bearbeitbar)",
+        value=letter["letter_content"],
+        height=400,
+        key="letter_edit_area"
+    )
+
+    # Aktionen für das Schreiben
+    st.markdown("---")
+    st.subheader("📤 Schreiben versenden")
+
+    action_col1, action_col2, action_col3, action_col4 = st.columns(4)
+
+    with action_col1:
+        # Download als TXT
+        st.download_button(
+            "⬇️ Als Text speichern",
+            data=letter_content,
+            file_name=f"{letter.get('template_name', 'Schreiben').replace(' ', '_')}.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
+
+    with action_col2:
+        # Per E-Mail senden
+        if st.button("📧 Per E-Mail senden", use_container_width=True):
+            st.session_state.show_email_dialog = True
+            st.rerun()
+
+    with action_col3:
+        # In Dokumente speichern
+        if st.button("💾 Als Dokument speichern", use_container_width=True):
+            # Hier könnte man das Schreiben als neues Dokument speichern
+            st.info("Diese Funktion wird noch implementiert.")
+
+    with action_col4:
+        # Schließen
+        if st.button("✖️ Schließen", use_container_width=True):
+            st.session_state.generated_letter = None
+            st.session_state.pending_action = None
+            st.rerun()
+
+    # E-Mail Dialog
+    if st.session_state.get("show_email_dialog"):
+        st.divider()
+        st.subheader("📧 E-Mail versenden")
+
+        email_to = st.text_input("Empfänger E-Mail", key="email_to")
+        email_subject = st.text_input(
+            "Betreff",
+            value=letter.get('action_label', 'Anfrage'),
+            key="email_subject"
+        )
+
+        email_col1, email_col2 = st.columns(2)
+
+        with email_col1:
+            if st.button("📤 Senden", type="primary", use_container_width=True):
+                if email_to:
+                    try:
+                        from utils.helpers import send_email
+                        from config.settings import get_settings
+
+                        settings = get_settings()
+
+                        if settings.smtp_server and settings.smtp_username:
+                            success = send_email(
+                                to_email=email_to,
+                                subject=email_subject,
+                                body=letter_content,
+                                from_email=settings.smtp_username
+                            )
+
+                            if success:
+                                st.success("✅ E-Mail erfolgreich gesendet!")
+                                st.session_state.show_email_dialog = False
+                            else:
+                                st.error("❌ E-Mail konnte nicht gesendet werden.")
+                        else:
+                            st.warning("⚠️ SMTP nicht konfiguriert. Bitte in Einstellungen einrichten.")
+                    except Exception as e:
+                        st.error(f"❌ Fehler: {str(e)}")
+                else:
+                    st.warning("Bitte Empfänger-E-Mail eingeben.")
+
+        with email_col2:
+            if st.button("❌ Abbrechen", key="cancel_email", use_container_width=True):
+                st.session_state.show_email_dialog = False
+                st.rerun()
 
 # Hinweis zur KI
 st.divider()
