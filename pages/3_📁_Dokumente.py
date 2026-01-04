@@ -417,6 +417,7 @@ if 'view_document_id' in st.session_state:
                 'filename': doc.filename,
                 'file_path': doc.file_path,
                 'mime_type': doc.mime_type,
+                'is_encrypted': doc.is_encrypted,
                 'encryption_iv': doc.encryption_iv,
                 'category': doc.category,
                 'sender': doc.sender,
@@ -456,50 +457,126 @@ if 'view_document_id' in st.session_state:
     ])
 
     with tab_preview:
-        col_doc, col_text = st.columns([1, 1])
+        import base64
 
-        with col_doc:
-            st.markdown("### 📄 Dokument-Vorschau")
-            from utils.helpers import get_document_file_content, document_file_exists
-            if doc_data['file_path'] and document_file_exists(doc_data['file_path']):
-                encryption = get_encryption_service()
-                try:
-                    success, result = get_document_file_content(doc_data['file_path'], doc_data.get('user_id'))
-                    if not success:
-                        st.error(f"Fehler beim Laden: {result}")
+        st.markdown("### 📄 Dokument-Vorschau")
+        from utils.helpers import get_document_file_content, document_file_exists
+
+        if doc_data['file_path'] and document_file_exists(doc_data['file_path']):
+            try:
+                success, result = get_document_file_content(doc_data['file_path'], doc_data.get('user_id'))
+                if not success:
+                    st.error(f"Fehler beim Laden: {result}")
+                else:
+                    # Entschlüsseln nur wenn verschlüsselt UND IV vorhanden
+                    if doc_data.get('is_encrypted') and doc_data.get('encryption_iv'):
+                        encryption = get_encryption_service()
+                        try:
+                            file_data = encryption.decrypt_file(result, doc_data['encryption_iv'], doc_data['filename'])
+                        except:
+                            file_data = result
                     else:
-                        encrypted_data = result
-                        decrypted = encryption.decrypt_file(encrypted_data, doc_data['encryption_iv'], doc_data['filename'])
+                        file_data = result
 
-                        # Bild-Vorschau
-                        if doc_data['mime_type'] and doc_data['mime_type'].startswith('image/'):
-                            from PIL import Image
-                            img = Image.open(io.BytesIO(decrypted))
-                            st.image(img, width="stretch")
-                        elif doc_data['mime_type'] == 'application/pdf':
-                            st.info("📄 PDF-Dokument - Vorschau unten")
-                            # PDF Info
-                            st.caption(f"Größe: {len(decrypted) / 1024:.1f} KB")
+                    mime_type = doc_data['mime_type'] or ""
+                    filename_lower = doc_data['filename'].lower() if doc_data['filename'] else ""
 
-                        # Download
-                        st.download_button(
-                            "⬇️ Herunterladen",
-                            data=decrypted,
-                            file_name=doc_data['filename'],
-                            mime=doc_data['mime_type'],
-                            key="download_preview"
-                        )
-                except Exception as e:
-                    st.error(f"Fehler beim Laden: {e}")
-            else:
-                st.warning("Dokument-Datei nicht gefunden")
+                    # PDF-Vorschau mit iframe
+                    if mime_type == "application/pdf" or filename_lower.endswith(".pdf"):
+                        pdf_base64 = base64.b64encode(file_data).decode('utf-8')
+                        pdf_display = f'''
+                        <iframe
+                            src="data:application/pdf;base64,{pdf_base64}"
+                            width="100%"
+                            height="700px"
+                            type="application/pdf"
+                            style="border: 1px solid #ddd; border-radius: 5px;">
+                        </iframe>
+                        '''
+                        st.markdown(pdf_display, unsafe_allow_html=True)
 
-        with col_text:
-            st.markdown("### 📝 Erkannter Text")
-            if doc_data['ocr_text']:
+                    # Excel-Vorschau
+                    elif filename_lower.endswith((".xlsx", ".xls")) or "spreadsheet" in mime_type:
+                        try:
+                            import pandas as pd
+
+                            excel_file = io.BytesIO(file_data)
+                            xl = pd.ExcelFile(excel_file)
+                            sheet_names = xl.sheet_names
+
+                            if len(sheet_names) > 1:
+                                selected_sheet = st.selectbox(
+                                    "Tabellenblatt auswählen",
+                                    sheet_names,
+                                    key=f"sheet_select_{doc_id}"
+                                )
+                            else:
+                                selected_sheet = sheet_names[0]
+
+                            df = pd.read_excel(excel_file, sheet_name=selected_sheet)
+                            st.dataframe(df, use_container_width=True, height=500)
+                            st.caption(f"📊 {len(df)} Zeilen × {len(df.columns)} Spalten")
+                        except Exception as excel_err:
+                            st.warning(f"Excel-Vorschau nicht möglich: {excel_err}")
+
+                    # Word-Vorschau
+                    elif filename_lower.endswith((".docx", ".doc")):
+                        try:
+                            from docx import Document as DocxDocument
+
+                            docx_file = io.BytesIO(file_data)
+                            doc_content = DocxDocument(docx_file)
+
+                            full_text = [para.text for para in doc_content.paragraphs]
+                            text_content = "\n".join(full_text)
+                            st.text_area("Word-Inhalt", text_content, height=500, disabled=True)
+                        except Exception as word_err:
+                            st.warning(f"Word-Vorschau nicht möglich: {word_err}")
+
+                    # Bild-Vorschau
+                    elif mime_type.startswith('image/') or filename_lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+                        from PIL import Image
+                        img = Image.open(io.BytesIO(file_data))
+                        st.image(img, use_container_width=True)
+
+                    # Textdateien
+                    elif mime_type.startswith("text/") or filename_lower.endswith((".txt", ".csv", ".json", ".xml")):
+                        try:
+                            text_content = file_data.decode('utf-8')
+                            if filename_lower.endswith('.csv'):
+                                import pandas as pd
+                                df = pd.read_csv(io.StringIO(text_content))
+                                st.dataframe(df, use_container_width=True, height=500)
+                            else:
+                                st.code(text_content, language=None)
+                        except:
+                            st.warning("Textdatei konnte nicht dekodiert werden")
+
+                    else:
+                        st.info(f"📄 Vorschau für {mime_type or 'unbekanntes Format'} nicht verfügbar.")
+
+                    # Download-Button
+                    st.download_button(
+                        "⬇️ Herunterladen",
+                        data=file_data,
+                        file_name=doc_data['filename'],
+                        mime=doc_data['mime_type'] or "application/octet-stream",
+                        key="download_preview"
+                    )
+
+            except Exception as e:
+                st.error(f"Fehler beim Laden: {e}")
+        else:
+            st.warning("Dokument-Datei nicht gefunden")
+
+        # OCR-Text
+        st.markdown("---")
+        st.markdown("### 📝 Erkannter Text (OCR)")
+        if doc_data['ocr_text']:
+            with st.expander("OCR-Text anzeigen", expanded=False):
                 st.text_area("OCR-Text", doc_data['ocr_text'], height=400, disabled=True, key="ocr_preview")
-            else:
-                st.info("Kein OCR-Text verfügbar")
+        else:
+            st.info("Kein OCR-Text verfügbar")
 
     with tab_metadata:
         # Drei-Spalten-Layout für Metadaten

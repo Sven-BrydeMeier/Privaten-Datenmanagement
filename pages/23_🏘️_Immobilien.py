@@ -461,6 +461,116 @@ with tab_docs:
                         with st.expander("📝 Erkannter Text", expanded=False):
                             st.text_area("OCR-Text", doc.ocr_text, height=300, disabled=True)
 
+                    # Dokument-Vorschau (PDF, Excel, Bilder)
+                    st.markdown("### 👁️ Dokument-Vorschau")
+                    from utils.helpers import get_document_file_content, document_file_exists
+                    from services.encryption import get_encryption_service
+                    import base64
+
+                    if doc.file_path and document_file_exists(doc.file_path):
+                        try:
+                            success, result = get_document_file_content(doc.file_path, user_id)
+                            if success:
+                                # Entschlüsseln nur wenn verschlüsselt
+                                if doc.is_encrypted and doc.encryption_iv:
+                                    encryption = get_encryption_service()
+                                    try:
+                                        file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                                    except:
+                                        file_data = result
+                                else:
+                                    file_data = result
+
+                                mime_type = doc.mime_type or ""
+                                filename_lower = doc.filename.lower() if doc.filename else ""
+
+                                # PDF-Vorschau
+                                if mime_type == "application/pdf" or filename_lower.endswith(".pdf"):
+                                    pdf_base64 = base64.b64encode(file_data).decode('utf-8')
+                                    pdf_display = f'''
+                                    <iframe
+                                        src="data:application/pdf;base64,{pdf_base64}"
+                                        width="100%"
+                                        height="600px"
+                                        type="application/pdf"
+                                        style="border: 1px solid #ddd; border-radius: 5px;">
+                                    </iframe>
+                                    '''
+                                    st.markdown(pdf_display, unsafe_allow_html=True)
+
+                                # Excel-Vorschau
+                                elif filename_lower.endswith((".xlsx", ".xls")) or "spreadsheet" in mime_type:
+                                    try:
+                                        import pandas as pd
+                                        import io
+
+                                        # Excel lesen
+                                        excel_file = io.BytesIO(file_data)
+
+                                        # Alle Sheets auflisten
+                                        xl = pd.ExcelFile(excel_file)
+                                        sheet_names = xl.sheet_names
+
+                                        if len(sheet_names) > 1:
+                                            selected_sheet = st.selectbox(
+                                                "Tabellenblatt auswählen",
+                                                sheet_names,
+                                                key=f"sheet_select_{doc.id}"
+                                            )
+                                        else:
+                                            selected_sheet = sheet_names[0]
+
+                                        # Sheet laden und anzeigen
+                                        df = pd.read_excel(excel_file, sheet_name=selected_sheet)
+                                        st.dataframe(df, use_container_width=True, height=400)
+
+                                        st.caption(f"📊 {len(df)} Zeilen × {len(df.columns)} Spalten")
+                                    except Exception as excel_err:
+                                        st.warning(f"Excel-Vorschau nicht möglich: {excel_err}")
+
+                                # Word-Vorschau (nur Text)
+                                elif filename_lower.endswith((".docx", ".doc")):
+                                    try:
+                                        from docx import Document as DocxDocument
+                                        import io
+
+                                        docx_file = io.BytesIO(file_data)
+                                        doc_content = DocxDocument(docx_file)
+
+                                        full_text = []
+                                        for para in doc_content.paragraphs:
+                                            full_text.append(para.text)
+
+                                        text_content = "\n".join(full_text)
+                                        st.text_area("Word-Inhalt", text_content, height=400, disabled=True)
+                                    except Exception as word_err:
+                                        st.warning(f"Word-Vorschau nicht möglich: {word_err}")
+                                        if doc.ocr_text:
+                                            st.info("OCR-Text wird als Fallback angezeigt")
+
+                                # Bild-Vorschau
+                                elif mime_type.startswith("image/") or filename_lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+                                    from PIL import Image
+                                    import io
+                                    img = Image.open(io.BytesIO(file_data))
+                                    st.image(img, use_container_width=True)
+
+                                # Textdateien
+                                elif mime_type.startswith("text/") or filename_lower.endswith((".txt", ".csv", ".json", ".xml")):
+                                    try:
+                                        text_content = file_data.decode('utf-8')
+                                        st.code(text_content, language=None)
+                                    except:
+                                        st.warning("Textdatei konnte nicht dekodiert werden")
+
+                                else:
+                                    st.info(f"📄 Vorschau für {mime_type or 'unbekanntes Format'} nicht verfügbar. Bitte herunterladen.")
+
+                        except Exception as e:
+                            st.warning(f"Vorschau nicht verfügbar: {e}")
+                    else:
+                        st.warning("Datei nicht gefunden")
+
                 with col_actions:
                     st.markdown("### ⚡ Aktionen")
 
