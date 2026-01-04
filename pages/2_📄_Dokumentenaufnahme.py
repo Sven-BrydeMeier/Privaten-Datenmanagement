@@ -1863,73 +1863,81 @@ with tab_cloud:
 
                         # Synchronisieren mit Fortschrittsanzeige
                         final_result = None
-                        for progress in cloud_service.sync_connection_with_progress(conn.id):
-                            final_result = progress
-                            phase = progress.get("phase", "")
+                        sync_error = None
+                        try:
+                            for progress in cloud_service.sync_connection_with_progress(conn.id):
+                                final_result = progress
+                                phase = progress.get("phase", "")
 
-                            # Fortschrittsbalken aktualisieren
-                            percent = progress.get("progress_percent", 0)
-                            progress_bar.progress(percent / 100)
+                                # Fortschrittsbalken aktualisieren
+                                percent = progress.get("progress_percent", 0)
+                                progress_bar.progress(percent / 100)
 
-                            # Status-Text
-                            if phase == "initializing":
-                                status_container.info("🔄 Initialisiere Verbindung...")
-                                step_detail_container.markdown("*Verbindung wird hergestellt...*")
-                            elif phase == "scanning":
-                                status_container.info("🔍 **Scanne Cloud-Ordner nach Dateien...**")
-                                step_detail_container.markdown(
-                                    "⏳ *Durchsuche Ordner und Unterordner... Dies kann einen Moment dauern.*"
-                                )
-                            elif phase == "downloading":
-                                files_total = progress.get("files_total", 0)
-                                files_processed = progress.get("files_processed", 0)
-                                elapsed = progress.get("elapsed_seconds", 0)
-                                remaining = progress.get("estimated_remaining_seconds")
+                                # Status-Text
+                                if phase == "initializing":
+                                    status_container.info("🔄 Initialisiere Verbindung...")
+                                    step_detail_container.markdown("*Verbindung wird hergestellt...*")
+                                elif phase == "scanning":
+                                    status_container.info("🔍 **Scanne Cloud-Ordner nach Dateien...**")
+                                    step_detail_container.markdown(
+                                        "⏳ *Durchsuche Ordner und Unterordner... Dies kann einen Moment dauern.*"
+                                    )
+                                elif phase == "downloading":
+                                    files_total = progress.get("files_total", 0)
+                                    files_processed = progress.get("files_processed", 0)
+                                    elapsed = progress.get("elapsed_seconds", 0)
+                                    remaining = progress.get("estimated_remaining_seconds")
 
-                                time_info = f"⏱️ Verstrichene Zeit: {format_time(elapsed)}"
-                                if remaining is not None and remaining > 0:
-                                    time_info += f" | ⏳ Restzeit: ~{format_time(remaining)}"
+                                    time_info = f"⏱️ Verstrichene Zeit: {format_time(elapsed)}"
+                                    if remaining is not None and remaining > 0:
+                                        time_info += f" | ⏳ Restzeit: ~{format_time(remaining)}"
 
-                                status_container.info(
-                                    f"📥 Importiere Dateien: {files_processed + 1} von {files_total}\n\n{time_info}"
-                                )
-
-                                # Aktuelle Datei anzeigen
-                                current_file = progress.get("current_file")
-                                current_size = progress.get("current_file_size", 0)
-                                source_folder = progress.get("source_folder", "")
-                                if current_file:
-                                    folder_info = f" (aus `{source_folder}`)" if source_folder else ""
-                                    file_info_container.markdown(
-                                        f"📄 **Aktuelle Datei:** `{current_file}` ({format_file_size(current_size)}){folder_info}"
+                                    status_container.info(
+                                        f"📥 Importiere Dateien: {files_processed + 1} von {files_total}\n\n{time_info}"
                                     )
 
-                                # Detaillierter Verarbeitungsschritt anzeigen
-                                current_step_detail = progress.get("current_step_detail", "")
-                                if current_step_detail:
-                                    step_detail_container.markdown(f"**Aktion:** {current_step_detail}")
-                                else:
+                                    # Aktuelle Datei anzeigen
+                                    current_file = progress.get("current_file")
+                                    current_size = progress.get("current_file_size", 0)
+                                    source_folder = progress.get("source_folder", "")
+                                    if current_file:
+                                        folder_info = f" (aus `{source_folder}`)" if source_folder else ""
+                                        file_info_container.markdown(
+                                            f"📄 **Aktuelle Datei:** `{current_file}` ({format_file_size(current_size)}){folder_info}"
+                                        )
+
+                                    # Detaillierter Verarbeitungsschritt anzeigen
+                                    current_step_detail = progress.get("current_step_detail", "")
+                                    if current_step_detail:
+                                        step_detail_container.markdown(f"**Aktion:** {current_step_detail}")
+                                    else:
+                                        step_detail_container.empty()
+
+                                    # Statistiken
+                                    synced = progress.get("files_synced", 0)
+                                    skipped = progress.get("files_skipped", 0)
+                                    errors = progress.get("files_error", 0)
+                                    stats_container.caption(
+                                        f"✅ Importiert: {synced} | ⏭️ Übersprungen: {skipped} | ❌ Fehler: {errors}"
+                                    )
+
+                                elif phase == "completed":
+                                    progress_bar.progress(1.0, text="✅ Abgeschlossen!")
+                                    status_container.success(
+                                        f"✅ **Synchronisation abgeschlossen!**\n\n"
+                                        f"⏱️ Gesamtzeit: {format_time(progress.get('elapsed_seconds', 0))}"
+                                    )
                                     step_detail_container.empty()
-
-                                # Statistiken
-                                synced = progress.get("files_synced", 0)
-                                skipped = progress.get("files_skipped", 0)
-                                errors = progress.get("files_error", 0)
-                                stats_container.caption(
-                                    f"✅ Importiert: {synced} | ⏭️ Übersprungen: {skipped} | ❌ Fehler: {errors}"
-                                )
-
-                            elif phase == "completed":
-                                progress_bar.progress(1.0, text="✅ Abgeschlossen!")
-                                status_container.success(
-                                    f"✅ **Synchronisation abgeschlossen!**\n\n"
-                                    f"⏱️ Gesamtzeit: {format_time(progress.get('elapsed_seconds', 0))}"
-                                )
-                                step_detail_container.empty()
-                            elif phase == "error":
-                                progress_bar.progress(0, text="❌ Fehler")
-                                status_container.error(f"❌ Fehler: {progress.get('error', 'Unbekannt')}")
-                                step_detail_container.empty()
+                                elif phase == "error":
+                                    progress_bar.progress(0, text="❌ Fehler")
+                                    status_container.error(f"❌ Fehler: {progress.get('error', 'Unbekannt')}")
+                                    step_detail_container.empty()
+                        except Exception as sync_err:
+                            sync_error = str(sync_err)
+                            st.error(f"❌ Sync-Fehler: {sync_error}")
+                            import traceback
+                            with st.expander("Fehlerdetails"):
+                                st.code(traceback.format_exc())
 
                         # Endergebnis verarbeiten
                         file_info_container.empty()
