@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 import json
 
 from database.models import get_session, Document
-from config.settings import get_settings
+from config.settings import get_settings, get_api_key
 
 
 class DocumentChatService:
@@ -29,6 +29,9 @@ Sei präzise und hilfreich. Wenn du etwas nicht im Dokument findest, sage das eh
 
     def __init__(self):
         self.settings = get_settings()
+        # API-Keys direkt aus Secrets/Umgebungsvariablen laden
+        self.anthropic_api_key = get_api_key('anthropic_api_key')
+        self.openai_api_key = get_api_key('openai_api_key')
 
     def chat(
         self,
@@ -67,9 +70,9 @@ Sei präzise und hilfreich. Wenn du etwas nicht im Dokument findest, sage das eh
             history = conversation_history or []
 
             # Mit verfügbarer KI-API antworten
-            if self.settings.anthropic_api_key:
+            if self.anthropic_api_key:
                 return self._chat_with_anthropic(doc_context, message, history)
-            elif self.settings.openai_api_key:
+            elif self.openai_api_key:
                 return self._chat_with_openai(doc_context, message, history)
             else:
                 return {"error": "Keine KI-API konfiguriert. Bitte OpenAI oder Anthropic API-Schlüssel in den Einstellungen hinterlegen."}
@@ -150,7 +153,7 @@ Sei präzise und hilfreich. Wenn du etwas nicht im Dokument findest, sage das eh
         try:
             from anthropic import Anthropic
 
-            client = Anthropic(api_key=self.settings.anthropic_api_key)
+            client = Anthropic(api_key=self.anthropic_api_key)
 
             # Messages aufbauen
             messages = []
@@ -211,7 +214,7 @@ Meine Frage: {message}"""
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=self.settings.openai_api_key)
+            client = OpenAI(api_key=self.openai_api_key)
 
             # Messages aufbauen
             messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
@@ -309,9 +312,9 @@ Meine Frage: {message}"""
             question = comparison_question or "Vergleiche diese Dokumente. Was sind die wichtigsten Unterschiede und Gemeinsamkeiten?"
 
             # Chat mit kombiniertem Kontext
-            if self.settings.anthropic_api_key:
+            if self.anthropic_api_key:
                 return self._chat_comparison_anthropic(combined_context, question)
-            elif self.settings.openai_api_key:
+            elif self.openai_api_key:
                 return self._chat_comparison_openai(combined_context, question)
             else:
                 return {"error": "Keine KI-API konfiguriert"}
@@ -324,7 +327,7 @@ Meine Frage: {message}"""
         try:
             from anthropic import Anthropic
 
-            client = Anthropic(api_key=self.settings.anthropic_api_key)
+            client = Anthropic(api_key=self.anthropic_api_key)
 
             response = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
@@ -350,7 +353,7 @@ Meine Frage: {message}"""
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=self.settings.openai_api_key)
+            client = OpenAI(api_key=self.openai_api_key)
 
             response = client.chat.completions.create(
                 model="gpt-4o",
@@ -448,9 +451,9 @@ Bei Fragen zu mehreren Dokumenten:
 Sei präzise und strukturiert."""
 
             # Mit verfügbarer KI-API antworten
-            if self.settings.anthropic_api_key:
+            if self.anthropic_api_key:
                 return self._chat_multi_anthropic(combined_context, message, history, multi_prompt)
-            elif self.settings.openai_api_key:
+            elif self.openai_api_key:
                 return self._chat_multi_openai(combined_context, message, history, multi_prompt)
             else:
                 return {"error": "Keine KI-API konfiguriert"}
@@ -469,7 +472,7 @@ Sei präzise und strukturiert."""
         try:
             from anthropic import Anthropic
 
-            client = Anthropic(api_key=self.settings.anthropic_api_key)
+            client = Anthropic(api_key=self.anthropic_api_key)
 
             messages = []
             for entry in history[-6:]:  # Weniger Historie bei Multi-Dokument
@@ -524,7 +527,7 @@ Frage: {message}"""
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=self.settings.openai_api_key)
+            client = OpenAI(api_key=self.openai_api_key)
 
             messages = [{"role": "system", "content": system_prompt}]
 
