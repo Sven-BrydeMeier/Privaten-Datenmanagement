@@ -337,9 +337,6 @@ def build_folder_tree(session, user_id: int, include_root: bool = False) -> list
     return result
 
 
-# Sidebar mit Aktentasche
-render_sidebar_cart()
-
 user_id = get_current_user_id()
 
 st.title("📁 Dokumente & Ordner")
