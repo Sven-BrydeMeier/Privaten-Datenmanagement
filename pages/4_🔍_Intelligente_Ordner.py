@@ -86,34 +86,62 @@ with tab_smart:
         st.markdown("**Benutzerdefiniert**")
 
         for cf in custom_folders:
-            if st.button(f"📂 {cf['name']}", use_container_width=True, key=f"custom_{cf['id']}"):
+            # Icon basierend auf Modus
+            mode = cf['filter_rules'].get("mode", "auto") if cf['filter_rules'] else "auto"
+            icon = "📋" if mode == "manual" else "🔍"
+            if st.button(f"{icon} {cf['name']}", use_container_width=True, key=f"custom_{cf['id']}"):
                 st.session_state.active_smart_folder = {
+                    "id": cf['id'],  # ID für Bearbeitung
                     "name": cf['name'],
-                    "rules": cf['filter_rules'],
+                    "rules": cf['filter_rules'] or {},
                     "highlight": []
                 }
 
         # Neuen intelligenten Ordner erstellen
         with st.expander("➕ Neuer intelligenter Ordner"):
-            sf_name = st.text_input("Name", key="sf_name",
-                                    help="Der Name wird automatisch als Suchbegriff verwendet")
-            sf_search = st.text_input("Suchbegriff (optional)", key="sf_search",
-                                      help="Leer lassen = Name als Suchbegriff verwenden")
-            sf_category = st.selectbox("Kategorie", ["Alle"] + DOCUMENT_CATEGORIES, key="sf_cat")
-            sf_status = st.selectbox("Rechnungsstatus", ["Alle", "Offen", "Bezahlt"], key="sf_status")
+            sf_name = st.text_input("Name", key="sf_name", placeholder="z.B. Porsche Taycan, Bankanforderung 2024")
 
-            if st.button("Erstellen") and sf_name:
-                rules = {}
-                # Suchbegriff: Explizit angegeben oder Name verwenden
-                search_term = sf_search.strip() if sf_search.strip() else sf_name.strip()
-                rules["search_text"] = search_term
+            # Modus-Auswahl
+            sf_mode = st.radio(
+                "Ordner-Modus",
+                options=["auto", "manual"],
+                format_func=lambda x: "🔍 Automatische Suche (findet passende Dokumente)" if x == "auto"
+                                      else "📋 Manuelle Sammlung (Sie fügen Dokumente hinzu)",
+                key="sf_mode",
+                horizontal=True
+            )
 
-                if sf_category != "Alle":
-                    rules["category"] = sf_category
-                if sf_status == "Offen":
-                    rules["invoice_status"] = "OPEN"
-                elif sf_status == "Bezahlt":
-                    rules["invoice_status"] = "PAID"
+            if sf_mode == "auto":
+                st.caption("Dokumente werden automatisch anhand der Suchkriterien gefunden")
+                sf_search = st.text_input("Suchbegriff", key="sf_search",
+                                          placeholder="Leer = Ordnername als Suchbegriff",
+                                          help="Sucht in Titel, Dateiname, Absender, OCR-Text")
+                sf_category = st.selectbox("Kategorie (optional)", ["Alle"] + DOCUMENT_CATEGORIES, key="sf_cat")
+                sf_status = st.selectbox("Rechnungsstatus (optional)", ["Alle", "Offen", "Bezahlt"], key="sf_status")
+            else:
+                st.caption("Erstellen Sie einen leeren Ordner und fügen Sie manuell Dokumente hinzu")
+                st.info("💡 Ideal für: Dokumentenanforderungen, Projektsammlungen, individuelle Zusammenstellungen")
+                sf_search = ""
+                sf_category = "Alle"
+                sf_status = "Alle"
+
+            if st.button("Erstellen", type="primary") and sf_name:
+                rules = {"mode": sf_mode}
+
+                if sf_mode == "auto":
+                    # Automatische Suche: Suchbegriff verwenden
+                    search_term = sf_search.strip() if sf_search.strip() else sf_name.strip()
+                    rules["search_text"] = search_term
+
+                    if sf_category != "Alle":
+                        rules["category"] = sf_category
+                    if sf_status == "Offen":
+                        rules["invoice_status"] = "OPEN"
+                    elif sf_status == "Bezahlt":
+                        rules["invoice_status"] = "PAID"
+                else:
+                    # Manueller Modus: Leere Dokumentenliste
+                    rules["manual_docs"] = []
 
                 with get_db() as session:
                     new_sf = SmartFolder(
@@ -123,7 +151,11 @@ with tab_smart:
                     )
                     session.add(new_sf)
                     session.commit()
-                st.success(f"Erstellt! Sucht nach: '{search_term}'")
+
+                if sf_mode == "auto":
+                    st.success(f"✅ Erstellt! Sucht automatisch nach: '{rules.get('search_text', sf_name)}'")
+                else:
+                    st.success(f"✅ Erstellt! Sie können jetzt Dokumente manuell hinzufügen.")
                 st.rerun()
 
     with col_content:
@@ -133,49 +165,107 @@ with tab_smart:
 
             rules = sf["rules"]
             highlight_fields = sf.get("highlight", [])
+            is_manual_mode = rules.get("mode") == "manual"
+            folder_id = sf.get("id")  # ID für benutzerdefinierte Ordner
 
-            # Dokumente nach Regeln filtern
             with get_db() as session:
                 from sqlalchemy import or_
 
-                query = session.query(Document).filter(Document.user_id == user_id)
+                if is_manual_mode:
+                    # MANUELLER MODUS: Dokumente aus gespeicherter Liste
+                    st.caption("📋 **Manuelle Sammlung** - Fügen Sie Dokumente hinzu")
 
-                # Textsuche: Sucht in Titel, Dateiname, Absender, OCR-Text, Betreff
-                if rules.get("search_text"):
-                    search_term = rules["search_text"].lower()
-                    search_pattern = f"%{search_term}%"
-                    query = query.filter(
-                        or_(
-                            Document.title.ilike(search_pattern),
-                            Document.filename.ilike(search_pattern),
-                            Document.sender.ilike(search_pattern),
-                            Document.ocr_text.ilike(search_pattern),
-                            Document.subject.ilike(search_pattern),
-                            Document.ai_summary.ilike(search_pattern)
+                    manual_doc_ids = rules.get("manual_docs", [])
+
+                    # Dokumente hinzufügen
+                    with st.expander("➕ Dokumente hinzufügen"):
+                        search_query = st.text_input("🔍 Dokument suchen", key="manual_search",
+                                                     placeholder="Titel, Absender, etc.")
+
+                        if search_query:
+                            search_pattern = f"%{search_query}%"
+                            available_docs = session.query(Document).filter(
+                                Document.user_id == user_id,
+                                ~Document.id.in_(manual_doc_ids) if manual_doc_ids else True,
+                                or_(
+                                    Document.title.ilike(search_pattern),
+                                    Document.filename.ilike(search_pattern),
+                                    Document.sender.ilike(search_pattern)
+                                )
+                            ).limit(10).all()
+
+                            for doc in available_docs:
+                                col_d, col_a = st.columns([4, 1])
+                                with col_d:
+                                    st.write(f"📄 {doc.title or doc.filename}")
+                                    st.caption(f"{doc.sender or '—'} | {doc.category or '—'}")
+                                with col_a:
+                                    if st.button("➕", key=f"add_manual_{doc.id}"):
+                                        # Dokument zur Liste hinzufügen
+                                        if folder_id:
+                                            sf_obj = session.get(SmartFolder, folder_id)
+                                            if sf_obj:
+                                                current_rules = sf_obj.filter_rules or {}
+                                                current_docs = current_rules.get("manual_docs", [])
+                                                if doc.id not in current_docs:
+                                                    current_docs.append(doc.id)
+                                                current_rules["manual_docs"] = current_docs
+                                                sf_obj.filter_rules = current_rules
+                                                session.commit()
+                                                # Session State aktualisieren
+                                                st.session_state.active_smart_folder["rules"]["manual_docs"] = current_docs
+                                                st.rerun()
+
+                    # Dokumente anzeigen
+                    if manual_doc_ids:
+                        documents = session.query(Document).filter(
+                            Document.id.in_(manual_doc_ids)
+                        ).all()
+                        st.caption(f"{len(documents)} Dokumente in dieser Sammlung")
+                    else:
+                        documents = []
+                        st.info("Noch keine Dokumente hinzugefügt. Nutzen Sie die Suche oben.")
+
+                else:
+                    # AUTOMATISCHER MODUS: Dokumente nach Regeln filtern
+                    query = session.query(Document).filter(Document.user_id == user_id)
+
+                    # Textsuche
+                    if rules.get("search_text"):
+                        search_term = rules["search_text"].lower()
+                        search_pattern = f"%{search_term}%"
+                        query = query.filter(
+                            or_(
+                                Document.title.ilike(search_pattern),
+                                Document.filename.ilike(search_pattern),
+                                Document.sender.ilike(search_pattern),
+                                Document.ocr_text.ilike(search_pattern),
+                                Document.subject.ilike(search_pattern),
+                                Document.ai_summary.ilike(search_pattern)
+                            )
                         )
-                    )
-                    st.caption(f"🔍 Suche nach: **{rules['search_text']}**")
+                        st.caption(f"🔍 Automatische Suche nach: **{rules['search_text']}**")
 
-                if rules.get("category"):
-                    query = query.filter(Document.category == rules["category"])
+                    if rules.get("category"):
+                        query = query.filter(Document.category == rules["category"])
 
-                if rules.get("invoice_status") == "OPEN":
-                    query = query.filter(Document.invoice_status == InvoiceStatus.OPEN)
-                elif rules.get("invoice_status") == "PAID":
-                    query = query.filter(Document.invoice_status == InvoiceStatus.PAID)
+                    if rules.get("invoice_status") == "OPEN":
+                        query = query.filter(Document.invoice_status == InvoiceStatus.OPEN)
+                    elif rules.get("invoice_status") == "PAID":
+                        query = query.filter(Document.invoice_status == InvoiceStatus.PAID)
 
-                if rules.get("contract_end_within_days"):
-                    days = rules["contract_end_within_days"]
-                    end_date = datetime.now() + timedelta(days=days)
-                    query = query.filter(
-                        Document.contract_end.isnot(None),
-                        Document.contract_end <= end_date
-                    )
+                    if rules.get("contract_end_within_days"):
+                        days = rules["contract_end_within_days"]
+                        end_date = datetime.now() + timedelta(days=days)
+                        query = query.filter(
+                            Document.contract_end.isnot(None),
+                            Document.contract_end <= end_date
+                        )
 
-                documents = query.order_by(Document.created_at.desc()).all()
+                    documents = query.order_by(Document.created_at.desc()).all()
+                    st.caption(f"{len(documents)} Dokumente gefunden")
 
-                st.caption(f"{len(documents)} Dokumente")
-
+                # Dokumente anzeigen (beide Modi)
                 for doc in documents:
                     with st.container():
                         col1, col2, col3 = st.columns([3, 1, 1])
@@ -185,20 +275,34 @@ with tab_smart:
                             st.caption(f"{doc.sender or 'Unbekannt'} | {format_date(doc.document_date)}")
 
                         with col2:
-                            # Hervorgehobene Felder
                             if "invoice_amount" in highlight_fields and doc.invoice_amount:
                                 st.markdown(f"**:red[{format_currency(doc.invoice_amount)}]**")
                             elif doc.invoice_amount:
                                 st.write(format_currency(doc.invoice_amount))
 
                         with col3:
-                            if "iban" in highlight_fields and doc.iban:
-                                st.code(doc.iban)
-                            if st.button("📋", key=f"add_cart_{doc.id}", help="In Aktentasche"):
-                                if 'active_cart_items' not in st.session_state:
-                                    st.session_state.active_cart_items = []
-                                if doc.id not in st.session_state.active_cart_items:
-                                    st.session_state.active_cart_items.append(doc.id)
+                            btn_col1, btn_col2 = st.columns(2)
+                            with btn_col1:
+                                if st.button("📋", key=f"add_cart_{doc.id}", help="In Aktentasche"):
+                                    if 'active_cart_items' not in st.session_state:
+                                        st.session_state.active_cart_items = []
+                                    if doc.id not in st.session_state.active_cart_items:
+                                        st.session_state.active_cart_items.append(doc.id)
+                            with btn_col2:
+                                # Entfernen-Button nur im manuellen Modus
+                                if is_manual_mode and folder_id:
+                                    if st.button("❌", key=f"remove_manual_{doc.id}", help="Entfernen"):
+                                        sf_obj = session.get(SmartFolder, folder_id)
+                                        if sf_obj:
+                                            current_rules = sf_obj.filter_rules or {}
+                                            current_docs = current_rules.get("manual_docs", [])
+                                            if doc.id in current_docs:
+                                                current_docs.remove(doc.id)
+                                            current_rules["manual_docs"] = current_docs
+                                            sf_obj.filter_rules = current_rules
+                                            session.commit()
+                                            st.session_state.active_smart_folder["rules"]["manual_docs"] = current_docs
+                                            st.rerun()
 
                         st.divider()
         else:

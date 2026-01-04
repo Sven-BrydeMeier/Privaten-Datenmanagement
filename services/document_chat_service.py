@@ -370,6 +370,204 @@ Meine Frage: {message}"""
         except Exception as e:
             return {"error": str(e)}
 
+    def chat_multi(
+        self,
+        document_ids: List[int],
+        user_id: int,
+        message: str,
+        conversation_history: List[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Chat über mehrere Dokumente gleichzeitig
+
+        Args:
+            document_ids: Liste der Dokument-IDs
+            user_id: Benutzer-ID
+            message: Benutzer-Nachricht
+            conversation_history: Bisherige Konversation
+
+        Returns:
+            Dict mit Antwort und aktualisierter Konversation
+        """
+        session = get_session()
+        try:
+            # Dokumente laden (max 20 für Performance)
+            docs = session.query(Document).filter(
+                Document.id.in_(document_ids[:20]),
+                Document.user_id == user_id
+            ).all()
+
+            if not docs:
+                return {"error": "Keine Dokumente gefunden"}
+
+            # Kontext für alle Dokumente erstellen
+            doc_contexts = []
+            for i, doc in enumerate(docs, 1):
+                # Kompakterer Kontext für Multi-Dokument
+                parts = [f"[Dokument {i}]"]
+                parts.append(f"Titel: {doc.title or doc.filename}")
+                if doc.sender:
+                    parts.append(f"Absender: {doc.sender}")
+                if doc.document_date:
+                    parts.append(f"Datum: {doc.document_date.strftime('%d.%m.%Y')}")
+                if doc.category:
+                    parts.append(f"Kategorie: {doc.category}")
+                if doc.invoice_amount:
+                    parts.append(f"Betrag: {doc.invoice_amount:.2f} EUR")
+                if doc.ai_summary:
+                    parts.append(f"Zusammenfassung: {doc.ai_summary}")
+                if doc.ocr_text:
+                    # Kürzerer Text für Multi-Dokument
+                    text = doc.ocr_text[:2000] if len(doc.ocr_text) > 2000 else doc.ocr_text
+                    parts.append(f"Text: {text}")
+
+                doc_contexts.append("\n".join(parts))
+
+            combined_context = "\n\n---\n\n".join(doc_contexts)
+
+            # Info über Anzahl
+            total_count = len(document_ids)
+            shown_count = len(docs)
+            if total_count > shown_count:
+                combined_context += f"\n\n(Hinweis: Es wurden {shown_count} von {total_count} Dokumenten analysiert)"
+
+            # Conversation aufbauen
+            history = conversation_history or []
+
+            # System-Prompt für Multi-Dokument
+            multi_prompt = """Du bist ein hilfreicher Assistent für Dokumentenverwaltung.
+Du analysierst MEHRERE Dokumente gleichzeitig und beantwortest Fragen dazu.
+
+Bei Fragen zu mehreren Dokumenten:
+- Gib Übersichten und Zusammenfassungen
+- Identifiziere wichtige Dokumente
+- Finde Muster und Zusammenhänge
+- Liste offene Beträge oder Fristen
+- Verweise auf spezifische Dokumente mit [Dokument X]
+
+Sei präzise und strukturiert."""
+
+            # Mit verfügbarer KI-API antworten
+            if self.settings.anthropic_api_key:
+                return self._chat_multi_anthropic(combined_context, message, history, multi_prompt)
+            elif self.settings.openai_api_key:
+                return self._chat_multi_openai(combined_context, message, history, multi_prompt)
+            else:
+                return {"error": "Keine KI-API konfiguriert"}
+
+        finally:
+            session.close()
+
+    def _chat_multi_anthropic(
+        self,
+        doc_context: str,
+        message: str,
+        history: List[Dict[str, str]],
+        system_prompt: str
+    ) -> Dict[str, Any]:
+        """Multi-Dokument Chat mit Anthropic"""
+        try:
+            from anthropic import Anthropic
+
+            client = Anthropic(api_key=self.settings.anthropic_api_key)
+
+            messages = []
+            for entry in history[-6:]:  # Weniger Historie bei Multi-Dokument
+                messages.append({
+                    "role": entry["role"],
+                    "content": entry["content"]
+                })
+
+            messages.append({
+                "role": "user",
+                "content": f"""Hier sind die Dokumente:
+
+{doc_context}
+
+---
+
+Frage: {message}"""
+            })
+
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=3000,
+                system=system_prompt,
+                messages=messages
+            )
+
+            assistant_message = response.content[0].text
+
+            updated_history = history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": assistant_message}
+            ]
+
+            return {
+                "success": True,
+                "response": assistant_message,
+                "conversation": updated_history,
+                "model": "claude-3.5-sonnet"
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _chat_multi_openai(
+        self,
+        doc_context: str,
+        message: str,
+        history: List[Dict[str, str]],
+        system_prompt: str
+    ) -> Dict[str, Any]:
+        """Multi-Dokument Chat mit OpenAI"""
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=self.settings.openai_api_key)
+
+            messages = [{"role": "system", "content": system_prompt}]
+
+            for entry in history[-6:]:
+                messages.append({
+                    "role": entry["role"],
+                    "content": entry["content"]
+                })
+
+            messages.append({
+                "role": "user",
+                "content": f"""Hier sind die Dokumente:
+
+{doc_context}
+
+---
+
+Frage: {message}"""
+            })
+
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=3000
+            )
+
+            assistant_message = response.choices[0].message.content
+
+            updated_history = history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": assistant_message}
+            ]
+
+            return {
+                "success": True,
+                "response": assistant_message,
+                "conversation": updated_history,
+                "model": "gpt-4o"
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
+
 
 def get_document_chat_service() -> DocumentChatService:
     """Factory-Funktion für den DocumentChatService"""
