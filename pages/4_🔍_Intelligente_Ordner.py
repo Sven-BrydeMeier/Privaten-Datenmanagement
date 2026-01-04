@@ -66,11 +66,16 @@ with tab_smart:
             }
         ]
 
-        # Benutzerdefinierte Smart Folders laden
+        # Benutzerdefinierte Smart Folders laden (Daten extrahieren während Session offen)
         with get_db() as session:
-            custom_folders = session.query(SmartFolder).filter(
+            custom_folders_query = session.query(SmartFolder).filter(
                 SmartFolder.user_id == user_id
             ).all()
+            # Daten extrahieren während Session noch offen ist
+            custom_folders = [
+                {"id": cf.id, "name": cf.name, "filter_rules": cf.filter_rules}
+                for cf in custom_folders_query
+            ]
 
         st.markdown("**Vordefiniert**")
         for pf in predefined:
@@ -81,10 +86,10 @@ with tab_smart:
         st.markdown("**Benutzerdefiniert**")
 
         for cf in custom_folders:
-            if st.button(f"📂 {cf.name}", use_container_width=True, key=f"custom_{cf.id}"):
+            if st.button(f"📂 {cf['name']}", use_container_width=True, key=f"custom_{cf['id']}"):
                 st.session_state.active_smart_folder = {
-                    "name": cf.name,
-                    "rules": cf.filter_rules,
+                    "name": cf['name'],
+                    "rules": cf['filter_rules'],
                     "highlight": []
                 }
 
