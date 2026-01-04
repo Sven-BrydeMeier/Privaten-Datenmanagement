@@ -424,61 +424,200 @@ with tab_add:
 with tab_docs:
     st.subheader("Dokumente nach Immobilie")
 
-    with get_db() as session:
-        properties = session.query(Property).filter(
-            Property.user_id == user_id
-        ).order_by(Property.name).all()
+    # Prüfen ob Dokumentenansicht aktiv ist
+    if st.session_state.get('view_property_doc_id'):
+        view_doc_id = st.session_state.view_property_doc_id
 
-        if properties:
-            # Immobilie auswählen
-            prop_options = {0: "-- Alle Immobilien --"}
-            prop_options.update({p.id: f"🏠 {p.name or p.full_address}" for p in properties})
+        with get_db() as session:
+            doc = session.get(Document, view_doc_id)
+            if doc:
+                # Zurück-Button
+                if st.button("⬅️ Zurück zur Liste"):
+                    del st.session_state.view_property_doc_id
+                    st.rerun()
 
-            selected_prop_id = st.selectbox(
-                "Immobilie auswählen",
-                options=list(prop_options.keys()),
-                format_func=lambda x: prop_options.get(x, "")
-            )
+                st.divider()
+                st.subheader(f"📄 {doc.title or doc.filename}")
 
-            # Dokumente laden
-            query = session.query(Document).filter(
-                Document.user_id == user_id,
-                Document.property_id.isnot(None)
-            )
+                # Zusammenfassung
+                if doc.ai_summary:
+                    st.info(f"📝 **Zusammenfassung:** {doc.ai_summary}")
 
-            if selected_prop_id:
-                query = query.filter(Document.property_id == selected_prop_id)
+                # Dokument-Info und Aktionen
+                col_info, col_actions = st.columns([2, 1])
 
-            documents = query.order_by(Document.document_date.desc()).limit(100).all()
+                with col_info:
+                    st.markdown("### 📋 Dokument-Details")
+                    st.write(f"**Absender:** {doc.sender or '—'}")
+                    st.write(f"**Kategorie:** {doc.category or '—'}")
+                    st.write(f"**Datum:** {format_date(doc.document_date)}")
+                    if doc.invoice_amount:
+                        st.write(f"**Betrag:** {doc.invoice_amount:.2f} €")
+                    if doc.iban:
+                        st.code(doc.iban, language=None)
 
-            if documents:
-                st.write(f"**{len(documents)} Dokumente** gefunden")
+                    # OCR-Text anzeigen
+                    if doc.ocr_text:
+                        with st.expander("📝 Erkannter Text", expanded=False):
+                            st.text_area("OCR-Text", doc.ocr_text, height=300, disabled=True)
 
-                for doc in documents:
-                    col_doc, col_prop, col_date, col_cat = st.columns([3, 2, 1, 1])
+                with col_actions:
+                    st.markdown("### ⚡ Aktionen")
 
-                    with col_doc:
-                        st.write(f"📄 {doc.title or doc.filename}")
-                        if doc.sender:
-                            st.caption(f"Von: {doc.sender}")
+                    # Download
+                    from utils.helpers import get_document_file_content, document_file_exists
+                    from services.encryption import get_encryption_service
 
-                    with col_prop:
-                        if doc.property:
-                            st.caption(f"🏠 {doc.property.name or doc.property.city}")
-                        if doc.property_address:
-                            st.caption(f"📍 {doc.property_address[:50]}...")
+                    if doc.file_path and document_file_exists(doc.file_path):
+                        try:
+                            success, result = get_document_file_content(doc.file_path, user_id)
+                            if success:
+                                # Entschlüsseln nur wenn verschlüsselt
+                                if doc.is_encrypted and doc.encryption_iv:
+                                    encryption = get_encryption_service()
+                                    try:
+                                        file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                                    except:
+                                        file_data = result
+                                else:
+                                    file_data = result
 
-                    with col_date:
-                        st.caption(format_date(doc.document_date))
+                                st.download_button(
+                                    "⬇️ Herunterladen",
+                                    data=file_data,
+                                    file_name=doc.filename,
+                                    mime=doc.mime_type or "application/octet-stream",
+                                    use_container_width=True
+                                )
+                        except Exception as e:
+                            st.warning(f"Datei nicht verfügbar: {e}")
+                    else:
+                        st.warning("Datei nicht gefunden")
 
-                    with col_cat:
-                        st.caption(doc.category or "—")
+                    # Aktentasche
+                    if st.button("📋 In Aktentasche", use_container_width=True):
+                        if 'active_cart_items' not in st.session_state:
+                            st.session_state.active_cart_items = []
+                        if view_doc_id not in st.session_state.active_cart_items:
+                            st.session_state.active_cart_items.append(view_doc_id)
+                            st.success("✅ Zur Aktentasche hinzugefügt!")
+                        else:
+                            st.info("Bereits in der Aktentasche")
 
-                    st.divider()
+                    # Teilen
+                    st.markdown("---")
+                    st.markdown("**📤 Teilen**")
+
+                    share_title = doc.title or doc.filename
+                    share_lines = [f"📄 {share_title}"]
+                    if doc.sender:
+                        share_lines.append(f"Von: {doc.sender}")
+                    if doc.category:
+                        share_lines.append(f"Kategorie: {doc.category}")
+                    if doc.document_date:
+                        share_lines.append(f"Datum: {format_date(doc.document_date)}")
+                    if doc.invoice_amount:
+                        share_lines.append(f"Betrag: {doc.invoice_amount:.2f} €")
+                    share_text = "\n".join(share_lines)
+
+                    from utils.helpers import render_share_buttons
+                    render_share_buttons(share_title, share_text, key_prefix=f"prop_doc_{view_doc_id}")
+
+                    # Drucken
+                    st.markdown("---")
+                    if st.button("🖨️ Drucken", use_container_width=True):
+                        st.markdown("""
+                        <script>
+                        window.print();
+                        </script>
+                        """, unsafe_allow_html=True)
+                        st.info("Druckdialog wird geöffnet...")
+
+                    # Zur Dokumentenseite wechseln
+                    st.markdown("---")
+                    if st.button("📄 Im Dokumentenbereich öffnen", use_container_width=True):
+                        st.session_state.view_document_id = view_doc_id
+                        st.switch_page("pages/3_📁_Dokumente.py")
             else:
-                st.info("Keine Dokumente mit Immobilien-Zuordnung gefunden.")
-        else:
-            st.info("Legen Sie zuerst Immobilien an, um Dokumente zuordnen zu können.")
+                st.error("Dokument nicht gefunden")
+                del st.session_state.view_property_doc_id
+                st.rerun()
+    else:
+        # Normale Listenansicht
+        with get_db() as session:
+            properties = session.query(Property).filter(
+                Property.user_id == user_id
+            ).order_by(Property.name).all()
+
+            if properties:
+                # Immobilie auswählen
+                prop_options = {0: "-- Alle Immobilien --"}
+                prop_options.update({p.id: f"🏠 {p.name or p.full_address}" for p in properties})
+
+                selected_prop_id = st.selectbox(
+                    "Immobilie auswählen",
+                    options=list(prop_options.keys()),
+                    format_func=lambda x: prop_options.get(x, "")
+                )
+
+                # Dokumente laden
+                query = session.query(Document).filter(
+                    Document.user_id == user_id,
+                    Document.property_id.isnot(None)
+                )
+
+                if selected_prop_id:
+                    query = query.filter(Document.property_id == selected_prop_id)
+
+                documents = query.order_by(Document.document_date.desc()).limit(100).all()
+
+                if documents:
+                    st.write(f"**{len(documents)} Dokumente** gefunden")
+
+                    for doc in documents:
+                        col_doc, col_prop, col_date, col_actions = st.columns([3, 2, 1, 2])
+
+                        with col_doc:
+                            st.write(f"📄 {doc.title or doc.filename}")
+                            if doc.sender:
+                                st.caption(f"Von: {doc.sender}")
+
+                        with col_prop:
+                            if doc.property:
+                                st.caption(f"🏠 {doc.property.name or doc.property.city}")
+                            if doc.property_address:
+                                st.caption(f"📍 {doc.property_address[:40]}...")
+
+                        with col_date:
+                            st.caption(format_date(doc.document_date))
+                            if doc.category:
+                                st.caption(doc.category)
+
+                        with col_actions:
+                            btn_col1, btn_col2, btn_col3 = st.columns(3)
+                            with btn_col1:
+                                if st.button("👁️", key=f"view_pdoc_{doc.id}", help="Anzeigen"):
+                                    st.session_state.view_property_doc_id = doc.id
+                                    st.rerun()
+                            with btn_col2:
+                                if st.button("📋", key=f"cart_pdoc_{doc.id}", help="In Aktentasche"):
+                                    if 'active_cart_items' not in st.session_state:
+                                        st.session_state.active_cart_items = []
+                                    if doc.id not in st.session_state.active_cart_items:
+                                        st.session_state.active_cart_items.append(doc.id)
+                                        st.toast("✅ Zur Aktentasche hinzugefügt!")
+                                    else:
+                                        st.toast("Bereits in der Aktentasche")
+                            with btn_col3:
+                                if st.button("📄", key=f"goto_pdoc_{doc.id}", help="Im Dokumentenbereich öffnen"):
+                                    st.session_state.view_document_id = doc.id
+                                    st.switch_page("pages/3_📁_Dokumente.py")
+
+                        st.divider()
+                else:
+                    st.info("Keine Dokumente mit Immobilien-Zuordnung gefunden.")
+            else:
+                st.info("Legen Sie zuerst Immobilien an, um Dokumente zuordnen zu können.")
 
 
 # Lösch-Dialog
