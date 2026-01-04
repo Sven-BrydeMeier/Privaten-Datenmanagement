@@ -95,12 +95,19 @@ with tab_smart:
 
         # Neuen intelligenten Ordner erstellen
         with st.expander("➕ Neuer intelligenter Ordner"):
-            sf_name = st.text_input("Name", key="sf_name")
+            sf_name = st.text_input("Name", key="sf_name",
+                                    help="Der Name wird automatisch als Suchbegriff verwendet")
+            sf_search = st.text_input("Suchbegriff (optional)", key="sf_search",
+                                      help="Leer lassen = Name als Suchbegriff verwenden")
             sf_category = st.selectbox("Kategorie", ["Alle"] + DOCUMENT_CATEGORIES, key="sf_cat")
             sf_status = st.selectbox("Rechnungsstatus", ["Alle", "Offen", "Bezahlt"], key="sf_status")
 
             if st.button("Erstellen") and sf_name:
                 rules = {}
+                # Suchbegriff: Explizit angegeben oder Name verwenden
+                search_term = sf_search.strip() if sf_search.strip() else sf_name.strip()
+                rules["search_text"] = search_term
+
                 if sf_category != "Alle":
                     rules["category"] = sf_category
                 if sf_status == "Offen":
@@ -116,7 +123,7 @@ with tab_smart:
                     )
                     session.add(new_sf)
                     session.commit()
-                st.success("Erstellt!")
+                st.success(f"Erstellt! Sucht nach: '{search_term}'")
                 st.rerun()
 
     with col_content:
@@ -129,7 +136,25 @@ with tab_smart:
 
             # Dokumente nach Regeln filtern
             with get_db() as session:
+                from sqlalchemy import or_
+
                 query = session.query(Document).filter(Document.user_id == user_id)
+
+                # Textsuche: Sucht in Titel, Dateiname, Absender, OCR-Text, Betreff
+                if rules.get("search_text"):
+                    search_term = rules["search_text"].lower()
+                    search_pattern = f"%{search_term}%"
+                    query = query.filter(
+                        or_(
+                            Document.title.ilike(search_pattern),
+                            Document.filename.ilike(search_pattern),
+                            Document.sender.ilike(search_pattern),
+                            Document.ocr_text.ilike(search_pattern),
+                            Document.subject.ilike(search_pattern),
+                            Document.ai_summary.ilike(search_pattern)
+                        )
+                    )
+                    st.caption(f"🔍 Suche nach: **{rules['search_text']}**")
 
                 if rules.get("category"):
                     query = query.filter(Document.category == rules["category"])
