@@ -98,10 +98,57 @@ class StorageService:
 
     def _get_storage_path(self, user_id: int, filename: str, subfolder: str = "") -> str:
         """Generiert den Storage-Pfad für eine Datei."""
+        # Dateiname für Supabase bereinigen (keine Sonderzeichen, Umlaute, Leerzeichen)
+        safe_filename = self._sanitize_filename(filename)
+
         # Format: user_{id}/{subfolder}/{filename}
         if subfolder:
-            return f"user_{user_id}/{subfolder}/{filename}"
-        return f"user_{user_id}/{filename}"
+            return f"user_{user_id}/{subfolder}/{safe_filename}"
+        return f"user_{user_id}/{safe_filename}"
+
+    def _sanitize_filename(self, filename: str) -> str:
+        """Bereinigt Dateinamen für Supabase Storage (keine Sonderzeichen)."""
+        import unicodedata
+        import re
+
+        # Dateiendung extrahieren
+        if '.' in filename:
+            name, ext = filename.rsplit('.', 1)
+            ext = '.' + ext.lower()
+        else:
+            name = filename
+            ext = ''
+
+        # Unicode-Normalisierung (ä → ae, ü → ue, ß → ss)
+        replacements = {
+            'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss',
+            'Ä': 'Ae', 'Ö': 'Oe', 'Ü': 'Ue',
+            'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+            'á': 'a', 'à': 'a', 'â': 'a',
+            'ó': 'o', 'ò': 'o', 'ô': 'o',
+            'ú': 'u', 'ù': 'u', 'û': 'u',
+            'ñ': 'n', 'ç': 'c'
+        }
+        for old, new in replacements.items():
+            name = name.replace(old, new)
+
+        # Leerzeichen durch Unterstriche ersetzen
+        name = name.replace(' ', '_')
+
+        # Nur alphanumerische Zeichen, Unterstriche und Bindestriche erlauben
+        name = re.sub(r'[^a-zA-Z0-9_\-]', '', name)
+
+        # Doppelte Unterstriche entfernen
+        name = re.sub(r'_+', '_', name)
+
+        # Führende/trailing Unterstriche entfernen
+        name = name.strip('_')
+
+        # Fallback wenn Name leer
+        if not name:
+            name = 'file'
+
+        return name + ext
 
     def _get_local_path(self, user_id: int, filename: str, subfolder: str = "") -> Path:
         """Generiert den lokalen Pfad für eine Datei."""
