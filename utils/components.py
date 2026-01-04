@@ -9,7 +9,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # App-Version im Format JJ.MM.TT.HHMM (letzte 4 Ziffern = Uhrzeit der letzten Änderung)
-APP_VERSION = "26.01.04.0906"
+APP_VERSION = "26.01.04.0908"
 APP_NAME = "Privates Dokumentenmanagement"
 
 

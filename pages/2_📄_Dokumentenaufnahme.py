@@ -360,53 +360,64 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
             session.commit()
 
             try:
-                # OCR durchführen
+                # OCR durchführen (oder überspringen wenn bereits vorhanden)
                 full_text = ""
                 confidence = 0.0
                 ocr_error = None
+                ocr_skipped = False
 
-                if is_debug:
-                    debug_log("🔤 Starte OCR-Extraktion...", "info")
-
-                if document.mime_type == "application/pdf":
+                # Prüfen ob bereits OCR-Text vorhanden ist
+                if document.ocr_text and len(document.ocr_text.strip()) > 100:
+                    full_text = document.ocr_text
+                    confidence = document.ocr_confidence or 0.9
+                    ocr_skipped = True
                     if is_debug:
-                        debug_log("📑 PDF erkannt - extrahiere Text...", "info")
-                    try:
-                        results = ocr.extract_text_from_pdf(file_data)
-                        if results:
-                            full_text = "\n\n".join(text for text, _ in results)
-                            confidence = sum(conf for _, conf in results) / len(results)
-                            if is_debug:
-                                debug_log(f"✅ OCR erfolgreich: {len(full_text)} Zeichen, Konfidenz: {confidence:.2f}", "success")
-                        else:
-                            if is_debug:
-                                debug_log("⚠️ Kein Text extrahiert (möglicherweise Bild-PDF)", "warning")
-                    except Exception as ocr_err:
-                        ocr_error = str(ocr_err)[:200]
-                        if is_debug:
-                            debug_log(f"⚠️ PDF-OCR Fehler (wird übersprungen): {ocr_error}", "warning")
-                        # NICHT abbrechen - Dokument trotzdem speichern
-                        full_text = f"[OCR-Fehler: {ocr_error}]"
+                        debug_log(f"⏭️ OCR übersprungen - bereits {len(full_text)} Zeichen vorhanden", "info")
                 else:
-                    # Bild
                     if is_debug:
-                        debug_log("🖼️ Bild erkannt - starte Bild-OCR...", "info")
-                    try:
-                        from PIL import Image
-                        image = Image.open(io.BytesIO(file_data))
-                        if is_debug:
-                            debug_log(f"📐 Bildgröße: {image.size}", "info")
-                        full_text, confidence = ocr.extract_text_from_image(image)
-                        if is_debug:
-                            debug_log(f"✅ Bild-OCR erfolgreich: {len(full_text)} Zeichen", "success")
-                    except Exception as img_err:
-                        ocr_error = str(img_err)[:200]
-                        if is_debug:
-                            debug_log(f"⚠️ Bild-OCR Fehler (wird übersprungen): {ocr_error}", "warning")
-                        # NICHT abbrechen - Dokument trotzdem speichern
-                        full_text = f"[OCR-Fehler: {ocr_error}]"
+                        debug_log("🔤 Starte OCR-Extraktion...", "info")
 
-                document.ocr_text = full_text
+                    if document.mime_type == "application/pdf":
+                        if is_debug:
+                            debug_log("📑 PDF erkannt - extrahiere Text...", "info")
+                        try:
+                            results = ocr.extract_text_from_pdf(file_data)
+                            if results:
+                                full_text = "\n\n".join(text for text, _ in results)
+                                confidence = sum(conf for _, conf in results) / len(results)
+                                if is_debug:
+                                    debug_log(f"✅ OCR erfolgreich: {len(full_text)} Zeichen, Konfidenz: {confidence:.2f}", "success")
+                            else:
+                                if is_debug:
+                                    debug_log("⚠️ Kein Text extrahiert (möglicherweise Bild-PDF)", "warning")
+                        except Exception as ocr_err:
+                            ocr_error = str(ocr_err)[:200]
+                            if is_debug:
+                                debug_log(f"⚠️ PDF-OCR Fehler (wird übersprungen): {ocr_error}", "warning")
+                            # NICHT abbrechen - Dokument trotzdem speichern
+                            full_text = f"[OCR-Fehler: {ocr_error}]"
+                    else:
+                        # Bild
+                        if is_debug:
+                            debug_log("🖼️ Bild erkannt - starte Bild-OCR...", "info")
+                        try:
+                            from PIL import Image
+                            image = Image.open(io.BytesIO(file_data))
+                            if is_debug:
+                                debug_log(f"📐 Bildgröße: {image.size}", "info")
+                            full_text, confidence = ocr.extract_text_from_image(image)
+                            if is_debug:
+                                debug_log(f"✅ Bild-OCR erfolgreich: {len(full_text)} Zeichen", "success")
+                        except Exception as img_err:
+                            ocr_error = str(img_err)[:200]
+                            if is_debug:
+                                debug_log(f"⚠️ Bild-OCR Fehler (wird übersprungen): {ocr_error}", "warning")
+                            # NICHT abbrechen - Dokument trotzdem speichern
+                            full_text = f"[OCR-Fehler: {ocr_error}]"
+
+                # OCR-Text nur speichern wenn neu extrahiert
+                if not ocr_skipped:
+                    document.ocr_text = full_text
                 document.ocr_confidence = confidence
                 if ocr_error:
                     document.processing_notes = f"OCR-Fehler: {ocr_error}"
