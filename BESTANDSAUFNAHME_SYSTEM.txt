@@ -1,0 +1,613 @@
+================================================================================
+BESTANDSAUFNAHME: PRIVATES DOKUMENTENMANAGEMENT SYSTEM
+================================================================================
+Erstellt: 04.01.2026
+Projekt: /home/user/Privaten-Datenmanagement
+================================================================================
+
+================================================================================
+1. PROJEKTÜBERSICHT
+================================================================================
+
+Projekttyp:     Privates Dokumentenmanagement mit KI-Unterstützung
+Framework:      Streamlit (Python Web-Applikation)
+Sprache:        Python 3.x (deutschsprachige UI)
+Datenbank:      PostgreSQL (Cloud via Supabase) / SQLite (lokal)
+Speicher:       Supabase Storage + lokales Fallback
+
+================================================================================
+2. VERZEICHNISSTRUKTUR
+================================================================================
+
+/home/user/Privaten-Datenmanagement/
+├── streamlit_app.py              # Haupt-Einstiegspunkt
+├── config/
+│   └── settings.py               # Konfiguration, API-Keys, Pfade
+├── database/
+│   ├── models.py                 # SQLAlchemy Datenmodelle
+│   ├── extended_models.py        # Erweiterte Modelle
+│   └── db.py                     # Datenbankverbindungen & Migrationen
+├── services/                     # Business-Logik (37 Services)
+│   ├── cloud_sync_service.py     # Cloud-Synchronisation
+│   ├── storage_service.py        # Supabase/Local Storage
+│   ├── ocr.py                    # Texterkennung
+│   ├── document_classifier.py    # KI-Kategorisierung
+│   ├── document_intelligence_service.py  # Metadaten-Extraktion
+│   ├── document_chat_service.py  # KI-Chat mit Dokumenten
+│   ├── ai_service.py             # OpenAI/Anthropic Integration
+│   ├── search_service.py         # Whoosh Volltextsuche
+│   ├── encryption.py             # AES-256-GCM Verschlüsselung
+│   ├── backup_service.py         # Backup & Restore
+│   ├── finance_service.py        # Finanzberichte
+│   ├── invoice_matching_service.py  # Rechnungsabgleich
+│   ├── banking_service.py        # Bankverbindungen
+│   ├── tax_service.py            # Steuerberechnungen
+│   └── [22 weitere Services]
+├── pages/                        # UI-Seiten (25 Seiten)
+│   ├── 1_📊_Dashboard.py
+│   ├── 2_📄_Dokumentenaufnahme.py
+│   ├── 3_📁_Dokumente.py
+│   ├── 4_🔍_Intelligente_Ordner.py
+│   ├── 5_📅_Kalender.py
+│   ├── 6_📧_E-Mail.py
+│   ├── 7_💰_Finanzen.py
+│   ├── 8_⚙️_Einstellungen.py
+│   ├── 9_🎤_Diktierfunktion.py
+│   ├── 10_📑_Vertraege.py
+│   ├── 11_💬_Dokument_Chat.py
+│   ├── 12_🤖_Automatisierung.py
+│   ├── 13_📈_Finanz_Dashboard.py
+│   ├── 15_🛡️_Garantien.py
+│   ├── 16_🏥_Versicherungen.py
+│   ├── 17_💳_Abonnements.py
+│   ├── 18_🏠_Inventar.py
+│   ├── 19_📝_Vorlagen.py
+│   ├── 20_🚗_Kilometerlogbuch.py
+│   ├── 21_📊_Steuer_Report.py
+│   ├── 22_💾_Backup.py
+│   ├── 23_🏘️_Immobilien.py
+│   ├── 24_👥_Entitäten.py
+│   ├── 25_🎯_Feldmarkierung.py
+│   └── 50_🔧_Diagnose.py
+├── utils/
+│   ├── helpers.py                # Hilfsfunktionen
+│   ├── components.py             # Wiederverwendbare UI-Komponenten
+│   ├── pdf_utils.py              # PDF-Verarbeitung
+│   └── theme.py                  # UI-Theming
+└── data/                         # Lokale Datenspeicherung
+    ├── documents/                # Dokumentdateien
+    ├── temp/                     # Temporäre Dateien
+    ├── search_index/             # Whoosh Suchindizes
+    └── docmanagement.db          # SQLite-Datenbank (lokal)
+
+================================================================================
+3. DATENBANK-SCHEMA
+================================================================================
+
+DATENBANK-UNTERSTÜTZUNG:
+- SQLite (lokal, Standard)
+- PostgreSQL (via Streamlit Secrets oder Umgebungsvariablen)
+- MySQL (kompatibel)
+- Supabase (Cloud-gehostetes PostgreSQL)
+
+KERN-TABELLEN:
+
+users
+- id, email, password_hash, encryption_key
+- name, created_at, last_login
+- Benutzerkonten mit Verschlüsselungskeys
+
+documents (Haupttabelle)
+- id, user_id, filename, title
+- file_path, file_size, content_hash, mime_type
+- is_encrypted, encryption_iv
+- ocr_text, ai_summary
+- category, sender, document_date
+- invoice_amount, invoice_currency, invoice_number
+- invoice_due_date, invoice_status
+- contract_number, contract_start, contract_end
+- contract_notice_period
+- iban, bic, customer_number, reference_number
+- folder_id, property_id, property_address
+- status (pending, processed, failed, manual_review)
+- is_deleted, deleted_at
+- created_at, updated_at
+
+folders
+- id, user_id, name, parent_id
+- is_system, icon, color
+- Hierarchische Ordnerstruktur
+
+smart_folders
+- id, user_id, name
+- filter_rules (JSON), query_json (erweitertes Query-Format)
+- entity_id, show_aggregations, aggregation_fields
+- sort_by, sort_order
+- cached_count, cache_updated_at
+- Dynamische Filter-Ordner
+
+entities
+- id, user_id, name, entity_type
+- (person, vehicle, supplier, property, organization, project)
+- metadata (JSON), created_at
+- Flexible Entitätenverwaltung
+
+document_entities
+- document_id, entity_id, relationship_type
+- Verknüpfung Dokumente <-> Entitäten
+
+bank_accounts / bank_connections / bank_transactions
+- Bankkonten und Transaktionen (Nordigen/GoCardless)
+
+insurances / insurance_claims
+- Versicherungspolicen und Schadensfälle
+
+warranties
+- Garantien mit Ablaufdaten
+
+subscriptions
+- Abonnements und wiederkehrende Kosten
+
+receipts
+- Belege und Kassenbons
+
+ERWEITERTE TABELLEN (extended_models.py):
+- cloud_sync_connections, cloud_sync_logs
+- document_versions, document_templates
+- vehicles, mileage_trips
+- inventory_items
+- family_groups, family_members
+- backup_logs
+- shared_documents, document_comments
+
+================================================================================
+4. SERVICES-ÜBERSICHT
+================================================================================
+
+DOKUMENT-VERARBEITUNG:
+
+ocr.py (688 Zeilen)
+- Tesseract OCR (lokal) + Cloud-APIs
+- Bildvorverarbeitung für bessere Erkennung
+- Spezialbehandlung für Kassenbelege
+- Konfidenzwertung, Mehrsprachig (DE+EN)
+
+document_classifier.py (1.287 Zeilen)
+- Intelligente Kategorisierung mit 150+ Mustern
+- Prioritätsbasiertes Pattern-Matching
+- Untertypen (z.B. KFZ-Versicherung, Stromrechnung)
+- Erklärbarkeit der Entscheidungen
+- Ordnervorschläge basierend auf Klassifikation
+
+document_intelligence_service.py (934 Zeilen)
+- Metadaten-Extraktion:
+  - Absender/Adresserkennung
+  - Datumsextraktion (mehrere Formate)
+  - Betrags-/IBAN-/BIC-Erkennung
+  - Versicherungsnummern, Policennummern
+  - Vertragsdetails (Beginn/Ende/Kündigungsfrist)
+- Erkennung von 100+ Versicherungsgesellschaften
+- Abonnement-Mustererkennung
+
+ai_service.py (435 Zeilen)
+- Duale KI-Unterstützung:
+  - OpenAI (GPT-4, GPT-3.5)
+  - Anthropic (Claude)
+- Textextraktion & Analyse
+- Zusammenfassungsgenerierung
+- Frage-Antwort zu Dokumenten
+
+document_chat_service.py (577 Zeilen)
+- Konversationeller Chat über Dokumentinhalte
+- Einzel- oder Multi-Dokument-Chat
+- Kontextbewusste Antworten
+- API-Key-Laden aus Secrets/Umgebungsvariablen
+
+CLOUD & SPEICHER:
+
+cloud_sync_service.py (2.818 Zeilen)
+- Multi-Provider-Unterstützung:
+  - Dropbox (OAuth2, Datei-Sync)
+  - Google Drive (OAuth2, Ordner-Monitoring)
+  - OneDrive (vorbereitet)
+  - Nextcloud (vorbereitet)
+- Auto-Sync-Fähigkeiten
+- Duplikaterkennung via Content-Hash
+- Import-Filterung (Dateityp, Größe)
+
+storage_service.py (428 Zeilen)
+- Hybrid Cloud + Lokaler Speicher:
+  - Supabase Storage (primär)
+  - AWS S3 kompatibel
+  - Lokales Dateisystem (Fallback)
+- Dateiverschlüsselung
+- Öffentliche URL-Generierung
+- Benutzer-isolierte Speicherpfade
+
+SUCHE & INDEXIERUNG:
+
+search_service.py (294 Zeilen)
+- Whoosh Volltextsuchmaschine
+- Multi-Feld-Suche (Titel, Inhalt, Absender, Beträge, IBANs)
+- Benutzer-spezifische Indizes
+- Paginierung
+- Spezialisierte Suchen (Beträge, IBANs)
+
+SICHERHEIT:
+
+encryption.py (211 Zeilen)
+- AES-256-GCM authentifizierte Verschlüsselung
+- Key-Ableitung aus Passwörtern (PBKDF2, 100.000 Iterationen)
+- Pro-Datei Nonce für Sicherheit
+- Dateiname als Additional Authenticated Data (AAD)
+- Passwort-Hashing mit bcrypt
+
+================================================================================
+5. DOKUMENTEN-VERARBEITUNGSFLUSS
+================================================================================
+
+Upload/Scan
+    ↓
+Content-Hash-Prüfung (Duplikaterkennung)
+    ↓
+Verschlüsselung (AES-256-GCM)
+    ↓
+Speicherung (Cloud oder Lokal)
+    ↓
+OCR-Verarbeitung (Tesseract oder API)
+    ↓
+Metadaten-Extraktion (DocumentIntelligenceService)
+    ├── Absendererkennung
+    ├── Datumsextraktion
+    ├── Betrags-/IBAN-Extraktion
+    └── Dokumenttypidentifikation
+    ↓
+Automatische Klassifikation (DocumentClassifier)
+    ├── Pattern-Matching (150+ Muster)
+    ├── Ordnervorschlag
+    └── Erklärungsgenerierung
+    ↓
+Smart-Folder-Indexierung
+    ├── Whoosh Volltextindex
+    ├── Datenbankindex
+    └── Such-Metadaten-Cache
+    ↓
+Entitäten-Verknüpfung (Auto-Erkennung)
+    ├── Versicherungsgesellschaften
+    ├── Fahrzeugzuordnung
+    └── Personenidentifikation
+    ↓
+Workflow-Automatisierung (optional)
+    ├── Zahlungsbenachrichtigungen
+    ├── Fristenalarme
+    └── Folgeaktionen
+    ↓
+Abgeschlossen & Gespeichert
+
+================================================================================
+6. INTELLIGENTE ORDNER (SMART FOLDERS)
+================================================================================
+
+STANDORT: pages/4_🔍_Intelligente_Ordner.py
+
+VORDEFINIERTE ORDNER:
+- 📬 Offene Rechnungen
+- ⏰ Fristen diese Woche
+- 📅 Verträge (ablaufend)
+- 🏠 Versicherungen
+
+BENUTZERDEFINIERTE ORDNER:
+
+Auto-Modus:
+- Automatische suchbasierte Filterung
+- Ordnername wird als Suchbegriff verwendet
+- Sucht in: Titel, Dateiname, Absender, OCR-Text, Betreff, KI-Zusammenfassung
+
+Manueller Modus:
+- Benutzer-kuratierte Sammlungen
+- Dokumente manuell hinzufügen/entfernen
+
+FILTER-REGELN (JSON):
+{
+  "mode": "auto" | "manual",
+  "search_text": "Suchbegriff",
+  "category": "Rechnung",
+  "invoice_status": ["open", "overdue"],
+  "manual_docs": [1, 2, 3]
+}
+
+ERWEITERTES QUERY-FORMAT (query_json):
+{
+  "operator": "AND",
+  "conditions": [
+    {"field": "category", "op": "=", "value": "Rechnung"},
+    {"field": "invoice_status", "op": "IN", "value": ["open", "overdue"]},
+    {"field": "document_date", "op": ">=", "value": "2024-01-01"},
+    {"field": "entity_id", "op": "=", "value": 5}
+  ]
+}
+
+QUERY-OPERATOREN:
+- Gleichheit: =, !=
+- Vergleich: >, >=, <, <=
+- Enthaltung: IN, NOT IN
+- Text: CONTAINS, STARTS_WITH
+- Null-Prüfungen: IS_NULL, IS_NOT_NULL
+
+AKTENTASCHEN (Carts):
+- Dokumentensammlungen für Workflows
+- Temporäre Gruppierung für Verarbeitung
+- Multi-Level-Sortierung & Notizen
+
+================================================================================
+7. DOKUMENT-CHAT
+================================================================================
+
+STANDORT: pages/11_💬_Dokument_Chat.py + services/document_chat_service.py
+
+CHAT-BEREICHE:
+- 📄 Einzelnes Dokument
+- 📁 Ordner
+- 🏷️ Kategorie
+- 🔍 Intelligenter Ordner
+- 🗄️ Alle Dokumente
+
+FUNKTIONEN:
+- Konversationelles Q&A über Dokumentinhalte
+- Kontextbewusste Antworten
+- Multi-Dokument-Analyse (max. 20 Dokumente)
+- Schnellaktionen: Zusammenfassung, Handlungsbedarf
+
+API-UNTERSTÜTZUNG:
+- Anthropic Claude (claude-3-5-sonnet-20241022)
+- OpenAI GPT-4o
+
+API-KEY-LADEN (Priorität):
+1. Streamlit Secrets
+2. Umgebungsvariablen
+3. Lokale Einstellungen (config.json)
+
+================================================================================
+8. KONFIGURATION & EINSTELLUNGEN
+================================================================================
+
+STANDORT: config/settings.py
+
+API-KEYS:
+- openai_api_key
+- anthropic_api_key
+- ocr_api_key
+
+E-MAIL-EINSTELLUNGEN:
+- SMTP: Server, Port, Username, Password
+- IMAP: Server, Port, Username, Password
+
+CLOUD-SYNCHRONISATION:
+- Google Drive: Client-ID, Client-Secret, Tokens
+- Outlook: Client-ID, Client-Secret
+
+BANKING:
+- Nordigen: Secret-ID, Secret-Key, Redirect-URL
+
+BENACHRICHTIGUNGEN:
+- notification_email
+- notify_days_before_deadline
+- notify_birthday_days_before
+
+VERSCHLÜSSELUNG:
+- encryption_enabled (Standard: true)
+
+UI-EINSTELLUNGEN:
+- theme (light/dark)
+- language (de)
+- items_per_page (20)
+
+PAPIERKORB:
+- trash_retention_hours (48)
+- auto_cleanup_trash (true)
+
+TEXT-TO-SPEECH:
+- tts_voice (nova, alloy, echo, fable, onyx, shimmer)
+- tts_model (tts-1, tts-1-hd)
+- tts_speed (0.25 - 4.0)
+
+================================================================================
+9. VERSCHLÜSSELUNG & SICHERHEIT
+================================================================================
+
+ALGORITHMUS: AES-256-GCM (Galois/Counter Mode)
+
+PARAMETER:
+- Key Size: 256 Bit
+- Nonce Size: 96 Bit (12 Bytes)
+- Salt Size: 128 Bit (16 Bytes)
+- PBKDF2 Iterationen: 100.000
+
+FEATURES:
+- Authentifizierte Verschlüsselung (erkennt Manipulation)
+- Dateiname als Additional Authenticated Data (AAD)
+- Pro-Dokument Nonce
+- Passwort-basierte Key-Ableitung
+- Bcrypt Passwort-Hashing
+
+VERSCHLÜSSELUNGSFLUSS:
+Datei-Daten + Dateiname
+    ↓
+Zufällige Nonce generieren
+    ↓
+AES-256-GCM Verschlüsselung (Dateiname als AAD)
+    ↓
+Speichern: [Nonce + Ciphertext]
+    ↓
+Entschlüsselung (umgekehrt):
+    Dateiname-AAD verifizieren → Mit Nonce entschlüsseln
+
+================================================================================
+10. DOKUMENT-KATEGORIEN
+================================================================================
+
+VORDEFINIERTE KATEGORIEN:
+- Rechnung
+- Vertrag
+- Versicherung
+- Darlehen
+- Rentenbescheid
+- Lebensversicherung
+- Kontoauszug
+- Lohnabrechnung
+- Steuerbescheid
+- Mahnung
+- Kündigung
+- Angebot
+- Bestellung
+- Lieferschein
+- Gutschrift
+- Sonstiges
+
+SYSTEM-ORDNER:
+- Posteingang (Inbox)
+- Archiv
+- Papierkorb
+
+STANDARD-ORDNER:
+- Verträge
+- Darlehen
+- Versicherungen
+- Rentenbescheide
+- Lebensversicherungen
+- Finanzen
+- Steuern
+
+================================================================================
+11. ABHÄNGIGKEITEN (requirements.txt)
+================================================================================
+
+streamlit>=1.28.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0    # PostgreSQL
+redis>=5.0.0               # Redis/Upstash Cache
+supabase>=2.0.0            # Supabase Storage
+cryptography>=41.0.0
+PyPDF2>=3.0.0
+Pillow>=10.0.0
+openai>=1.0.0
+anthropic>=0.8.0
+python-dotenv>=1.0.0
+bcrypt>=4.1.0
+pandas>=2.0.0
+plotly>=5.18.0
+python-dateutil>=2.8.0
+icalendar>=5.0.0
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+aiosmtplib>=3.0.0
+imapclient>=2.3.0
+whoosh>=2.7.4
+numpy>=1.24.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+pdf2image>=1.16.0
+PyMuPDF>=1.23.0
+pycryptodome>=3.19.0
+pytesseract>=0.3.10
+reportlab>=4.0.0
+streamlit-drawable-canvas>=0.9.3
+python-docx>=1.1.0        # Word-Dokument Vorschau
+openpyxl>=3.1.0           # Excel-Dokument Vorschau
+
+================================================================================
+12. EXTERNE SERVICES
+================================================================================
+
+KI-APIS:
+- OpenAI API (GPT-4, GPT-3.5)
+- Anthropic API (Claude 3)
+
+CLOUD-SPEICHER:
+- Supabase (PostgreSQL + Storage)
+- Dropbox API
+- Google Drive API
+
+BANKING:
+- Nordigen/GoCardless Banking API
+
+OCR:
+- Tesseract OCR (lokal)
+- Cloud OCR APIs (optional)
+
+================================================================================
+13. LOKALE DATENSPEICHERUNG
+================================================================================
+
+/data/documents/     - Dokumentdateien (verschlüsselt)
+/data/temp/          - Temporäre Uploads
+/data/search_index/  - Whoosh Suchindizes (pro Benutzer)
+/data/config.json    - Lokale Einstellungen
+/data/docmanagement.db - SQLite-Datenbank (lokal)
+
+================================================================================
+14. BEKANNTE FIXES & ÄNDERUNGEN (aktuell)
+================================================================================
+
+KÜRZLICH BEHOBEN:
+
+1. DetachedInstanceError in Smart Folders
+   - Problem: SQLAlchemy-Objekte nach Session-Schließung zugegriffen
+   - Lösung: Daten in Python-Dicts extrahieren während Session offen
+
+2. Dokument-Chat API-Key-Laden
+   - Problem: API-Keys nur aus config.json geladen, nicht aus Secrets
+   - Lösung: get_api_key() Funktion verwenden für korrektes Laden aus:
+     1. Streamlit Secrets
+     2. Umgebungsvariablen
+     3. Lokale Einstellungen
+
+3. Smart Folders Such-Funktion
+   - Problem: Ordnername wurde nicht als Suchbegriff verwendet
+   - Lösung: search_text-Regel hinzugefügt, die Ordnername nutzt
+
+4. Smart Folders Modi
+   - Hinzugefügt: Auswahl zwischen Auto-Modus (Suche) und Manuellem Modus
+
+5. Dokument-Vorschau
+   - Hinzugefügt: In-Browser Vorschau für PDF, Excel, Word, Bilder
+   - Inline-Anzeige direkt unter dem ausgewählten Dokument
+
+6. Duplikaterkennung beim Import
+   - Hinzugefügt: Content-Hash-Prüfung, Überspringen bereits vorhandener Dokumente
+
+7. Verschlüsselungs-Flags für Cloud-Importe
+   - Problem: is_encrypted=True für unverschlüsselte Cloud-Dokumente
+   - Lösung: Explizit is_encrypted=False und encryption_iv=None setzen
+
+================================================================================
+15. SERVICES-MATRIX (vollständig)
+================================================================================
+
+Service                          | Zeilen | Zweck
+---------------------------------|--------|----------------------------------------
+cloud_sync_service.py            | 2.818  | Cloud-Integration (Dropbox, GDrive)
+document_classifier.py           | 1.287  | KI-Kategorisierung (150+ Muster)
+document_intelligence_service.py |   934  | Metadaten-Extraktion
+backup_service.py                |   655  | Daten-Backup
+ocr.py                           |   688  | Texterkennung
+voice_command_service.py         |   583  | Spracheingabe
+document_chat_service.py         |   577  | KI-Chat mit Dokumenten
+finance_service.py               |   547  | Finanztracking
+automation_service.py            |   491  | Workflow-Automatisierung
+banking_service.py               |   483  | Bank-Integration
+invoice_matching_service.py      |   480  | Rechnungsabgleich
+ai_service.py                    |   435  | KI-Integration (OpenAI/Anthropic)
+storage_service.py               |   428  | Dateispeicherung
+export_service.py                |   402  | Daten-Export
+template_service.py              |   397  | Dokumentvorlagen
+inventory_service.py             |   386  | Haushaltsinventar
+contract_service.py              |   370  | Vertragsverwaltung
+subscription_service.py          |   369  | Abonnement-Tracking
+search_service.py                |   294  | Volltextsuche
+encryption.py                    |   211  | AES-256 Verschlüsselung
++ 17 weitere Services
+
+================================================================================
+ENDE DER BESTANDSAUFNAHME
+================================================================================
