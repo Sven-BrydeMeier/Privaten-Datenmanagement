@@ -3,6 +3,7 @@ Dokumentenmanagement - Ordnerstruktur und Dokumentenverwaltung
 """
 import streamlit as st
 import io
+import base64
 from pathlib import Path
 import sys
 from datetime import datetime
@@ -16,10 +17,238 @@ from services.encryption import get_encryption_service
 from services.document_classifier import get_classifier
 from services.search_service import get_search_service
 from utils.helpers import format_currency, format_date, generate_share_link, truncate_text
-from utils.components import render_sidebar_cart, add_to_cart
 
 st.set_page_config(page_title="Dokumente", page_icon="📁", layout="wide")
 init_db()
+
+
+def render_inline_preview(doc: dict, user_id: int):
+    """Rendert eine kompakte Inline-Vorschau direkt unter dem Dokument"""
+    from utils.helpers import get_document_file_content, document_file_exists
+
+    with st.container():
+        st.markdown(
+            """<div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px;
+            border-left: 4px solid #007bff; margin: 10px 0;">""",
+            unsafe_allow_html=True
+        )
+
+        preview_col, action_col = st.columns([3, 1])
+
+        with preview_col:
+            if doc['file_path'] and document_file_exists(doc['file_path']):
+                try:
+                    success, result = get_document_file_content(doc['file_path'], user_id)
+                    if success:
+                        # Entschlüsseln wenn nötig
+                        if doc.get('is_encrypted') and doc.get('encryption_iv'):
+                            encryption = get_encryption_service()
+                            try:
+                                file_data = encryption.decrypt_file(result, doc['encryption_iv'], doc['filename'])
+                            except:
+                                file_data = result
+                        else:
+                            file_data = result
+
+                        mime_type = doc.get('mime_type') or ""
+                        filename_lower = doc['filename'].lower() if doc['filename'] else ""
+
+                        # PDF-Vorschau
+                        if "pdf" in mime_type or filename_lower.endswith(".pdf"):
+                            pdf_base64 = base64.b64encode(file_data).decode('utf-8')
+                            st.markdown(f'''
+                                <iframe src="data:application/pdf;base64,{pdf_base64}"
+                                    width="100%" height="400px"
+                                    style="border: 1px solid #ddd; border-radius: 5px;">
+                                </iframe>
+                            ''', unsafe_allow_html=True)
+
+                        # Excel-Vorschau
+                        elif filename_lower.endswith((".xlsx", ".xls")):
+                            try:
+                                import pandas as pd
+                                excel_file = io.BytesIO(file_data)
+                                df = pd.read_excel(excel_file)
+                                st.dataframe(df.head(20), use_container_width=True, height=300)
+                                st.caption(f"📊 {len(df)} Zeilen (Vorschau: erste 20)")
+                            except Exception as e:
+                                st.warning(f"Excel-Vorschau nicht möglich: {e}")
+
+                        # Word-Vorschau
+                        elif filename_lower.endswith(".docx"):
+                            try:
+                                from docx import Document as DocxDocument
+                                docx_file = io.BytesIO(file_data)
+                                doc_content = DocxDocument(docx_file)
+                                text_parts = [p.text for p in doc_content.paragraphs[:20] if p.text.strip()]
+                                st.markdown("\n\n".join(text_parts[:10]))
+                                if len(text_parts) > 10:
+                                    st.caption("... (gekürzt)")
+                            except Exception as e:
+                                st.warning(f"Word-Vorschau nicht möglich: {e}")
+
+                        # Bild-Vorschau
+                        elif mime_type.startswith('image/') or filename_lower.endswith((".jpg", ".jpeg", ".png", ".gif")):
+                            from PIL import Image
+                            img = Image.open(io.BytesIO(file_data))
+                            st.image(img, use_container_width=True)
+
+                        else:
+                            st.info(f"Vorschau für {mime_type or 'dieses Format'} nicht verfügbar")
+
+                        # Download
+                        st.download_button(
+                            "⬇️ Herunterladen",
+                            data=file_data,
+                            file_name=doc['filename'],
+                            mime=doc.get('mime_type') or "application/octet-stream",
+                            key=f"dl_inline_{doc['id']}"
+                        )
+                    else:
+                        st.error(f"Fehler: {result}")
+                except Exception as e:
+                    st.error(f"Vorschau-Fehler: {e}")
+            else:
+                st.warning("Datei nicht gefunden")
+
+        with action_col:
+            st.markdown("**Schnellaktionen**")
+
+            # In Aktentasche
+            if st.button("📋 Aktentasche", key=f"inline_cart_{doc['id']}"):
+                if 'active_cart_items' not in st.session_state:
+                    st.session_state.active_cart_items = []
+                if doc['id'] not in st.session_state.active_cart_items:
+                    st.session_state.active_cart_items.append(doc['id'])
+                    st.toast("✅ Hinzugefügt!")
+
+            # Erneut analysieren
+            if st.button("🔄 Analysieren", key=f"inline_reanalyze_{doc['id']}"):
+                st.session_state.reanalyze_doc_id = doc['id']
+                st.rerun()
+
+            # Vollansicht
+            if st.button("🔍 Vollansicht", key=f"inline_full_{doc['id']}"):
+                st.session_state.view_document_id = doc['id']
+                st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def reanalyze_document(doc_id: int, user_id: int) -> dict:
+    """Führt OCR und KI-Analyse erneut durch"""
+    from services.ocr import get_ocr_service
+    from services.ai_service import get_ai_service
+    from utils.helpers import get_document_file_content
+
+    result = {"success": False, "message": ""}
+
+    with get_db() as session:
+        doc = session.get(Document, doc_id)
+        if not doc:
+            return {"success": False, "message": "Dokument nicht gefunden"}
+
+        # Datei laden
+        success, file_result = get_document_file_content(doc.file_path, user_id)
+        if not success:
+            return {"success": False, "message": f"Datei nicht ladbar: {file_result}"}
+
+        # Entschlüsseln wenn nötig
+        if doc.is_encrypted and doc.encryption_iv:
+            encryption = get_encryption_service()
+            try:
+                file_data = encryption.decrypt_file(file_result, doc.encryption_iv, doc.filename)
+            except:
+                file_data = file_result
+        else:
+            file_data = file_result
+
+        # Status auf Processing setzen
+        doc.status = DocumentStatus.PROCESSING
+        # OCR-Text löschen um Neuanalyse zu erzwingen
+        doc.ocr_text = None
+        session.commit()
+
+        try:
+            ocr = get_ocr_service()
+            ai = get_ai_service()
+
+            # OCR durchführen
+            full_text = ""
+            confidence = 0.0
+
+            if doc.mime_type == "application/pdf":
+                results = ocr.extract_text_from_pdf(file_data)
+                if results:
+                    full_text = "\n\n".join(text for text, _ in results)
+                    confidence = sum(conf for _, conf in results) / len(results)
+            else:
+                from PIL import Image
+                image = Image.open(io.BytesIO(file_data))
+                full_text, confidence = ocr.extract_text_from_image(image)
+
+            doc.ocr_text = full_text
+            doc.ocr_confidence = confidence
+
+            # Metadaten extrahieren
+            metadata = ocr.extract_metadata(full_text)
+
+            if metadata.get('dates'):
+                doc.document_date = metadata['dates'][0]
+            if metadata.get('amounts'):
+                doc.invoice_amount = max(metadata['amounts'])
+            if metadata.get('ibans'):
+                doc.iban = metadata['ibans'][0]
+
+            # KI-Analyse wenn verfügbar
+            if ai.any_ai_available:
+                structured_data = ai.extract_structured_data(full_text)
+
+                if structured_data.get('sender'):
+                    doc.sender = structured_data['sender']
+                if structured_data.get('subject'):
+                    doc.subject = structured_data['subject']
+                    doc.title = structured_data['subject']
+                if structured_data.get('category'):
+                    doc.category = structured_data['category']
+                if structured_data.get('summary'):
+                    doc.ai_summary = structured_data['summary']
+                if structured_data.get('reference_number'):
+                    doc.reference_number = structured_data['reference_number']
+                if structured_data.get('customer_number'):
+                    doc.customer_number = structured_data['customer_number']
+                if structured_data.get('invoice_number'):
+                    doc.invoice_number = structured_data['invoice_number']
+
+            doc.status = DocumentStatus.COMPLETED
+            session.commit()
+
+            # Suchindex aktualisieren
+            search = get_search_service(user_id)
+            search.index_document(doc_id, {
+                'title': doc.title or doc.filename,
+                'content': doc.ocr_text or '',
+                'sender': doc.sender or '',
+                'category': doc.category or '',
+                'folder_id': doc.folder_id,
+                'document_date': doc.document_date,
+                'amounts': [doc.invoice_amount] if doc.invoice_amount else [],
+                'ibans': [doc.iban] if doc.iban else [],
+                'created_at': doc.created_at
+            })
+
+            return {"success": True, "message": "Analyse erfolgreich abgeschlossen"}
+
+        except Exception as e:
+            doc.status = DocumentStatus.ERROR
+            doc.processing_notes = str(e)[:500]
+            session.commit()
+            return {"success": False, "message": f"Fehler: {str(e)[:200]}"}
+
+
+# Sidebar mit Aktentasche
+from utils.components import render_sidebar_cart, add_to_cart
+render_sidebar_cart()
 
 
 def build_folder_tree(session, user_id: int, include_root: bool = False) -> list:
@@ -271,8 +500,8 @@ with col_docs:
 
             st.markdown("---")
 
-    # Suchleiste
-    search_col, filter_col = st.columns([3, 1])
+    # Suchleiste und Filter
+    search_col, filter_col, page_size_col = st.columns([3, 1, 1])
 
     with search_col:
         search_query = st.text_input("🔍 Suchen...", placeholder="Stichwort, Betrag, IBAN...")
@@ -283,6 +512,16 @@ with col_docs:
             options=["Alle"] + DOCUMENT_CATEGORIES,
             key="filter_category"
         )
+
+    with page_size_col:
+        page_size_options = {"10": 10, "20": 20, "50": 50, "100": 100, "Alle": 9999}
+        page_size_label = st.selectbox(
+            "Pro Seite",
+            options=list(page_size_options.keys()),
+            index=0,
+            key="page_size_select"
+        )
+        page_size = page_size_options[page_size_label]
 
     # Dokumente laden
     with get_db() as session:
@@ -322,7 +561,18 @@ with col_docs:
                     Document.sender.ilike(f'%{search_query}%')
                 )
 
-        documents = query.order_by(Document.created_at.desc()).limit(50).all()
+        # Gesamtzahl für Pagination
+        total_count = query.count()
+
+        # Pagination
+        current_page = st.session_state.get('doc_page', 1)
+        total_pages = max(1, (total_count + page_size - 1) // page_size)
+        if current_page > total_pages:
+            current_page = 1
+            st.session_state.doc_page = 1
+
+        offset = (current_page - 1) * page_size
+        documents = query.order_by(Document.created_at.desc()).offset(offset).limit(page_size).all()
 
         # Aktuellen Ordnernamen anzeigen
         if current_folder_id:
@@ -331,77 +581,322 @@ with col_docs:
         else:
             st.subheader("📄 Alle Dokumente")
 
-        st.caption(f"{len(documents)} Dokumente")
+        # Pagination Info und Aktionen-Leiste
+        header_col1, header_col2 = st.columns([2, 2])
+        with header_col1:
+            start_doc = offset + 1 if documents else 0
+            end_doc = min(offset + page_size, total_count)
+            st.caption(f"Zeige {start_doc}-{end_doc} von {total_count} Dokumenten")
 
-        # Dokumentenliste
+        # Multi-Select initialisieren
+        if 'selected_docs' not in st.session_state:
+            st.session_state.selected_docs = set()
+
+        with header_col2:
+            # Batch-Aktionen wenn Dokumente ausgewählt
+            if st.session_state.selected_docs:
+                sel_count = len(st.session_state.selected_docs)
+                action_cols = st.columns([2, 1, 1, 1, 1])
+                with action_cols[0]:
+                    st.markdown(f"**{sel_count} ausgewählt**")
+                with action_cols[1]:
+                    if st.button("🔄 Erneut analysieren", key="batch_reanalyze", help="OCR und KI-Analyse erneut durchführen"):
+                        st.session_state.batch_reanalyze = list(st.session_state.selected_docs)
+                        st.rerun()
+                with action_cols[2]:
+                    if st.button("📋 Kopieren", key="batch_copy"):
+                        st.session_state.batch_copy = list(st.session_state.selected_docs)
+                        st.rerun()
+                with action_cols[3]:
+                    if st.button("🗑️ Löschen", key="batch_delete"):
+                        st.session_state.batch_delete = list(st.session_state.selected_docs)
+                        st.rerun()
+                with action_cols[4]:
+                    if st.button("✖️ Auswahl aufheben", key="clear_selection"):
+                        st.session_state.selected_docs = set()
+                        st.rerun()
+
+        # Dokumentenliste mit Inline-Vorschau
         if documents:
+            # Dokumente als Dicts extrahieren für Verwendung außerhalb der Session
+            doc_list = []
             for doc in documents:
-                with st.container():
-                    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                doc_list.append({
+                    'id': doc.id,
+                    'title': doc.title,
+                    'filename': doc.filename,
+                    'file_path': doc.file_path,
+                    'mime_type': doc.mime_type,
+                    'is_encrypted': doc.is_encrypted,
+                    'encryption_iv': doc.encryption_iv,
+                    'status': doc.status,
+                    'sender': doc.sender,
+                    'category': doc.category,
+                    'document_date': doc.document_date,
+                    'invoice_amount': doc.invoice_amount,
+                    'invoice_status': doc.invoice_status,
+                    'iban': doc.iban
+                })
 
-                    with col1:
-                        # Status-Icon
-                        if doc.status == DocumentStatus.COMPLETED:
-                            status = "✓"
-                        elif doc.status == DocumentStatus.PROCESSING:
-                            status = "⏳"
-                        elif doc.status == DocumentStatus.ERROR:
-                            status = "❌"
-                        else:
-                            status = "📄"
+    # Jetzt außerhalb der DB-Session die Dokumente anzeigen
+    if documents:
+        for doc in doc_list:
+            with st.container():
+                col_check, col1, col2, col3, col4 = st.columns([0.3, 3, 1, 1, 1])
 
-                        st.markdown(f"**{status} {doc.title or doc.filename}**")
-                        meta_parts = []
-                        if doc.sender:
-                            meta_parts.append(doc.sender)
-                        if doc.category:
-                            meta_parts.append(doc.category)
-                        if doc.document_date:
-                            meta_parts.append(format_date(doc.document_date))
-                        st.caption(" | ".join(meta_parts) if meta_parts else "Keine Metadaten")
+                with col_check:
+                    is_selected = doc['id'] in st.session_state.selected_docs
+                    if st.checkbox("", value=is_selected, key=f"sel_{doc['id']}", label_visibility="collapsed"):
+                        st.session_state.selected_docs.add(doc['id'])
+                    else:
+                        st.session_state.selected_docs.discard(doc['id'])
 
-                    with col2:
-                        if doc.invoice_amount:
-                            st.markdown(f"**{format_currency(doc.invoice_amount)}**")
-                            if doc.invoice_status == InvoiceStatus.OPEN:
-                                st.caption("🔴 Offen")
-                            elif doc.invoice_status == InvoiceStatus.PAID:
-                                st.caption("✅ Bezahlt")
+                with col1:
+                    # Status-Icon
+                    if doc['status'] == DocumentStatus.COMPLETED:
+                        status = "✓"
+                    elif doc['status'] == DocumentStatus.PROCESSING:
+                        status = "⏳"
+                    elif doc['status'] == DocumentStatus.ERROR:
+                        status = "❌"
+                    else:
+                        status = "📄"
 
-                    with col3:
-                        if doc.iban:
-                            st.code(doc.iban[:12] + "...")
+                    st.markdown(f"**{status} {doc['title'] or doc['filename']}**")
+                    meta_parts = []
+                    if doc['sender']:
+                        meta_parts.append(doc['sender'])
+                    if doc['category']:
+                        meta_parts.append(doc['category'])
+                    if doc['document_date']:
+                        meta_parts.append(format_date(doc['document_date']))
+                    st.caption(" | ".join(meta_parts) if meta_parts else "Keine Metadaten")
 
-                    with col4:
-                        # Aktionsmenü
+                with col2:
+                    if doc['invoice_amount']:
+                        st.markdown(f"**{format_currency(doc['invoice_amount'])}**")
+                        if doc['invoice_status'] == InvoiceStatus.OPEN:
+                            st.caption("🔴 Offen")
+                        elif doc['invoice_status'] == InvoiceStatus.PAID:
+                            st.caption("✅ Bezahlt")
+
+                with col3:
+                    if doc['iban']:
+                        st.code(doc['iban'][:12] + "...")
+
+                with col4:
+                    # Aktionsmenü
+                    btn_cols = st.columns(2)
+                    with btn_cols[0]:
+                        # Toggle Vorschau Button
+                        preview_key = f"preview_{doc['id']}"
+                        is_previewing = st.session_state.get(preview_key, False)
+                        if st.button("👁️" if not is_previewing else "✖️", key=f"toggle_{doc['id']}",
+                                    help="Vorschau anzeigen/schließen"):
+                            st.session_state[preview_key] = not is_previewing
+                            st.rerun()
+                    with btn_cols[1]:
                         with st.popover("⋮"):
-                            if st.button("👁️ Anzeigen", key=f"view_{doc.id}"):
-                                st.session_state.view_document_id = doc.id
+                            if st.button("🔄 Erneut analysieren", key=f"reanalyze_{doc['id']}"):
+                                st.session_state.reanalyze_doc_id = doc['id']
                                 st.rerun()
 
-                            if st.button("📋 In Aktentasche", key=f"cart_{doc.id}"):
+                            if st.button("📋 In Aktentasche", key=f"cart_{doc['id']}"):
                                 if 'active_cart_items' not in st.session_state:
                                     st.session_state.active_cart_items = []
-                                if doc.id not in st.session_state.active_cart_items:
-                                    st.session_state.active_cart_items.append(doc.id)
+                                if doc['id'] not in st.session_state.active_cart_items:
+                                    st.session_state.active_cart_items.append(doc['id'])
                                     st.toast("✅ Zur Aktentasche hinzugefügt!")
                                     st.rerun()
 
-                            if st.button("📂 Verschieben", key=f"move_{doc.id}"):
-                                st.session_state.move_document_id = doc.id
+                            if st.button("📂 Verschieben", key=f"move_{doc['id']}"):
+                                st.session_state.move_document_id = doc['id']
                                 st.rerun()
 
-                            if st.button("🔗 Teilen", key=f"share_{doc.id}"):
-                                link = generate_share_link(doc.id)
+                            if st.button("🔗 Teilen", key=f"share_{doc['id']}"):
+                                link = generate_share_link(doc['id'])
                                 st.code(link)
 
-                            if st.button("🗑️ Löschen", key=f"del_{doc.id}"):
-                                st.session_state.delete_document_id = doc.id
+                            if st.button("🗑️ Löschen", key=f"del_{doc['id']}"):
+                                st.session_state.delete_document_id = doc['id']
                                 st.rerun()
 
-                    st.divider()
+                # INLINE VORSCHAU - direkt unter dem Dokument
+                if st.session_state.get(f"preview_{doc['id']}", False):
+                    render_inline_preview(doc, user_id)
+
+                st.divider()
+
+        # Pagination Controls
+        if total_pages > 1:
+            st.markdown("---")
+            page_cols = st.columns([1, 3, 1])
+
+            with page_cols[0]:
+                if current_page > 1:
+                    if st.button("◀ Zurück", key="prev_page"):
+                        st.session_state.doc_page = current_page - 1
+                        st.rerun()
+
+            with page_cols[1]:
+                # Seitenauswahl
+                page_options = list(range(1, total_pages + 1))
+                selected_page = st.selectbox(
+                    "Seite",
+                    options=page_options,
+                    index=current_page - 1,
+                    key="page_select",
+                    label_visibility="collapsed"
+                )
+                if selected_page != current_page:
+                    st.session_state.doc_page = selected_page
+                    st.rerun()
+
+            with page_cols[2]:
+                if current_page < total_pages:
+                    if st.button("Weiter ▶", key="next_page"):
+                        st.session_state.doc_page = current_page + 1
+                        st.rerun()
+
+            st.caption(f"Seite {current_page} von {total_pages}")
+    else:
+        st.info("Keine Dokumente gefunden")
+
+# ============================================================
+# HANDLER FÜR EINZELDOKUMENT-NEUANALYSE
+# ============================================================
+if 'reanalyze_doc_id' in st.session_state:
+    doc_id = st.session_state.reanalyze_doc_id
+
+    with st.spinner(f"🔄 Analysiere Dokument {doc_id} erneut..."):
+        result = reanalyze_document(doc_id, user_id)
+
+    if result['success']:
+        st.success(f"✅ {result['message']}")
+    else:
+        st.error(f"❌ {result['message']}")
+
+    del st.session_state.reanalyze_doc_id
+    st.rerun()
+
+# ============================================================
+# HANDLER FÜR BATCH-NEUANALYSE
+# ============================================================
+if 'batch_reanalyze' in st.session_state:
+    doc_ids = st.session_state.batch_reanalyze
+
+    st.divider()
+    st.subheader(f"🔄 {len(doc_ids)} Dokumente erneut analysieren")
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    success_count = 0
+    error_count = 0
+
+    for i, doc_id in enumerate(doc_ids):
+        status_text.text(f"Analysiere Dokument {i+1}/{len(doc_ids)}...")
+        result = reanalyze_document(doc_id, user_id)
+
+        if result['success']:
+            success_count += 1
         else:
-            st.info("Keine Dokumente gefunden")
+            error_count += 1
+
+        progress_bar.progress((i + 1) / len(doc_ids))
+
+    status_text.empty()
+    st.success(f"✅ Fertig: {success_count} erfolgreich, {error_count} Fehler")
+
+    # Auswahl aufheben
+    st.session_state.selected_docs = set()
+    del st.session_state.batch_reanalyze
+    st.rerun()
+
+# ============================================================
+# HANDLER FÜR BATCH-LÖSCHEN
+# ============================================================
+if 'batch_delete' in st.session_state:
+    doc_ids = st.session_state.batch_delete
+
+    st.divider()
+    st.warning(f"⚠️ {len(doc_ids)} Dokumente in den Papierkorb verschieben?")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🗑️ Ja, in Papierkorb", type="primary", key="confirm_batch_delete"):
+            from services.trash_service import get_trash_service
+            trash_service = get_trash_service()
+
+            success_count = 0
+            for doc_id in doc_ids:
+                result = trash_service.move_to_trash(doc_id, user_id)
+                if result.get('success'):
+                    success_count += 1
+
+            st.success(f"✅ {success_count} Dokumente in den Papierkorb verschoben")
+            st.session_state.selected_docs = set()
+            del st.session_state.batch_delete
+            st.rerun()
+
+    with col2:
+        if st.button("❌ Abbrechen", key="cancel_batch_delete"):
+            del st.session_state.batch_delete
+            st.rerun()
+
+# ============================================================
+# HANDLER FÜR BATCH-KOPIEREN
+# ============================================================
+if 'batch_copy' in st.session_state:
+    doc_ids = st.session_state.batch_copy
+
+    st.divider()
+    st.subheader(f"📋 {len(doc_ids)} Dokumente kopieren")
+
+    with get_db() as session:
+        folder_tree = build_folder_tree(session, user_id)
+
+    target_folder = st.selectbox(
+        "Zielordner auswählen",
+        options=[f['id'] for f in folder_tree],
+        format_func=lambda x: next((f['display_name'] for f in folder_tree if f['id'] == x), ""),
+        key="batch_copy_target"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📋 Kopieren (Referenzen)", type="primary", key="confirm_batch_copy"):
+            # Dokumente in virtuellen Ordner kopieren (Referenz)
+            from database.models import DocumentVirtualFolder
+
+            with get_db() as session:
+                success_count = 0
+                for doc_id in doc_ids:
+                    # Prüfen ob bereits im Zielordner
+                    existing = session.query(DocumentVirtualFolder).filter(
+                        DocumentVirtualFolder.document_id == doc_id,
+                        DocumentVirtualFolder.folder_id == target_folder
+                    ).first()
+
+                    if not existing:
+                        vf = DocumentVirtualFolder(
+                            document_id=doc_id,
+                            folder_id=target_folder
+                        )
+                        session.add(vf)
+                        success_count += 1
+
+                session.commit()
+
+            target_name = next((f['name'] for f in folder_tree if f['id'] == target_folder), "")
+            st.success(f"✅ {success_count} Referenzen in '{target_name}' erstellt")
+            st.session_state.selected_docs = set()
+            del st.session_state.batch_copy
+            st.rerun()
+
+    with col2:
+        if st.button("❌ Abbrechen", key="cancel_batch_copy"):
+            del st.session_state.batch_copy
+            st.rerun()
 
 # Dokument anzeigen Dialog - Erweitert
 if 'view_document_id' in st.session_state:
