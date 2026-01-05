@@ -375,9 +375,29 @@ st.divider()
 st.header("4️⃣ Supabase Storage")
 
 try:
-    from services.storage_service import get_storage_service
+    from services.storage_service import get_storage_service, SUPABASE_AVAILABLE
 
     storage = get_storage_service()
+
+    # Debug-Informationen
+    st.markdown("**Debug-Info:**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Supabase-Lib", "✅" if SUPABASE_AVAILABLE else "❌")
+    with col2:
+        st.metric("Cloud-Modus", "✅" if storage._use_cloud else "❌")
+    with col3:
+        st.metric("Client", "✅" if storage._supabase_client else "❌")
+
+    # Reinitialisierung-Button
+    if st.button("🔄 Storage neu initialisieren"):
+        result = storage.reinitialize()
+        if result:
+            st.success("✅ Cloud Storage wurde erfolgreich initialisiert!")
+            st.rerun()
+        else:
+            st.error("❌ Cloud Storage konnte nicht initialisiert werden. Prüfe die Secrets.")
+
     status = storage.get_status()
     st.json(status)
 

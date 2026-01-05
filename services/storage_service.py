@@ -46,12 +46,13 @@ class StorageService:
         self._initialized = False
         self._use_cloud = False
 
-    def _init_storage(self):
+    def _init_storage(self, force_reinit: bool = False):
         """Initialisiert Storage-Verbindung."""
-        if self._initialized:
+        if self._initialized and not force_reinit:
             return
 
         self._initialized = True
+        self._use_cloud = False  # Reset bei Reinitialisierung
 
         if not SUPABASE_AVAILABLE:
             logger.info("Supabase-Bibliothek nicht installiert, verwende lokalen Speicher")
@@ -89,6 +90,19 @@ class StorageService:
                 self._supabase_client = None
         else:
             logger.info("Keine Supabase-Credentials konfiguriert, verwende lokalen Speicher")
+
+    def reinitialize(self) -> bool:
+        """
+        Erzwingt eine Neuinitialisierung des Storage.
+        Nützlich wenn Streamlit Secrets erst später verfügbar werden.
+
+        Returns:
+            True wenn Cloud Storage jetzt verfügbar ist
+        """
+        self._initialized = False
+        self._init_storage(force_reinit=True)
+        logger.info(f"Storage reinitialisiert: use_cloud={self._use_cloud}")
+        return self._use_cloud
 
     @property
     def is_cloud_storage(self) -> bool:
@@ -185,12 +199,24 @@ class StorageService:
 
         self._init_storage()
 
+        # DEBUG: Zeige Storage-Status bei jedem Upload
+        logger.info(f"[UPLOAD DEBUG] use_cloud={self._use_cloud}, supabase_client={'OK' if self._supabase_client else 'NONE'}, bucket={self._bucket_name}")
+
         # Stelle sicher dass wir Bytes haben
         if hasattr(file_data, 'read'):
             file_data = file_data.read()
 
         storage_path = self._get_storage_path(user_id, filename, subfolder)
         cloud_path = f"cloud://{self._bucket_name}/{storage_path}"
+
+        # Falls Cloud nicht initialisiert aber Supabase verfügbar, versuche Reinitialisierung
+        if not self._use_cloud and SUPABASE_AVAILABLE:
+            logger.info("[UPLOAD DEBUG] Cloud nicht aktiv, versuche Reinitialisierung...")
+            self.reinitialize()
+            if self._use_cloud:
+                logger.info("[UPLOAD DEBUG] Reinitialisierung erfolgreich, Cloud jetzt aktiv!")
+            else:
+                logger.warning("[UPLOAD DEBUG] Reinitialisierung fehlgeschlagen, bleibe bei lokalem Speicher")
 
         # Cloud Storage (Supabase) mit Retry-Logik
         if self._use_cloud and self._supabase_client:
@@ -256,7 +282,11 @@ class StorageService:
 
             # Alle Retries fehlgeschlagen
             if last_error:
-                logger.warning(f"Cloud Upload nach {max_retries} Versuchen fehlgeschlagen, verwende lokalen Speicher")
+                logger.warning(f"[UPLOAD DEBUG] Cloud Upload nach {max_retries} Versuchen fehlgeschlagen: {last_error}")
+                logger.warning(f"[UPLOAD DEBUG] Fallback auf lokalen Speicher für: {filename}")
+        else:
+            # use_cloud ist False oder supabase_client ist None
+            logger.info(f"[UPLOAD DEBUG] Cloud nicht verfügbar (use_cloud={self._use_cloud}), speichere lokal: {filename}")
 
         # Lokaler Speicher (Fallback)
         try:
