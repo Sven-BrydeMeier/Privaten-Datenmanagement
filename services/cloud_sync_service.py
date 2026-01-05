@@ -1450,9 +1450,17 @@ class CloudSyncService:
         return final_result or {"success": False, "error": "Keine Ergebnisse"}
 
     def sync_connection_with_progress(self, connection_id: int,
-                                       process_documents: bool = True):
+                                       process_documents: bool = True,
+                                       batch_size: int = 0,
+                                       batch_offset: int = 0):
         """
         Führt Synchronisation mit Fortschritts-Updates durch (Generator).
+
+        Args:
+            connection_id: ID der Cloud-Verbindung
+            process_documents: Ob Dokumente verarbeitet werden sollen
+            batch_size: Maximale Anzahl Dateien pro Durchlauf (0 = alle)
+            batch_offset: Ab welcher Datei begonnen werden soll
 
         Yields:
             Dict mit Fortschrittsinformationen:
@@ -1468,6 +1476,7 @@ class CloudSyncService:
             - estimated_remaining_seconds: Geschätzte Restzeit
             - success: True wenn abgeschlossen und erfolgreich
             - error: Fehlermeldung falls vorhanden
+            - batch_info: Informationen zum Batch-Modus
         """
         import time
         start_time = time.time()
@@ -1489,7 +1498,14 @@ class CloudSyncService:
             "skipped_files": 0,
             "errors": [],
             "error": None,
-            "synced_files": []
+            "synced_files": [],
+            "batch_info": {
+                "batch_size": batch_size,
+                "batch_offset": batch_offset,
+                "has_more": False,
+                "next_offset": 0,
+                "total_files_found": 0
+            }
         }
 
         yield result.copy()
@@ -1576,6 +1592,29 @@ class CloudSyncService:
 
                 result["files_total"] = len(files_to_sync)
                 logger.info(f"Dateien gefunden: {result['files_total']}")
+
+                # Batch-Info speichern
+                result["batch_info"]["total_files_found"] = len(files_to_sync)
+
+                # Batch-Modus: Nur einen Teil der Dateien verarbeiten
+                if batch_size > 0:
+                    total_files = len(files_to_sync)
+                    # Offset anwenden
+                    files_to_sync = files_to_sync[batch_offset:]
+                    # Auf batch_size begrenzen
+                    if len(files_to_sync) > batch_size:
+                        files_to_sync = files_to_sync[:batch_size]
+                        result["batch_info"]["has_more"] = True
+                        result["batch_info"]["next_offset"] = batch_offset + batch_size
+                    else:
+                        result["batch_info"]["has_more"] = (batch_offset + len(files_to_sync)) < total_files
+
+                    result["files_total"] = len(files_to_sync)
+                    logger.info(f"Batch-Modus: Verarbeite {len(files_to_sync)} von {total_files} Dateien (Offset: {batch_offset})")
+
+                    # Kurze Pause am Anfang um API-Limits zu vermeiden
+                    if batch_offset > 0:
+                        time.sleep(1)
 
                 if result["files_total"] == 0:
                     result["phase"] = "completed"
