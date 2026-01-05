@@ -2281,6 +2281,7 @@ class CloudSyncService:
             Tuple von (Document, Liste von Status-Updates)
         """
         processing_steps = []
+        repair_existing_doc = None  # Für Reparatur fehlender Dateien
 
         # Duplikat-Prüfung: Existiert bereits ein Dokument mit gleichem Inhalt?
         if content_hash:
@@ -2326,12 +2327,6 @@ class CloudSyncService:
                     })
                     # Markieren dass wir ein bestehendes Dokument reparieren
                     repair_existing_doc = existing_doc
-        else:
-            repair_existing_doc = None
-
-        # Variable für Reparatur-Modus (wenn nicht im if-Block gesetzt)
-        if 'repair_existing_doc' not in locals():
-            repair_existing_doc = None
 
         # Verwende Storage Service für hybride Speicherung
         try:
