@@ -164,7 +164,8 @@ class StorageService:
         filename: str,
         user_id: int,
         subfolder: str = "",
-        content_type: str = "application/octet-stream"
+        content_type: str = "application/octet-stream",
+        max_retries: int = 3
     ) -> Tuple[bool, str]:
         """
         Lädt eine Datei in den Storage hoch.
@@ -175,10 +176,13 @@ class StorageService:
             user_id: Benutzer-ID
             subfolder: Optionaler Unterordner
             content_type: MIME-Type
+            max_retries: Maximale Anzahl Versuche bei Fehlern
 
         Returns:
             Tuple (success: bool, path_or_error: str)
         """
+        import time
+
         self._init_storage()
 
         # Stelle sicher dass wir Bytes haben
@@ -186,35 +190,73 @@ class StorageService:
             file_data = file_data.read()
 
         storage_path = self._get_storage_path(user_id, filename, subfolder)
+        cloud_path = f"cloud://{self._bucket_name}/{storage_path}"
 
-        # Cloud Storage (Supabase)
+        # Cloud Storage (Supabase) mit Retry-Logik
         if self._use_cloud and self._supabase_client:
-            try:
-                # Upload zu Supabase
-                response = self._supabase_client.storage.from_(self._bucket_name).upload(
-                    path=storage_path,
-                    file=file_data,
-                    file_options={"content-type": content_type}
-                )
-                logger.info(f"Datei in Cloud hochgeladen: {storage_path}")
-                return True, f"cloud://{self._bucket_name}/{storage_path}"
-            except Exception as e:
-                error_msg = str(e)
-                # Wenn Datei bereits existiert, versuche Update
-                if "already exists" in error_msg.lower() or "duplicate" in error_msg.lower():
-                    try:
-                        self._supabase_client.storage.from_(self._bucket_name).update(
-                            path=storage_path,
-                            file=file_data,
-                            file_options={"content-type": content_type}
-                        )
-                        return True, f"cloud://{self._bucket_name}/{storage_path}"
-                    except Exception as e2:
-                        logger.error(f"Cloud Update Fehler: {e2}")
-                        # Fallback auf lokal
-                else:
-                    logger.error(f"Cloud Upload Fehler: {e}")
-                    # Fallback auf lokal
+            last_error = None
+
+            for attempt in range(max_retries):
+                try:
+                    # Upload zu Supabase
+                    response = self._supabase_client.storage.from_(self._bucket_name).upload(
+                        path=storage_path,
+                        file=file_data,
+                        file_options={"content-type": content_type}
+                    )
+
+                    # WICHTIG: Verifiziere dass die Datei wirklich existiert
+                    if self._verify_cloud_file_exists(storage_path):
+                        logger.info(f"Datei in Cloud hochgeladen und verifiziert: {storage_path}")
+                        return True, cloud_path
+                    else:
+                        logger.warning(f"Upload scheinbar erfolgreich aber Datei nicht verifizierbar: {storage_path}")
+                        # Retry
+                        if attempt < max_retries - 1:
+                            time.sleep(1)  # Kurze Pause vor Retry
+                            continue
+                        # Nach max Retries: Fallback auf lokal
+                        break
+
+                except Exception as e:
+                    last_error = str(e)
+
+                    # Wenn Datei bereits existiert, versuche Update
+                    if "already exists" in last_error.lower() or "duplicate" in last_error.lower():
+                        try:
+                            self._supabase_client.storage.from_(self._bucket_name).update(
+                                path=storage_path,
+                                file=file_data,
+                                file_options={"content-type": content_type}
+                            )
+                            if self._verify_cloud_file_exists(storage_path):
+                                logger.info(f"Datei in Cloud aktualisiert: {storage_path}")
+                                return True, cloud_path
+                        except Exception as e2:
+                            logger.error(f"Cloud Update Fehler: {e2}")
+
+                    # Rate Limiting erkennen
+                    elif "rate" in last_error.lower() or "limit" in last_error.lower() or "429" in last_error:
+                        logger.warning(f"Rate Limiting erkannt, warte {2 ** attempt} Sekunden...")
+                        time.sleep(2 ** attempt)  # Exponentielles Backoff
+                        continue
+
+                    # Timeout oder Netzwerkfehler
+                    elif "timeout" in last_error.lower() or "connection" in last_error.lower():
+                        logger.warning(f"Netzwerkfehler bei Upload (Versuch {attempt + 1}/{max_retries}): {last_error}")
+                        if attempt < max_retries - 1:
+                            time.sleep(2 ** attempt)
+                            continue
+
+                    else:
+                        logger.error(f"Cloud Upload Fehler: {last_error}")
+
+                    # Bei anderen Fehlern: Fallback auf lokal
+                    break
+
+            # Alle Retries fehlgeschlagen
+            if last_error:
+                logger.warning(f"Cloud Upload nach {max_retries} Versuchen fehlgeschlagen, verwende lokalen Speicher")
 
         # Lokaler Speicher (Fallback)
         try:
@@ -226,6 +268,38 @@ class StorageService:
         except Exception as e:
             logger.error(f"Lokaler Speicher Fehler: {e}")
             return False, str(e)
+
+    def _verify_cloud_file_exists(self, storage_path: str) -> bool:
+        """
+        Verifiziert dass eine Datei wirklich in Supabase existiert.
+
+        Args:
+            storage_path: Der Pfad im Bucket
+
+        Returns:
+            True wenn die Datei existiert
+        """
+        if not self._supabase_client:
+            return False
+
+        try:
+            # Versuche die Datei-Metadaten abzurufen
+            # list() mit dem Verzeichnis und prüfen ob die Datei drin ist
+            dir_path = "/".join(storage_path.split("/")[:-1])
+            file_name = storage_path.split("/")[-1]
+
+            files = self._supabase_client.storage.from_(self._bucket_name).list(dir_path)
+
+            for f in files:
+                if f.get("name") == file_name:
+                    return True
+
+            return False
+        except Exception as e:
+            logger.warning(f"Datei-Verifizierung fehlgeschlagen: {e}")
+            # Bei Fehlern nehmen wir an, dass die Datei existiert
+            # (besser als falsches Negativ)
+            return True
 
     def download_file(self, path: str, user_id: int = None) -> Tuple[bool, Union[bytes, str]]:
         """
