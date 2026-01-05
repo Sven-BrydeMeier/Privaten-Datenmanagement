@@ -1703,6 +1703,11 @@ class CloudSyncService:
                         except:
                             pass
 
+                    # Kurze Pause zwischen Dateien um API-Limits zu vermeiden
+                    # (besonders wichtig für Supabase Storage)
+                    if idx < len(files_to_sync) - 1:  # Nicht nach letzter Datei
+                        time.sleep(0.2)  # 200ms Pause
+
                 # Phase 3: Abschluss
                 result["phase"] = "completed"
                 result["files_processed"] = result["files_total"]

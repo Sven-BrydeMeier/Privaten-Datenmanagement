@@ -231,35 +231,18 @@ class StorageService:
                         file_options={"content-type": content_type}
                     )
 
-                    # WICHTIG: Verifiziere dass die Datei wirklich existiert
-                    if self._verify_cloud_file_exists(storage_path):
-                        logger.info(f"Datei in Cloud hochgeladen und verifiziert: {storage_path}")
-                        return True, cloud_path
-                    else:
-                        logger.warning(f"Upload scheinbar erfolgreich aber Datei nicht verifizierbar: {storage_path}")
-                        # Retry
-                        if attempt < max_retries - 1:
-                            time.sleep(1)  # Kurze Pause vor Retry
-                            continue
-                        # Nach max Retries: Fallback auf lokal
-                        break
+                    # Upload erfolgreich wenn keine Exception geworfen wurde
+                    # KEINE Verifizierung mehr - das verdoppelt die API-Calls und verursacht Timeouts
+                    logger.info(f"Datei in Cloud hochgeladen: {storage_path}")
+                    return True, cloud_path
 
                 except Exception as e:
                     last_error = str(e)
 
-                    # Wenn Datei bereits existiert, versuche Update
+                    # Wenn Datei bereits existiert, ist das auch OK
                     if "already exists" in last_error.lower() or "duplicate" in last_error.lower():
-                        try:
-                            self._supabase_client.storage.from_(self._bucket_name).update(
-                                path=storage_path,
-                                file=file_data,
-                                file_options={"content-type": content_type}
-                            )
-                            if self._verify_cloud_file_exists(storage_path):
-                                logger.info(f"Datei in Cloud aktualisiert: {storage_path}")
-                                return True, cloud_path
-                        except Exception as e2:
-                            logger.error(f"Cloud Update Fehler: {e2}")
+                        logger.info(f"Datei existiert bereits in Cloud: {storage_path}")
+                        return True, cloud_path
 
                     # Rate Limiting erkennen
                     elif "rate" in last_error.lower() or "limit" in last_error.lower() or "429" in last_error:
