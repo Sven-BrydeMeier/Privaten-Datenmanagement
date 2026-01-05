@@ -880,13 +880,17 @@ with tab_cloud:
                             st.caption(f"Letzte Sync: {conn.last_sync.strftime('%d.%m.%Y %H:%M')}")
 
                     with col_actions:
-                        # Batch-Modus Option
+                        # Batch-Modus Option - kleinere Batches für Stabilität
                         batch_mode = st.selectbox(
                             "Modus",
-                            options=["all", "batch25"],
-                            format_func=lambda x: "Alle Dateien" if x == "all" else "Batch (25 Dateien)",
+                            options=["batch10", "batch25", "all"],
+                            format_func=lambda x: {
+                                "batch10": "⭐ Batch (10 Dateien)",
+                                "batch25": "Batch (25 Dateien)",
+                                "all": "Alle (kann Timeout verursachen)"
+                            }.get(x, x),
                             key=f"batch_mode_{conn.id}",
-                            help="Batch-Modus: Nur 25 Dateien pro Durchlauf um API-Limits zu vermeiden"
+                            help="Kleinere Batches vermeiden Timeouts bei OCR. Empfohlen: 10 Dateien."
                         )
 
                         action_cols = st.columns(2)
@@ -894,7 +898,11 @@ with tab_cloud:
                             if st.button("🔄", key=f"sync_cloud_{conn.id}", help="Jetzt synchronisieren"):
                                 st.session_state[f"syncing_{conn.id}"] = True
                                 st.session_state[f"batch_mode_{conn.id}_active"] = batch_mode
-                                st.session_state[f"batch_offset_{conn.id}"] = st.session_state.get(f"batch_offset_{conn.id}", 0) if batch_mode == "batch25" else 0
+                                # Batch offset nur bei batch mode beibehalten
+                                if batch_mode in ["batch10", "batch25"]:
+                                    st.session_state[f"batch_offset_{conn.id}"] = st.session_state.get(f"batch_offset_{conn.id}", 0)
+                                else:
+                                    st.session_state[f"batch_offset_{conn.id}"] = 0
                                 st.rerun()
 
                         with action_cols[1]:
@@ -904,7 +912,7 @@ with tab_cloud:
                                 st.rerun()
 
                         # Batch-Fortschritt anzeigen
-                        if batch_mode == "batch25" and st.session_state.get(f"batch_offset_{conn.id}", 0) > 0:
+                        if batch_mode in ["batch10", "batch25"] and st.session_state.get(f"batch_offset_{conn.id}", 0) > 0:
                             st.caption(f"📊 Batch-Fortschritt: ab Datei {st.session_state.get(f'batch_offset_{conn.id}', 0)}")
                             if st.button("🔄 Zurücksetzen", key=f"reset_batch_{conn.id}", help="Batch von vorne beginnen"):
                                 st.session_state[f"batch_offset_{conn.id}"] = 0
@@ -936,8 +944,9 @@ with tab_cloud:
                         batch_info_display = st.empty()
 
                         # Batch-Parameter ermitteln
-                        active_batch_mode = st.session_state.get(f"batch_mode_{conn.id}_active", "all")
-                        batch_size = 25 if active_batch_mode == "batch25" else 0
+                        active_batch_mode = st.session_state.get(f"batch_mode_{conn.id}_active", "batch10")
+                        batch_sizes = {"batch10": 10, "batch25": 25, "all": 0}
+                        batch_size = batch_sizes.get(active_batch_mode, 10)
                         batch_offset = st.session_state.get(f"batch_offset_{conn.id}", 0) if batch_size > 0 else 0
 
                         final_result = None
