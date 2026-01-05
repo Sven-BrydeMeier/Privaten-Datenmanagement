@@ -299,22 +299,38 @@ class StorageService:
             logger.error(f"Lokaler Speicher Fehler: {e}")
             return False, str(e)
 
-    def _verify_cloud_file_exists(self, storage_path: str) -> bool:
+    def _verify_cloud_file_exists(self, storage_path: str, retry_delay: float = 0.5) -> bool:
         """
         Verifiziert dass eine Datei wirklich in Supabase existiert.
 
         Args:
             storage_path: Der Pfad im Bucket
+            retry_delay: Wartezeit vor Verifizierung (für Sync-Verzögerung)
 
         Returns:
             True wenn die Datei existiert
         """
+        import time
+
         if not self._supabase_client:
             return False
 
+        # Kurze Pause um Supabase Zeit zu geben, die Datei zu synchronisieren
+        if retry_delay > 0:
+            time.sleep(retry_delay)
+
         try:
-            # Versuche die Datei-Metadaten abzurufen
-            # list() mit dem Verzeichnis und prüfen ob die Datei drin ist
+            # Methode 1: Versuche die Datei direkt herunterzuladen (zuverlässiger als list())
+            try:
+                response = self._supabase_client.storage.from_(self._bucket_name).download(storage_path)
+                if response and len(response) > 0:
+                    logger.debug(f"Datei verifiziert via Download: {storage_path}")
+                    return True
+            except Exception as download_error:
+                # Download fehlgeschlagen, versuche list() als Fallback
+                logger.debug(f"Download-Verifizierung fehlgeschlagen: {download_error}")
+
+            # Methode 2: Fallback auf list() (kann bei großen Ordnern langsam sein)
             dir_path = "/".join(storage_path.split("/")[:-1])
             file_name = storage_path.split("/")[-1]
 
@@ -322,11 +338,14 @@ class StorageService:
 
             for f in files:
                 if f.get("name") == file_name:
+                    logger.debug(f"Datei verifiziert via list(): {storage_path}")
                     return True
 
+            # Beide Methoden haben die Datei nicht gefunden
+            logger.warning(f"Datei nicht verifizierbar nach Upload: {storage_path} (list() fand {len(files)} Dateien)")
             return False
         except Exception as e:
-            logger.warning(f"Datei-Verifizierung fehlgeschlagen: {e}")
+            logger.warning(f"Datei-Verifizierung Fehler: {e}")
             # Bei Fehlern nehmen wir an, dass die Datei existiert
             # (besser als falsches Negativ)
             return True
