@@ -301,17 +301,20 @@ class StorageService:
             # (besser als falsches Negativ)
             return True
 
-    def download_file(self, path: str, user_id: int = None) -> Tuple[bool, Union[bytes, str]]:
+    def download_file(self, path: str, user_id: int = None, max_retries: int = 3) -> Tuple[bool, Union[bytes, str]]:
         """
         Lädt eine Datei aus dem Storage herunter.
 
         Args:
             path: Pfad zur Datei (cloud:// oder lokaler Pfad)
             user_id: Benutzer-ID (für Zugriffskontrolle)
+            max_retries: Maximale Anzahl Versuche bei Fehlern
 
         Returns:
             Tuple (success: bool, data_or_error: bytes|str)
         """
+        import time
+
         self._init_storage()
 
         # Cloud Storage
@@ -319,17 +322,42 @@ class StorageService:
             if not self._supabase_client:
                 return False, "Cloud Storage nicht verfügbar"
 
-            try:
-                # Extrahiere Bucket und Pfad
-                parts = path.replace("cloud://", "").split("/", 1)
-                bucket = parts[0]
-                file_path = parts[1] if len(parts) > 1 else ""
+            # Extrahiere Bucket und Pfad
+            parts = path.replace("cloud://", "").split("/", 1)
+            bucket = parts[0]
+            file_path = parts[1] if len(parts) > 1 else ""
 
-                response = self._supabase_client.storage.from_(bucket).download(file_path)
-                return True, response
-            except Exception as e:
-                logger.error(f"Cloud Download Fehler: {e}")
-                return False, str(e)
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    response = self._supabase_client.storage.from_(bucket).download(file_path)
+                    return True, response
+
+                except Exception as e:
+                    last_error = str(e)
+
+                    # Resource temporarily unavailable - warte und retry
+                    if "Resource temporarily unavailable" in last_error or "Errno 11" in last_error:
+                        wait_time = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s
+                        logger.warning(f"Ressource nicht verfügbar, warte {wait_time}s (Versuch {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+
+                    # Rate limiting
+                    elif "429" in last_error or "rate" in last_error.lower():
+                        wait_time = 2 ** attempt  # 1s, 2s, 4s
+                        logger.warning(f"Rate Limit, warte {wait_time}s (Versuch {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+
+                    # Andere Fehler - nicht retrybar
+                    else:
+                        logger.error(f"Cloud Download Fehler: {last_error}")
+                        return False, last_error
+
+            # Alle Retries fehlgeschlagen
+            logger.error(f"Cloud Download nach {max_retries} Versuchen fehlgeschlagen: {last_error}")
+            return False, last_error or "Download fehlgeschlagen"
 
         # Lokaler Speicher
         try:

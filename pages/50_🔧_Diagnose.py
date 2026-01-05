@@ -481,16 +481,28 @@ try:
             accessible_docs = 0
 
             doc_issues = []
+            import time
 
-            for doc in docs:
+            # Fortschrittsanzeige für Cloud-Prüfung
+            progress_placeholder = st.empty()
+            storage = get_storage_service()
+
+            for i, doc in enumerate(docs):
                 file_path = doc.file_path or ""
 
                 if file_path.startswith("cloud://"):
                     cloud_docs += 1
-                    # Cloud-Dokument - prüfen ob abrufbar
+
+                    # Fortschritt anzeigen
+                    progress_placeholder.caption(f"Prüfe Cloud-Dokument {i+1}/{len(docs)}...")
+
+                    # Cloud-Dokument - prüfen ob abrufbar (mit Throttling)
                     try:
-                        storage = get_storage_service()
-                        success, _ = storage.download_file(file_path)
+                        # Kurze Pause zwischen Anfragen um Rate Limiting zu vermeiden
+                        if i > 0 and i % 5 == 0:
+                            time.sleep(0.3)
+
+                        success, _ = storage.download_file(file_path, max_retries=2)
                         if success:
                             accessible_docs += 1
                         else:
@@ -507,6 +519,8 @@ try:
                     else:
                         missing_docs += 1
                         doc_issues.append((doc.id, doc.filename, file_path, "Lokale Datei nicht gefunden"))
+
+            progress_placeholder.empty()
 
             # Statistik anzeigen
             col1, col2, col3, col4 = st.columns(4)
