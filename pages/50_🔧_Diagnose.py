@@ -552,6 +552,18 @@ try:
                     session.commit()
                     st.success(f"✅ {removed} Dokument-Einträge entfernt. Bitte erneut importieren!")
                     st.rerun()
+
+                # Reparatur anbieten - erneut synchronisieren
+                st.markdown("---")
+                st.markdown("**🔄 Alternative: Erneute Cloud-Synchronisation**")
+                st.markdown("""
+                Die fehlenden Dateien können erneut vom Cloud-Dienst (Google Drive) synchronisiert werden:
+                1. Gehen Sie zu **⚙️ Einstellungen → Cloud-Synchronisation**
+                2. Klicken Sie auf **🔄 Jetzt synchronisieren**
+                3. Wählen Sie **Vollständige Synchronisation**
+
+                Das System erkennt automatisch, welche Dateien fehlen und lädt sie erneut herunter.
+                """)
         else:
             st.info("Keine Dokumente in der Datenbank")
 

@@ -2290,15 +2290,48 @@ class CloudSyncService:
             ).first()
 
             if existing_doc:
-                logger.info(f"Duplikat übersprungen: {filename} (Hash: {content_hash[:16]}...)")
-                processing_steps.append({
-                    "step": "skipped",
-                    "detail": f"⏭️ Übersprungen - Dokument bereits vorhanden als '{existing_doc.title or existing_doc.filename}'"
-                })
-                # Dokument als COMPLETED markieren falls PENDING
-                if existing_doc.status == DocumentStatus.PENDING:
-                    existing_doc.status = DocumentStatus.COMPLETED
-                return existing_doc, processing_steps
+                # WICHTIG: Prüfen ob die Datei tatsächlich existiert!
+                file_exists = False
+                try:
+                    from services.storage_service import get_storage_service
+                    storage = get_storage_service()
+                    if existing_doc.file_path:
+                        if existing_doc.file_path.startswith("cloud://"):
+                            # Cloud-Datei prüfen
+                            success, _ = storage.download_file(existing_doc.file_path)
+                            file_exists = success
+                        else:
+                            # Lokale Datei prüfen
+                            file_exists = Path(existing_doc.file_path).exists()
+                except Exception as e:
+                    logger.warning(f"Datei-Existenzprüfung fehlgeschlagen: {e}")
+                    file_exists = False
+
+                if file_exists:
+                    logger.info(f"Duplikat übersprungen: {filename} (Hash: {content_hash[:16]}...)")
+                    processing_steps.append({
+                        "step": "skipped",
+                        "detail": f"⏭️ Übersprungen - Dokument bereits vorhanden als '{existing_doc.title or existing_doc.filename}'"
+                    })
+                    # Dokument als COMPLETED markieren falls PENDING
+                    if existing_doc.status == DocumentStatus.PENDING:
+                        existing_doc.status = DocumentStatus.COMPLETED
+                    return existing_doc, processing_steps
+                else:
+                    # Datei fehlt im Storage! Erneut hochladen und Pfad aktualisieren
+                    logger.warning(f"Datei fehlt für {existing_doc.filename}, lade erneut hoch...")
+                    processing_steps.append({
+                        "step": "repair",
+                        "detail": f"🔧 Datei fehlt - wird erneut hochgeladen"
+                    })
+                    # Markieren dass wir ein bestehendes Dokument reparieren
+                    repair_existing_doc = existing_doc
+        else:
+            repair_existing_doc = None
+
+        # Variable für Reparatur-Modus (wenn nicht im if-Block gesetzt)
+        if 'repair_existing_doc' not in locals():
+            repair_existing_doc = None
 
         # Verwende Storage Service für hybride Speicherung
         try:
@@ -2349,24 +2382,35 @@ class CloudSyncService:
                 "detail": f"💾 Datei lokal gespeichert"
             })
 
-        # Dokument in DB erstellen
+        # Dokument in DB erstellen oder bestehendes aktualisieren
         # is_encrypted=False: Cloud-importierte Dateien werden nicht verschlüsselt
-        doc = Document(
-            user_id=self.user_id,
-            folder_id=connection.local_folder_id,
-            title=Path(filename).stem,
-            filename=filename,
-            file_path=str(file_path),
-            file_size=file_size,
-            mime_type=self._get_mime_type(filename),
-            content_hash=content_hash,
-            status=DocumentStatus.PENDING if process_documents else DocumentStatus.COMPLETED,
-            category="Cloud-Import",
-            is_encrypted=False,
-            encryption_iv=None
-        )
+        if repair_existing_doc:
+            # Bestehendes Dokument aktualisieren (Reparatur-Modus)
+            doc = repair_existing_doc
+            doc.file_path = str(file_path)
+            processing_steps.append({
+                "step": "repaired",
+                "detail": f"✅ Dokument repariert - Datei neu verknüpft"
+            })
+            logger.info(f"Dokument {doc.id} repariert: neuer Pfad {file_path}")
+        else:
+            # Neues Dokument erstellen
+            doc = Document(
+                user_id=self.user_id,
+                folder_id=connection.local_folder_id,
+                title=Path(filename).stem,
+                filename=filename,
+                file_path=str(file_path),
+                file_size=file_size,
+                mime_type=self._get_mime_type(filename),
+                content_hash=content_hash,
+                status=DocumentStatus.PENDING if process_documents else DocumentStatus.COMPLETED,
+                category="Cloud-Import",
+                is_encrypted=False,
+                encryption_iv=None
+            )
+            session.add(doc)
 
-        session.add(doc)
         session.flush()
 
         # Intelligente Dokumentenverarbeitung wenn aktiviert
