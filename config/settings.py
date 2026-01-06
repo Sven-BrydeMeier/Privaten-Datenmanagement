@@ -248,12 +248,14 @@ DOCUMENT_CATEGORIES = [
     "Bestellung",
     "Lieferschein",
     "Gutschrift",
+    "E-Mail",
     "Sonstiges"
 ]
 
 # Standard-Ordnerstruktur
 DEFAULT_FOLDERS = [
     {"name": "Posteingang", "parent_id": None, "is_system": True},
+    {"name": "Emailverkehr", "parent_id": None, "is_system": False},
     {"name": "Verträge", "parent_id": None, "is_system": False},
     {"name": "Darlehen", "parent_id": None, "is_system": False},
     {"name": "Versicherungen", "parent_id": None, "is_system": False},

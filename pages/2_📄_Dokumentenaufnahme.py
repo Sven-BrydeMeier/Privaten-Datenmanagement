@@ -18,6 +18,7 @@ from services.ocr import get_ocr_service
 from services.ai_service import get_ai_service
 from services.document_classifier import get_classifier
 from services.search_service import get_search_service
+from services.email_parser_service import get_email_parser
 from utils.pdf_utils import get_pdf_processor
 from utils.helpers import format_currency, format_date, sanitize_filename, get_local_now
 from utils.components import render_sidebar_cart
@@ -278,9 +279,17 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
         f.write(encrypted_data)
 
     # Mime-Type bestimmen
-    mime_type = "application/pdf" if filename.lower().endswith('.pdf') else "image/jpeg"
-    if filename.lower().endswith('.png'):
+    lower_filename = filename.lower()
+    if lower_filename.endswith('.pdf'):
+        mime_type = "application/pdf"
+    elif lower_filename.endswith('.png'):
         mime_type = "image/png"
+    elif lower_filename.endswith('.eml'):
+        mime_type = "message/rfc822"
+    elif lower_filename.endswith('.jpg') or lower_filename.endswith('.jpeg'):
+        mime_type = "image/jpeg"
+    else:
+        mime_type = "application/octet-stream"
 
     # Posteingang-Ordner finden
     with get_db() as session:
@@ -375,9 +384,48 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                         debug_log(f"⏭️ OCR übersprungen - bereits {len(full_text)} Zeichen vorhanden", "info")
                 else:
                     if is_debug:
-                        debug_log("🔤 Starte OCR-Extraktion...", "info")
+                        debug_log("🔤 Starte Text-Extraktion...", "info")
 
-                    if document.mime_type == "application/pdf":
+                    # E-Mail (.eml) Verarbeitung
+                    if document.mime_type == "message/rfc822" or document.filename.lower().endswith('.eml'):
+                        if is_debug:
+                            debug_log("📧 E-Mail erkannt - parse Inhalt...", "info")
+                        try:
+                            email_parser = get_email_parser()
+                            parsed_email = email_parser.parse_eml(file_data)
+
+                            # Text aus E-Mail extrahieren
+                            full_text = parsed_email.get("full_text", "")
+                            confidence = 1.0  # E-Mail-Text ist exakt
+
+                            # E-Mail-Metadaten setzen
+                            if parsed_email.get("subject"):
+                                document.title = email_parser.create_document_title(parsed_email)
+                                document.subject = parsed_email["subject"]
+                            if parsed_email.get("from_address"):
+                                document.sender = email_parser.get_detected_sender(parsed_email)
+                                document.sender_address = parsed_email["from_address"]
+                            if parsed_email.get("date"):
+                                document.document_date = parsed_email["date"]
+
+                            # Kategorie auf E-Mail setzen
+                            document.category = "E-Mail"
+                            result['category'] = "E-Mail"
+
+                            if is_debug:
+                                debug_log(f"✅ E-Mail geparst: '{parsed_email.get('subject', 'Kein Betreff')}'", "success")
+                                debug_log(f"📬 Von: {parsed_email.get('from_address', 'Unbekannt')}", "info")
+                                if parsed_email.get("attachments"):
+                                    debug_log(f"📎 {len(parsed_email['attachments'])} Anhänge gefunden", "info")
+
+                        except Exception as email_err:
+                            ocr_error = str(email_err)[:200]
+                            if is_debug:
+                                debug_log(f"⚠️ E-Mail-Parsing Fehler: {ocr_error}", "warning")
+                            full_text = f"[E-Mail-Parsing-Fehler: {ocr_error}]"
+                            document.category = "E-Mail"
+
+                    elif document.mime_type == "application/pdf":
                         if is_debug:
                             debug_log("📑 PDF erkannt - extrahiere Text...", "info")
                         try:
@@ -769,9 +817,9 @@ with tab_upload:
     st.subheader("Einzelnes Dokument hochladen")
 
     uploaded_file = st.file_uploader(
-        "PDF oder Bild auswählen",
-        type=['pdf', 'jpg', 'jpeg', 'png'],
-        help="Unterstützte Formate: PDF, JPG, PNG"
+        "PDF, Bild oder E-Mail auswählen",
+        type=['pdf', 'jpg', 'jpeg', 'png', 'eml'],
+        help="Unterstützte Formate: PDF, JPG, PNG, EML (E-Mail)"
     )
 
     if uploaded_file:
@@ -1041,7 +1089,7 @@ with tab_folder:
 
     folder_files = st.file_uploader(
         "Dateien auswählen",
-        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
+        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'eml'],
         accept_multiple_files=True,
         key="multi_file_upload",
         help="Halten Sie Strg gedrückt um mehrere Dateien auszuwählen, oder Strg+A für alle"
@@ -1290,7 +1338,7 @@ with tab_folder:
 
     multi_files = st.file_uploader(
         "Dateien auswählen (Mehrfachauswahl möglich)",
-        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
+        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'eml'],
         accept_multiple_files=True,
         key="folder_multi_upload",
         help="Halten Sie Strg/Cmd gedrückt um mehrere Dateien auszuwählen"

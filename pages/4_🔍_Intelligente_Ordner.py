@@ -63,6 +63,11 @@ with tab_smart:
                 "name": "🏠 Versicherungen",
                 "rules": {"category": "Versicherung"},
                 "highlight": []
+            },
+            {
+                "name": "📧 Emailverkehr",
+                "rules": {"category": "E-Mail"},
+                "highlight": ["sender", "document_date"]
             }
         ]
 
