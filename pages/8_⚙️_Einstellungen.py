@@ -883,14 +883,15 @@ with tab_cloud:
                         # Batch-Modus Option - kleinere Batches für Stabilität
                         batch_mode = st.selectbox(
                             "Modus",
-                            options=["batch10", "batch25", "all"],
+                            options=["batch5", "batch10", "batch25", "all"],
                             format_func=lambda x: {
+                                "batch5": "🐢 Mini-Batch (5 Dateien)",
                                 "batch10": "⭐ Batch (10 Dateien)",
                                 "batch25": "Batch (25 Dateien)",
                                 "all": "Alle (kann Timeout verursachen)"
                             }.get(x, x),
                             key=f"batch_mode_{conn.id}",
-                            help="Kleinere Batches vermeiden Timeouts bei OCR. Empfohlen: 10 Dateien."
+                            help="Bei Abbrüchen: Kleineren Batch wählen. Mini-Batch (5) ist am stabilsten."
                         )
 
                         action_cols = st.columns(2)
@@ -899,7 +900,7 @@ with tab_cloud:
                                 st.session_state[f"syncing_{conn.id}"] = True
                                 st.session_state[f"batch_mode_{conn.id}_active"] = batch_mode
                                 # Batch offset nur bei batch mode beibehalten
-                                if batch_mode in ["batch10", "batch25"]:
+                                if batch_mode in ["batch5", "batch10", "batch25"]:
                                     st.session_state[f"batch_offset_{conn.id}"] = st.session_state.get(f"batch_offset_{conn.id}", 0)
                                 else:
                                     st.session_state[f"batch_offset_{conn.id}"] = 0
@@ -912,7 +913,7 @@ with tab_cloud:
                                 st.rerun()
 
                         # Batch-Fortschritt anzeigen
-                        if batch_mode in ["batch10", "batch25"] and st.session_state.get(f"batch_offset_{conn.id}", 0) > 0:
+                        if batch_mode in ["batch5", "batch10", "batch25"] and st.session_state.get(f"batch_offset_{conn.id}", 0) > 0:
                             st.caption(f"📊 Batch-Fortschritt: ab Datei {st.session_state.get(f'batch_offset_{conn.id}', 0)}")
                             if st.button("🔄 Zurücksetzen", key=f"reset_batch_{conn.id}", help="Batch von vorne beginnen"):
                                 st.session_state[f"batch_offset_{conn.id}"] = 0
@@ -945,52 +946,67 @@ with tab_cloud:
 
                         # Batch-Parameter ermitteln
                         active_batch_mode = st.session_state.get(f"batch_mode_{conn.id}_active", "batch10")
-                        batch_sizes = {"batch10": 10, "batch25": 25, "all": 0}
+                        batch_sizes = {"batch5": 5, "batch10": 10, "batch25": 25, "all": 0}
                         batch_size = batch_sizes.get(active_batch_mode, 10)
                         batch_offset = st.session_state.get(f"batch_offset_{conn.id}", 0) if batch_size > 0 else 0
 
                         final_result = None
-                        for progress in cloud_service.sync_connection_with_progress(
-                            conn.id,
-                            batch_size=batch_size,
-                            batch_offset=batch_offset
-                        ):
-                            final_result = progress
-                            phase = progress.get("phase", "")
-                            percent = progress.get("progress_percent", 0)
-                            sync_progress.progress(percent / 100)
+                        sync_error = None
+                        try:
+                            for progress in cloud_service.sync_connection_with_progress(
+                                conn.id,
+                                batch_size=batch_size,
+                                batch_offset=batch_offset
+                            ):
+                                final_result = progress
+                                phase = progress.get("phase", "")
+                                percent = progress.get("progress_percent", 0)
+                                sync_progress.progress(percent / 100)
 
-                            if phase == "scanning":
-                                sync_status.info("🔍 Scanne Cloud-Ordner...")
-                            elif phase == "downloading":
-                                total = progress.get("files_total", 0)
-                                processed = progress.get("files_processed", 0)
-                                elapsed = progress.get("elapsed_seconds", 0)
-                                remaining = progress.get("estimated_remaining_seconds")
+                                if phase == "scanning":
+                                    sync_status.info("🔍 Scanne Cloud-Ordner...")
+                                elif phase == "downloading":
+                                    total = progress.get("files_total", 0)
+                                    processed = progress.get("files_processed", 0)
+                                    elapsed = progress.get("elapsed_seconds", 0)
+                                    remaining = progress.get("estimated_remaining_seconds")
 
-                                time_text = f"⏱️ {format_time(elapsed)}"
-                                if remaining and remaining > 0:
-                                    time_text += f" | ⏳ ~{format_time(remaining)}"
+                                    time_text = f"⏱️ {format_time(elapsed)}"
+                                    if remaining and remaining > 0:
+                                        time_text += f" | ⏳ ~{format_time(remaining)}"
 
-                                sync_status.info(f"📥 {processed + 1}/{total} | {time_text}")
+                                    sync_status.info(f"📥 {processed + 1}/{total} | {time_text}")
 
-                                current_file = progress.get("current_file")
-                                if current_file:
-                                    sync_file.caption(f"📄 {current_file} ({format_size(progress.get('current_file_size', 0))})")
+                                    current_file = progress.get("current_file")
+                                    if current_file:
+                                        sync_file.caption(f"📄 {current_file} ({format_size(progress.get('current_file_size', 0))})")
 
-                                sync_stats.caption(
-                                    f"✅ {progress.get('files_synced', 0)} | "
-                                    f"⏭️ {progress.get('files_skipped', 0)} | "
-                                    f"❌ {progress.get('files_error', 0)}"
-                                )
-                            elif phase == "completed":
-                                sync_progress.progress(1.0, text="✅ Fertig!")
-                            elif phase == "error":
-                                sync_progress.progress(0, text="❌ Fehler")
+                                    sync_stats.caption(
+                                        f"✅ {progress.get('files_synced', 0)} | "
+                                        f"⏭️ {progress.get('files_skipped', 0)} | "
+                                        f"❌ {progress.get('files_error', 0)}"
+                                    )
+                                elif phase == "completed":
+                                    sync_progress.progress(1.0, text="✅ Fertig!")
+                                elif phase == "error":
+                                    sync_progress.progress(0, text="❌ Fehler")
+                        except Exception as e:
+                            sync_error = str(e)
+                            import traceback
+                            logger.error(f"Sync unterbrochen: {e}\n{traceback.format_exc()}")
 
                         # Aufräumen
                         del st.session_state[f"syncing_{conn.id}"]
                         sync_file.empty()
+
+                        # Fehler anzeigen wenn Sync unterbrochen wurde
+                        if sync_error:
+                            sync_status.error(f"❌ Sync unterbrochen: {sync_error[:200]}")
+                            # Trotzdem Fortschritt speichern wenn möglich
+                            if final_result and final_result.get("files_synced", 0) > 0:
+                                synced = final_result.get("files_synced", 0)
+                                sync_stats.warning(f"⚠️ {synced} Dateien wurden vor dem Fehler importiert. Versuchen Sie es mit kleinerem Batch erneut.")
+                            continue
 
                         # Batch-Info verarbeiten
                         batch_info = final_result.get("batch_info", {}) if final_result else {}
