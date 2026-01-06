@@ -19,7 +19,7 @@ from contextlib import contextmanager
 import streamlit as st
 
 from config.settings import DATABASE_PATH, DEFAULT_FOLDERS
-from .models import Base, User, Folder
+from .models import Base, User, Folder, SmartFolder
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +496,56 @@ def create_default_folders(session: Session, user_id: int):
         session.add(folder)
     session.commit()
 
+    # Standard-Smart-Folders erstellen
+    create_default_smart_folders(session, user_id)
+
+
+# Standard-Smart-Folders für neue Benutzer
+DEFAULT_SMART_FOLDERS = [
+    {
+        "name": "📧 Emailverkehr",
+        "description": "Alle importierten E-Mails",
+        "filter_rules": {"category": "E-Mail"},
+        "show_aggregations": False
+    },
+    {
+        "name": "📬 Offene Rechnungen",
+        "description": "Unbezahlte Rechnungen",
+        "filter_rules": {"category": "Rechnung", "invoice_status": "OPEN"},
+        "show_aggregations": True,
+        "aggregation_fields": ["sum:invoice_amount"]
+    },
+]
+
+
+def create_default_smart_folders(session: Session, user_id: int):
+    """Erstellt die Standard-Smart-Folders für einen neuen Benutzer"""
+    for sf_data in DEFAULT_SMART_FOLDERS:
+        # Prüfen ob Smart Folder bereits existiert
+        existing = session.query(SmartFolder).filter(
+            SmartFolder.user_id == user_id,
+            SmartFolder.name == sf_data["name"]
+        ).first()
+
+        if not existing:
+            smart_folder = SmartFolder(
+                user_id=user_id,
+                name=sf_data["name"],
+                description=sf_data.get("description"),
+                filter_rules=sf_data["filter_rules"],
+                show_aggregations=sf_data.get("show_aggregations", False),
+                aggregation_fields=sf_data.get("aggregation_fields")
+            )
+            session.add(smart_folder)
+
+    session.commit()
+
+
+def ensure_default_smart_folders(user_id: int):
+    """Stellt sicher, dass die Standard-Smart-Folders existieren (für bestehende Benutzer)"""
+    with get_db() as session:
+        create_default_smart_folders(session, user_id)
+
 
 def ensure_user_exists(session: Session) -> User:
     """Stellt sicher, dass ein Standardbenutzer existiert (für Einzelnutzer-Modus)"""
@@ -514,6 +564,8 @@ def get_current_user_id() -> int:
         with get_db() as session:
             user = ensure_user_exists(session)
             st.session_state.user_id = user.id
+            # Stelle sicher, dass Standard-Smart-Folders existieren
+            create_default_smart_folders(session, user.id)
     return st.session_state.user_id
 
 

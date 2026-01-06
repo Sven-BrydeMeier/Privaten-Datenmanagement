@@ -415,8 +415,43 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                             if is_debug:
                                 debug_log(f"✅ E-Mail geparst: '{parsed_email.get('subject', 'Kein Betreff')}'", "success")
                                 debug_log(f"📬 Von: {parsed_email.get('from_address', 'Unbekannt')}", "info")
-                                if parsed_email.get("attachments"):
-                                    debug_log(f"📎 {len(parsed_email['attachments'])} Anhänge gefunden", "info")
+
+                            # E-Mail-Anhänge speichern
+                            attachments = parsed_email.get("attachments", [])
+                            if attachments:
+                                if is_debug:
+                                    debug_log(f"📎 {len(attachments)} Anhänge gefunden - speichere separat...", "info")
+                                result['attachments'] = []
+                                email_subject = parsed_email.get('subject', 'E-Mail')[:50]
+
+                                for i, attachment in enumerate(attachments):
+                                    try:
+                                        att_filename = attachment.get('filename', f'anhang_{i+1}')
+                                        att_data = attachment.get('data')
+                                        att_mime = attachment.get('mime_type', 'application/octet-stream')
+
+                                        if att_data:
+                                            # Anhang als separates Dokument speichern
+                                            att_doc_id = save_document(att_data, att_filename, user_id)
+
+                                            if att_doc_id:
+                                                # Anhang-Dokument aktualisieren
+                                                att_doc = session.get(Document, att_doc_id)
+                                                if att_doc:
+                                                    att_doc.title = f"📎 {att_filename} (aus: {email_subject})"
+                                                    att_doc.sender = document.sender
+                                                    att_doc.document_date = document.document_date
+                                                    # Anhang in gleichen Ordner wie E-Mail (wird später gesetzt)
+                                                    result['attachments'].append({
+                                                        'id': att_doc_id,
+                                                        'filename': att_filename,
+                                                        'size': attachment.get('size', 0)
+                                                    })
+                                                    if is_debug:
+                                                        debug_log(f"  ✅ Anhang gespeichert: {att_filename}", "success")
+                                    except Exception as att_err:
+                                        if is_debug:
+                                            debug_log(f"  ⚠️ Fehler bei Anhang {att_filename}: {str(att_err)[:100]}", "warning")
 
                         except Exception as email_err:
                             ocr_error = str(email_err)[:200]
@@ -660,11 +695,24 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                     }
 
                 # Kategorie und Unterkategorie zuweisen
+                # WICHTIG: Bei E-Mails wird die Kategorie "E-Mail" beibehalten,
+                # damit sie immer im "Emailverkehr" Smart Folder erscheinen.
+                # Die inhaltliche Klassifikation wird nur für die Ordner-Zuweisung genutzt.
+                is_email = document.category == "E-Mail"
+
                 if classification.get('category'):
-                    document.category = classification['category']
-                    result['category'] = classification['category']
+                    if is_email:
+                        # E-Mails behalten ihre Kategorie, Inhalt wird als Subcategory gespeichert
+                        if classification['category'] != "E-Mail" and classification['category'] != "Sonstiges":
+                            result['subcategory'] = classification['category']
+                            result['content_type'] = classification['category']  # Für Anzeige
+                        result['category'] = "E-Mail"
+                    else:
+                        document.category = classification['category']
+                        result['category'] = classification['category']
                 if classification.get('subcategory'):
-                    result['subcategory'] = classification['subcategory']
+                    if not is_email:
+                        result['subcategory'] = classification['subcategory']
 
                 # Extrahierte Adresse speichern (für Immobilien-Zuordnung)
                 if classification.get('detected_address'):
@@ -727,6 +775,20 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
 
                 result['folder_name'] = assigned_folder_name
                 result['folder_created'] = folder_created
+
+                # ============================================================
+                # E-MAIL-ANHÄNGE IN GLEICHEN ORDNER VERSCHIEBEN
+                # ============================================================
+                if result.get('attachments') and document.folder_id:
+                    for att_info in result['attachments']:
+                        try:
+                            att_doc = session.get(Document, att_info['id'])
+                            if att_doc:
+                                att_doc.folder_id = document.folder_id
+                                if is_debug:
+                                    debug_log(f"📁 Anhang '{att_info['filename']}' in Ordner verschoben", "info")
+                        except Exception:
+                            pass  # Fehler bei Anhang-Zuordnung ignorieren
 
                 # ============================================================
                 # VIRTUELLE ORDNER-ZUORDNUNG (Dokument in mehreren Ordnern)

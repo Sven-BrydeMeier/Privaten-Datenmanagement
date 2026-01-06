@@ -146,6 +146,22 @@ CATEGORY_PATTERNS = {
         'keywords': ['bescheid', 'behörde', 'amt', 'antrag', 'genehmigung'],
         'subtypes': {}
     },
+    # ============================================================
+    # NIEDRIGSTE PRIORITÄT: E-Mail (nur wenn nichts anderes passt)
+    # E-Mails werden primär nach Inhalt kategorisiert, nicht nach Format
+    # ============================================================
+    'E-Mail': {
+        'keywords': [],  # Keine Keywords - wird nur durch mime_type erkannt
+        'subtypes': {
+            'Geschäftlich': ['angebot', 'bestellung', 'auftrag', 'anfrage', 'projekt'],
+            'Privat': ['familie', 'freund', 'einladung', 'geburtstag'],
+            'Newsletter': ['newsletter', 'abmelden', 'unsubscribe', 'abonnement'],
+            'Bestellung': ['bestellung', 'versand', 'lieferung', 'sendungsverfolgung', 'paket'],
+            'Bestätigung': ['bestätigung', 'confirmation', 'buchung', 'reservierung'],
+        },
+        'priority': 10,  # Niedrigste Priorität - andere Kategorien überschreiben
+        'folder': 'Emailverkehr'
+    },
 }
 
 # Bekannte Absender und ihre Zuordnungen
