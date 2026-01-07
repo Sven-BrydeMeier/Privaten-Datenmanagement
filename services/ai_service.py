@@ -3,6 +3,7 @@ KI-Service für intelligente Dokumentenverarbeitung
 Unterstützt OpenAI (GPT) und Anthropic (Claude)
 """
 import json
+import re
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import streamlit as st
@@ -118,7 +119,7 @@ class AIService:
 Dokumenttext:
 {text[:3000]}
 
-Antworte im JSON-Format:
+Antworte NUR mit dem JSON-Objekt, ohne zusätzlichen Text:
 {{"category": "Kategoriename", "confidence": 0.95, "reasoning": "Kurze Begründung"}}
 """
 
@@ -129,15 +130,32 @@ Antworte im JSON-Format:
             if not result or not result.strip():
                 return 'Sonstiges', 0.0
 
-            # JSON aus der Antwort extrahieren (falls zusätzlicher Text vorhanden)
+            # JSON aus der Antwort extrahieren (mit verbesserter Erkennung)
+            result_stripped = result.strip()
+
+            # 1. Versuche Markdown-Codeblock zu finden
+            json_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', result_stripped)
+            if json_block_match:
+                json_str = json_block_match.group(1)
+                try:
+                    data = json.loads(json_str)
+                    return data.get('category', 'Sonstiges'), data.get('confidence', 0.5)
+                except json.JSONDecodeError:
+                    pass
+
+            # 2. Versuche JSON direkt zu finden
             json_start = result.find('{')
             json_end = result.rfind('}') + 1
 
             if json_start >= 0 and json_end > json_start:
-                result = result[json_start:json_end]
+                json_str = result[json_start:json_end]
+                # Trailing commas entfernen
+                json_str = re.sub(r',\s*}', '}', json_str)
+                json_str = re.sub(r',\s*]', ']', json_str)
+                data = json.loads(json_str)
+                return data.get('category', 'Sonstiges'), data.get('confidence', 0.5)
 
-            data = json.loads(result)
-            return data.get('category', 'Sonstiges'), data.get('confidence', 0.5)
+            return 'Sonstiges', 0.0
         except json.JSONDecodeError:
             return 'Sonstiges', 0.0
         except Exception as e:
@@ -192,6 +210,7 @@ Wichtig:
 - Extrahiere den vollständigen Absendernamen inkl. Rechtsform (GmbH, AG, etc.)
 - Bei Rechnungen: Betrag, IBAN, Fälligkeit, Rechnungsnummer extrahieren
 - Erstelle eine prägnante Zusammenfassung
+- WICHTIG: Antworte NUR mit dem JSON-Objekt, ohne zusätzlichen Text oder Erklärungen!
 """
 
         try:
@@ -202,16 +221,43 @@ Wichtig:
                 st.warning("KI-Extraktion fehlgeschlagen: Leere Antwort von der KI-API")
                 return {}
 
-            # JSON aus der Antwort extrahieren (falls zusätzlicher Text vorhanden)
+            # JSON aus der Antwort extrahieren (mit verbesserter Erkennung)
+            result_stripped = result.strip()
+
+            # 1. Versuche Markdown-Codeblock zu finden (```json ... ```)
+            import re
+            json_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', result_stripped)
+            if json_block_match:
+                json_str = json_block_match.group(1)
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    pass  # Fallback auf andere Methoden
+
+            # 2. Versuche JSON direkt zu finden
             json_start = result.find('{')
             json_end = result.rfind('}') + 1
 
-            if json_start < 0 or json_end <= json_start:
-                st.warning("KI-Extraktion fehlgeschlagen: Kein gültiges JSON in der Antwort gefunden")
-                return {}
+            if json_start >= 0 and json_end > json_start:
+                json_str = result[json_start:json_end]
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    # 3. Versuche verschachteltes JSON zu reparieren
+                    # Manchmal gibt die KI ungültiges JSON zurück, versuche zu bereinigen
+                    json_str_cleaned = re.sub(r',\s*}', '}', json_str)  # Trailing comma entfernen
+                    json_str_cleaned = re.sub(r',\s*]', ']', json_str_cleaned)
+                    try:
+                        return json.loads(json_str_cleaned)
+                    except json.JSONDecodeError:
+                        st.warning(f"KI-Extraktion fehlgeschlagen: Ungültiges JSON-Format - {e}")
+                        return {}
 
-            json_str = result[json_start:json_end]
-            return json.loads(json_str)
+            # Kein JSON gefunden - logge für Debugging
+            st.warning("KI-Extraktion fehlgeschlagen: Kein gültiges JSON in der Antwort gefunden")
+            if len(result_stripped) < 200:
+                st.caption(f"Antwort: {result_stripped}")
+            return {}
         except json.JSONDecodeError as e:
             st.warning(f"KI-Extraktion fehlgeschlagen: Ungültiges JSON-Format - {e}")
             return {}
@@ -423,6 +469,7 @@ Antworte im JSON-Format:
         response = client.messages.create(
             model="claude-3-haiku-20240307",
             max_tokens=2000,
+            system="Du bist ein Assistent für Dokumentenanalyse. Wenn nach JSON gefragt wird, antworte NUR mit dem JSON-Objekt, ohne zusätzlichen Text, Erklärungen oder Markdown-Formatierung.",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.content[0].text
