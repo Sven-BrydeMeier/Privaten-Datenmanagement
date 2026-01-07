@@ -82,6 +82,20 @@ class Settings:
     tts_speed: float = 1.0  # Geschwindigkeit (0.25 - 4.0)
     tts_use_browser: bool = False  # Browser-TTS als Fallback verwenden
 
+    # Email-Posteingang Verarbeitung
+    email_inbox_enabled: bool = False  # Automatische Email-Verarbeitung aktiviert
+    email_inbox_interval: int = 5  # Abruf-Intervall in Minuten
+    email_authorized_signatures: list = field(default_factory=lambda: ["meier@ra-rhm.de"])
+    email_default_signature: str = "meier@ra-rhm.de"  # Standard-Signatur für neue Verfügungen
+    email_auto_categorize: bool = True  # KI-basierte automatische Kategorisierung
+    email_process_attachments: bool = True  # Anhänge separat verarbeiten
+    email_mark_as_read: bool = True  # Verarbeitete Emails als gelesen markieren
+    email_move_to_folder: str = ""  # Optional: Verarbeitete Emails in diesen IMAP-Ordner verschieben
+    email_verfuegung_keywords: list = field(default_factory=lambda: [
+        "Verfügung:", "Verfuegung:", "VERFÜGUNG:", "VERFUEGUNG:",
+        "Vfg:", "VFG:", "vfg:", "Anweisung:", "ANWEISUNG:"
+    ])  # Schlüsselwörter für Verfügungen im Email-Text
+
     def save(self):
         """Einstellungen in Datei speichern"""
         config_data = asdict(self)

@@ -36,11 +36,12 @@ if not email_configured:
         st.switch_page("pages/8_⚙️_Einstellungen.py")
 else:
     # E-Mail-Tabs
-    tab_inbox, tab_compose, tab_sent, tab_response = st.tabs([
+    tab_inbox, tab_compose, tab_sent, tab_response, tab_verfuegung = st.tabs([
         "📥 Posteingang",
         "✏️ Neue E-Mail",
         "📤 Gesendet",
-        "🤖 Antwortvorschläge"
+        "🤖 Antwortvorschläge",
+        "📋 Verfügungen"
     ])
 
     with tab_inbox:
@@ -355,3 +356,211 @@ else:
                                     st.rerun()
                 else:
                     st.info("Keine E-Mails mit Antwortvorschlägen")
+
+    with tab_verfuegung:
+        st.subheader("📋 Email-Verfügungsverarbeitung")
+
+        st.markdown("""
+        Verarbeiten Sie Emails mit Verfügungen automatisch. Emails von autorisierten Absendern
+        werden analysiert, Verfügungen extrahiert und Dokumente entsprechend abgelegt.
+        """)
+
+        # Einstellungen anzeigen
+        with st.expander("⚙️ Einstellungen", expanded=False):
+            st.markdown("### Autorisierte Signaturen")
+            st.caption("Nur Emails von diesen Absendern werden verarbeitet.")
+
+            # Aktuelle Signaturen
+            current_signatures = settings.email_authorized_signatures or []
+
+            # Signaturen anzeigen und bearbeiten
+            for i, sig in enumerate(current_signatures):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.text(f"📧 {sig}")
+                with col2:
+                    if st.button("🗑️", key=f"del_sig_{i}", help="Signatur entfernen"):
+                        current_signatures.remove(sig)
+                        settings.email_authorized_signatures = current_signatures
+                        settings.save()
+                        st.rerun()
+
+            # Neue Signatur hinzufügen
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                new_sig = st.text_input(
+                    "Neue Signatur",
+                    placeholder="email@domain.de oder @domain.de für ganze Domain",
+                    key="new_signature_input"
+                )
+            with col2:
+                st.write("")  # Spacing
+                if st.button("➕ Hinzufügen", key="add_signature"):
+                    if new_sig and new_sig not in current_signatures:
+                        current_signatures.append(new_sig)
+                        settings.email_authorized_signatures = current_signatures
+                        settings.save()
+                        st.success(f"Signatur '{new_sig}' hinzugefügt!")
+                        st.rerun()
+
+            st.markdown("---")
+
+            st.markdown("### Verfügungsschlüsselwörter")
+            st.caption("Schlüsselwörter, die eine Verfügung im Email-Text einleiten.")
+
+            keywords = settings.email_verfuegung_keywords or []
+            keywords_text = st.text_area(
+                "Schlüsselwörter (eines pro Zeile)",
+                value="\n".join(keywords),
+                height=150
+            )
+
+            st.markdown("---")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                auto_categorize = st.checkbox(
+                    "KI-Kategorisierung aktivieren",
+                    value=settings.email_auto_categorize,
+                    help="Verwendet ChatGPT zur automatischen Kategorisierung"
+                )
+                process_attachments = st.checkbox(
+                    "Anhänge separat verarbeiten",
+                    value=settings.email_process_attachments,
+                    help="Speichert Anhänge als separate Dokumente"
+                )
+
+            with col2:
+                mark_as_read = st.checkbox(
+                    "Verarbeitete Emails als gelesen markieren",
+                    value=settings.email_mark_as_read
+                )
+                move_folder = st.text_input(
+                    "Emails verschieben nach (IMAP-Ordner)",
+                    value=settings.email_move_to_folder,
+                    placeholder="z.B. Archiv oder INBOX.Processed"
+                )
+
+            if st.button("💾 Einstellungen speichern", type="primary", key="save_verfuegung_settings"):
+                settings.email_verfuegung_keywords = [k.strip() for k in keywords_text.split("\n") if k.strip()]
+                settings.email_auto_categorize = auto_categorize
+                settings.email_process_attachments = process_attachments
+                settings.email_mark_as_read = mark_as_read
+                settings.email_move_to_folder = move_folder
+                settings.save()
+                st.success("Einstellungen gespeichert!")
+
+        st.markdown("---")
+
+        # Verfügungsverarbeitung starten
+        st.markdown("### 📥 Emails verarbeiten")
+
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            imap_folder = st.selectbox(
+                "IMAP-Ordner",
+                options=["INBOX", "INBOX.Neu", "INBOX.Verfuegungen"],
+                index=0
+            )
+        with col2:
+            max_emails = st.number_input(
+                "Max. Emails",
+                min_value=1,
+                max_value=100,
+                value=20
+            )
+
+        # Status
+        if not settings.email_authorized_signatures:
+            st.warning("⚠️ Keine autorisierten Signaturen konfiguriert. Bitte fügen Sie mindestens eine Signatur hinzu.")
+
+        if st.button("🔄 Emails jetzt verarbeiten", type="primary", disabled=not settings.email_authorized_signatures):
+            try:
+                from services.email_inbox_service import get_email_inbox_service
+
+                inbox_service = get_email_inbox_service(user_id)
+
+                with st.spinner("Verbinde mit Email-Server..."):
+                    # Fortschrittsanzeige
+                    progress_bar = st.progress(0, text="Initialisiere...")
+                    status_text = st.empty()
+                    results_container = st.container()
+
+                    def update_progress(current, total, message):
+                        progress_bar.progress(current / total if total > 0 else 0, text=message)
+                        status_text.caption(f"{current}/{total}: {message}")
+
+                    # Emails verarbeiten
+                    result = inbox_service.process_all_unread(progress_callback=update_progress)
+
+                    progress_bar.progress(1.0, text="✅ Fertig!")
+
+                    # Ergebnisse anzeigen
+                    with results_container:
+                        if result["processed"] > 0:
+                            st.success(f"✅ {result['processed']} Email(s) erfolgreich verarbeitet!")
+
+                            # Verarbeitete Dokumente anzeigen
+                            with st.expander(f"📄 Erstellte Dokumente ({len(result['documents'])})", expanded=True):
+                                for doc in result["documents"]:
+                                    col1, col2 = st.columns([4, 1])
+                                    with col1:
+                                        st.markdown(f"📄 **{doc['title']}**")
+                                        if doc["attachments"] > 0:
+                                            st.caption(f"📎 {doc['attachments']} Anhänge")
+                                    with col2:
+                                        if st.button("Öffnen", key=f"open_doc_{doc['id']}"):
+                                            st.session_state.view_document_id = doc["id"]
+                                            st.switch_page("pages/3_📁_Dokumente.py")
+
+                        if result["errors"] > 0:
+                            st.warning(f"⚠️ {result['errors']} Fehler aufgetreten")
+                            with st.expander("Fehlerdetails"):
+                                for err in result["error_messages"]:
+                                    st.error(err)
+
+                        if result["processed"] == 0 and result["errors"] == 0:
+                            st.info("Keine neuen Emails von autorisierten Absendern gefunden.")
+
+            except Exception as e:
+                st.error(f"Fehler bei der Email-Verarbeitung: {e}")
+
+        st.markdown("---")
+
+        # Anleitung für Verfügungen
+        with st.expander("📖 Anleitung: Verfügungen per Email", expanded=False):
+            st.markdown("""
+            ### So funktioniert die Email-Verfügungsverarbeitung
+
+            **1. Autorisierte Absender**
+            Nur Emails von autorisierten Absendern (Signaturen) werden verarbeitet.
+            Standard-Signatur: `meier@ra-rhm.de`
+
+            **2. Verfügungsformat**
+            Fügen Sie eine Verfügung in Ihre Email ein:
+
+            ```
+            Verfügung:
+            Ordner: Verträge
+            Kategorie: Vertrag
+            Frist: 15.02.2026
+            Aktenzeichen: 123/2025
+            Notiz: Wichtiger Vertrag zur Prüfung
+            ```
+
+            **Unterstützte Felder:**
+            - `Ordner:` - Zielordner für das Dokument
+            - `Kategorie:` - Dokumentkategorie (Rechnung, Vertrag, etc.)
+            - `Frist:` / `Wiedervorlage:` - Fristdatum
+            - `Aktenzeichen:` / `Az.:` - Aktenzeichen
+            - `Mandant:` / `Kunde:` - Zugehöriger Mandant
+            - `Notiz:` - Zusätzliche Anmerkungen
+
+            **3. Ohne Verfügung**
+            Wenn keine Verfügung im Text gefunden wird, analysiert ChatGPT
+            die Email und kategorisiert sie automatisch.
+
+            **4. Anhänge**
+            Anhänge werden separat als Dokumente gespeichert und erhalten
+            dieselbe Kategorisierung wie die Email.
+            """)
