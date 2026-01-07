@@ -1597,24 +1597,21 @@ class CloudSyncService:
                 result["batch_info"]["total_files_found"] = len(files_to_sync)
 
                 # Batch-Modus: Nur einen Teil der Dateien verarbeiten
+                # WICHTIG: Der Offset wird NICHT mehr verwendet, da bereits synchronisierte
+                # Dateien automatisch durch den Sync-Log-Filter entfernt werden.
+                # Der batch_size begrenzt nur, wie viele Dateien pro Durchlauf verarbeitet werden.
                 if batch_size > 0:
                     total_files = len(files_to_sync)
-                    # Offset anwenden
-                    files_to_sync = files_to_sync[batch_offset:]
-                    # Auf batch_size begrenzen
+                    # Auf batch_size begrenzen (Offset wird ignoriert, da Sync-Filter aktiv)
                     if len(files_to_sync) > batch_size:
                         files_to_sync = files_to_sync[:batch_size]
                         result["batch_info"]["has_more"] = True
-                        result["batch_info"]["next_offset"] = batch_offset + batch_size
+                        result["batch_info"]["next_offset"] = batch_size  # Nur für UI-Anzeige
                     else:
-                        result["batch_info"]["has_more"] = (batch_offset + len(files_to_sync)) < total_files
+                        result["batch_info"]["has_more"] = False
 
                     result["files_total"] = len(files_to_sync)
-                    logger.info(f"Batch-Modus: Verarbeite {len(files_to_sync)} von {total_files} Dateien (Offset: {batch_offset})")
-
-                    # Kurze Pause am Anfang um API-Limits zu vermeiden
-                    if batch_offset > 0:
-                        time.sleep(1)
+                    logger.info(f"Batch-Modus: Verarbeite {len(files_to_sync)} von {total_files} Dateien")
 
                 if result["files_total"] == 0:
                     result["phase"] = "completed"

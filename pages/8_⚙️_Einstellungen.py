@@ -898,24 +898,12 @@ with tab_cloud:
                             if st.button("🔄", key=f"sync_cloud_{conn.id}", help="Jetzt synchronisieren"):
                                 st.session_state[f"syncing_{conn.id}"] = True
                                 st.session_state[f"batch_mode_{conn.id}_active"] = batch_mode
-                                # Batch offset nur bei batch mode beibehalten
-                                if batch_mode in ["batch10", "batch25"]:
-                                    st.session_state[f"batch_offset_{conn.id}"] = st.session_state.get(f"batch_offset_{conn.id}", 0)
-                                else:
-                                    st.session_state[f"batch_offset_{conn.id}"] = 0
                                 st.rerun()
 
                         with action_cols[1]:
                             if st.button("🗑️", key=f"del_cloud_{conn.id}", help="Verbindung löschen"):
                                 cloud_service.delete_connection(conn.id)
                                 st.success("Verbindung gelöscht!")
-                                st.rerun()
-
-                        # Batch-Fortschritt anzeigen
-                        if batch_mode in ["batch10", "batch25"] and st.session_state.get(f"batch_offset_{conn.id}", 0) > 0:
-                            st.caption(f"📊 Batch-Fortschritt: ab Datei {st.session_state.get(f'batch_offset_{conn.id}', 0)}")
-                            if st.button("🔄 Zurücksetzen", key=f"reset_batch_{conn.id}", help="Batch von vorne beginnen"):
-                                st.session_state[f"batch_offset_{conn.id}"] = 0
                                 st.rerun()
 
                     # Sync-Fortschritt anzeigen wenn aktiv
@@ -947,13 +935,11 @@ with tab_cloud:
                         active_batch_mode = st.session_state.get(f"batch_mode_{conn.id}_active", "batch10")
                         batch_sizes = {"batch10": 10, "batch25": 25, "all": 0}
                         batch_size = batch_sizes.get(active_batch_mode, 10)
-                        batch_offset = st.session_state.get(f"batch_offset_{conn.id}", 0) if batch_size > 0 else 0
 
                         final_result = None
                         for progress in cloud_service.sync_connection_with_progress(
                             conn.id,
-                            batch_size=batch_size,
-                            batch_offset=batch_offset
+                            batch_size=batch_size
                         ):
                             final_result = progress
                             phase = progress.get("phase", "")
@@ -995,22 +981,21 @@ with tab_cloud:
                         # Batch-Info verarbeiten
                         batch_info = final_result.get("batch_info", {}) if final_result else {}
                         has_more = batch_info.get("has_more", False)
-                        next_offset = batch_info.get("next_offset", 0)
                         total_found = batch_info.get("total_files_found", 0)
+                        files_processed = final_result.get("new_files", 0) if final_result else 0
+                        remaining = total_found - files_processed if total_found > 0 else 0
 
                         if final_result and final_result.get("success"):
                             if has_more:
-                                # Batch-Offset für nächsten Durchlauf speichern
-                                st.session_state[f"batch_offset_{conn.id}"] = next_offset
+                                # Es gibt noch mehr Dateien zu importieren
                                 sync_status.warning(
-                                    f"✅ {final_result.get('new_files', 0)} Dateien importiert!\n\n"
-                                    f"📊 **Batch-Modus:** {next_offset} von {total_found} Dateien verarbeitet.\n\n"
-                                    f"Klicken Sie erneut auf 🔄 um die nächsten 25 Dateien zu importieren."
+                                    f"✅ {files_processed} Dateien importiert!\n\n"
+                                    f"📊 **Batch-Modus:** Noch {remaining} Dateien ausstehend.\n\n"
+                                    f"Klicken Sie erneut auf 🔄 um die nächsten Dateien zu importieren."
                                 )
                             else:
-                                # Alles fertig, Offset zurücksetzen
-                                st.session_state[f"batch_offset_{conn.id}"] = 0
-                                sync_status.success(f"✅ {final_result.get('new_files', 0)} Dateien importiert!")
+                                # Alles fertig
+                                sync_status.success(f"✅ {files_processed} Dateien importiert! Alle Dateien synchronisiert.")
                         elif final_result:
                             sync_status.error(final_result.get("error", "Fehler"))
 
