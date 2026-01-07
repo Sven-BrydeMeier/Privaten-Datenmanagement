@@ -1,5 +1,5 @@
 """
-E-Mail - Senden, Empfangen und KI-Antwortvorschläge
+E-Mail - Senden, Empfangen, Verfügungen und KI-Antwortvorschläge
 """
 import streamlit as st
 from pathlib import Path
@@ -10,9 +10,12 @@ import json
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.db import init_db, get_db, get_current_user_id
-from database.models import Email, Document
+from database.models import Email, Document, EmailSignature, EmailDisposition, EmailClassificationRule
 from config.settings import get_settings
 from services.ai_service import get_ai_service
+from services.signature_service import get_signature_service
+from services.disposition_service import get_disposition_engine
+from services.email_processing_service import get_email_processing_service
 from utils.helpers import format_date, send_email_notification
 from utils.components import render_sidebar_cart
 
@@ -35,10 +38,18 @@ if not email_configured:
     if st.button("Zu Einstellungen"):
         st.switch_page("pages/8_⚙️_Einstellungen.py")
 else:
+    # Services initialisieren
+    signature_service = get_signature_service(user_id)
+    disposition_engine = get_disposition_engine(user_id)
+    email_processor = get_email_processing_service(user_id)
+
     # E-Mail-Tabs
-    tab_inbox, tab_compose, tab_sent, tab_response = st.tabs([
+    tab_inbox, tab_compose, tab_dispositions, tab_signatures, tab_rules, tab_sent, tab_response = st.tabs([
         "📥 Posteingang",
         "✏️ Neue E-Mail",
+        "📋 Verfügungen",
+        "✍️ Signaturen",
+        "📐 Regeln",
         "📤 Gesendet",
         "🤖 Antwortvorschläge"
     ])
@@ -46,77 +57,101 @@ else:
     with tab_inbox:
         st.subheader("📥 Posteingang")
 
-        # E-Mails abrufen
-        if st.button("🔄 E-Mails abrufen"):
-            with st.spinner("Verbinde mit E-Mail-Server..."):
-                try:
-                    from imapclient import IMAPClient
-
-                    with IMAPClient(settings.imap_server, port=settings.imap_port, ssl=True) as client:
-                        client.login(settings.imap_username, settings.imap_password)
-                        client.select_folder('INBOX')
-
-                        # Letzte 20 E-Mails
-                        messages = client.search(['ALL'])
-                        messages = messages[-20:] if len(messages) > 20 else messages
-
-                        for uid in messages:
-                            data = client.fetch([uid], ['ENVELOPE', 'BODY[TEXT]'])
-                            envelope = data[uid][b'ENVELOPE']
-
-                            # In Datenbank speichern
-                            with get_db() as session:
-                                existing = session.query(Email).filter(
-                                    Email.message_id == str(envelope.message_id)
-                                ).first()
-
-                                if not existing:
-                                    email = Email(
-                                        user_id=user_id,
-                                        message_id=str(envelope.message_id),
-                                        folder='inbox',
-                                        from_address=str(envelope.from_[0]) if envelope.from_ else '',
-                                        to_addresses=json.dumps([str(t) for t in envelope.to or []]),
-                                        subject=envelope.subject.decode() if envelope.subject else '',
-                                        received_at=envelope.date,
-                                        is_read=False
-                                    )
-                                    session.add(email)
-                                session.commit()
-
-                    st.success("E-Mails abgerufen!")
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"Fehler beim Abrufen: {e}")
+        # Filter-Optionen
+        col_filter1, col_filter2, col_filter3 = st.columns([2, 2, 1])
+        with col_filter1:
+            filter_type = st.selectbox(
+                "Anzeigen",
+                ["Alle", "Nur mit Verfügung", "Review erforderlich", "Ungelesen"],
+                key="inbox_filter"
+            )
+        with col_filter2:
+            search_query = st.text_input("Suche", placeholder="Betreff, Absender...", key="inbox_search")
+        with col_filter3:
+            st.write("")  # Spacer
+            st.write("")
+            if st.button("🔄 Abrufen & Verarbeiten"):
+                with st.spinner("Rufe E-Mails ab und verarbeite..."):
+                    try:
+                        result = email_processor.fetch_and_process_all(max_count=30)
+                        st.success(
+                            f"✅ {result['fetched']} abgerufen, "
+                            f"{result['processed']} verarbeitet, "
+                            f"{result['dispositions_found']} Verfügungen"
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fehler: {e}")
 
         # E-Mail-Liste
         with get_db() as session:
-            emails = session.query(Email).filter(
+            from sqlalchemy import or_
+
+            query = session.query(Email).filter(
                 Email.user_id == user_id,
                 Email.folder == 'inbox'
-            ).order_by(Email.received_at.desc()).limit(50).all()
+            )
+
+            # Filter anwenden
+            if filter_type == "Nur mit Verfügung":
+                query = query.filter(Email.has_disposition == True)
+            elif filter_type == "Review erforderlich":
+                query = query.filter(Email.needs_review == True)
+            elif filter_type == "Ungelesen":
+                query = query.filter(Email.is_read == False)
+
+            # Suche anwenden
+            if search_query:
+                search_pattern = f"%{search_query}%"
+                query = query.filter(or_(
+                    Email.subject.ilike(search_pattern),
+                    Email.from_address.ilike(search_pattern),
+                    Email.body_text.ilike(search_pattern)
+                ))
+
+            emails = query.order_by(Email.received_at.desc()).limit(50).all()
 
             if emails:
-                for email in emails:
-                    col1, col2, col3 = st.columns([3, 2, 1])
+                for email_item in emails:
+                    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
 
                     with col1:
-                        icon = "📬" if not email.is_read else "📭"
-                        style = "**" if not email.is_read else ""
-                        st.markdown(f"{icon} {style}{email.subject or '(Kein Betreff)'}{style}")
-                        st.caption(email.from_address)
+                        # Status-Icons
+                        icons = []
+                        if not email_item.is_read:
+                            icons.append("📬")
+                        else:
+                            icons.append("📭")
+                        if getattr(email_item, 'has_disposition', False):
+                            icons.append("📋")
+                        if getattr(email_item, 'needs_review', False):
+                            icons.append("⚠️")
+                        if getattr(email_item, 'signature_detected', False):
+                            icons.append("✍️")
+
+                        icon_str = " ".join(icons)
+                        style = "**" if not email_item.is_read else ""
+                        st.markdown(f"{icon_str} {style}{email_item.subject or '(Kein Betreff)'}{style}")
+                        st.caption(f"{email_item.from_address}")
 
                     with col2:
-                        st.caption(format_date(email.received_at, True) if email.received_at else "")
+                        # Verfügungs-Typ
+                        if getattr(email_item, 'has_disposition', False):
+                            disp_type = getattr(email_item, 'disposition_type', '') or ''
+                            st.caption(f"📋 {disp_type[:15]}")
+                        else:
+                            st.caption("")
 
                     with col3:
-                        if st.button("👁️", key=f"view_email_{email.id}"):
-                            st.session_state.view_email_id = email.id
+                        st.caption(format_date(email_item.received_at, True) if email_item.received_at else "")
+
+                    with col4:
+                        if st.button("👁️", key=f"view_email_{email_item.id}"):
+                            st.session_state.view_email_id = email_item.id
 
                     st.divider()
             else:
-                st.info("Keine E-Mails im Posteingang")
+                st.info("Keine E-Mails gefunden")
 
         # E-Mail-Detailansicht
         if 'view_email_id' in st.session_state:
@@ -243,6 +278,296 @@ else:
                 if 'reply_subject' in st.session_state:
                     del st.session_state.reply_subject
                 st.rerun()
+
+    # ============================================================
+    # TAB: VERFÜGUNGEN
+    # ============================================================
+    with tab_dispositions:
+        st.subheader("📋 Verfügungen")
+        st.markdown("Erkannte Verfügungen und Anweisungen aus E-Mails")
+
+        # Filter
+        disp_filter = st.selectbox(
+            "Status",
+            ["Offen", "Erledigt", "Alle"],
+            key="disp_filter"
+        )
+
+        with get_db() as session:
+            query = session.query(EmailDisposition).filter(
+                EmailDisposition.user_id == user_id
+            )
+
+            if disp_filter == "Offen":
+                query = query.filter(EmailDisposition.status == "open")
+            elif disp_filter == "Erledigt":
+                query = query.filter(EmailDisposition.status == "completed")
+
+            dispositions = query.order_by(EmailDisposition.created_at.desc()).limit(50).all()
+
+            if dispositions:
+                for disp in dispositions:
+                    # E-Mail-Details laden
+                    email_obj = session.get(Email, disp.email_id) if disp.email_id else None
+
+                    with st.container():
+                        col1, col2, col3 = st.columns([3, 1, 1])
+
+                        with col1:
+                            status_icon = "🟢" if disp.status == "open" else "✅"
+                            st.markdown(f"{status_icon} **{disp.trigger_keyword or 'Verfügung'}**")
+                            if email_obj:
+                                st.caption(f"📧 {email_obj.subject or 'Kein Betreff'}")
+                            if disp.raw_text:
+                                st.text(disp.raw_text[:200] + "..." if len(disp.raw_text or "") > 200 else disp.raw_text)
+
+                        with col2:
+                            if disp.confidence:
+                                st.metric("Konfidenz", f"{disp.confidence:.0%}")
+                            st.caption(format_date(disp.created_at) if disp.created_at else "")
+
+                        with col3:
+                            if disp.status == "open":
+                                if st.button("✅ Erledigt", key=f"complete_disp_{disp.id}"):
+                                    disposition_engine.complete_disposition(disp.id)
+                                    st.rerun()
+
+                        # Aktionen anzeigen
+                        if disp.actions:
+                            with st.expander("📝 Erkannte Aktionen"):
+                                for action in disp.actions:
+                                    action_type = action.get("type", "unknown")
+                                    if action_type == "move_to_folder":
+                                        st.write(f"📁 In Ordner verschieben: **{action.get('target')}**")
+                                    elif action_type == "set_deadline":
+                                        st.write(f"📅 Frist: **{action.get('date_str') or action.get('date')}**")
+                                    elif action_type == "assign_to":
+                                        st.write(f"👤 Zuweisen an: **{action.get('person')}**")
+                                    elif action_type == "create_task":
+                                        st.write(f"✓ Aufgabe: **{action.get('title')}**")
+                                    elif action_type == "create_response":
+                                        st.write(f"↩️ Antwort erforderlich")
+
+                        st.divider()
+            else:
+                st.info("Keine Verfügungen gefunden")
+
+    # ============================================================
+    # TAB: SIGNATUREN
+    # ============================================================
+    with tab_signatures:
+        st.subheader("✍️ Signatur-Verwaltung")
+        st.markdown("Verwalten Sie E-Mail-Signaturen für die automatische Erkennung")
+
+        col_list, col_edit = st.columns([1, 2])
+
+        with col_list:
+            st.markdown("**Vorhandene Signaturen**")
+
+            signatures = signature_service.get_all_signatures()
+
+            for sig in signatures:
+                icon = "⭐" if sig.get("is_default") else "✍️"
+                enabled = "✅" if sig.get("is_enabled") else "❌"
+                if st.button(
+                    f"{icon} {sig['name']} {enabled}",
+                    key=f"sig_{sig['id']}",
+                    use_container_width=True
+                ):
+                    st.session_state.edit_signature_id = sig['id']
+
+            st.divider()
+            if st.button("➕ Neue Signatur", use_container_width=True):
+                st.session_state.edit_signature_id = "new"
+
+        with col_edit:
+            edit_id = st.session_state.get('edit_signature_id')
+
+            if edit_id == "new":
+                st.markdown("### Neue Signatur erstellen")
+
+                sig_name = st.text_input("Name", placeholder="z.B. Kanzlei Standard")
+                sig_email = st.text_input("E-Mail-Adresse", placeholder="z.B. meier@ra-rhm.de")
+                sig_is_default = st.checkbox("Als Standard-Signatur setzen")
+
+                st.markdown("**Erkennungs-Muster**")
+                st.caption("Texte, die in der Signatur vorkommen")
+
+                pattern_text = st.text_area(
+                    "Muster (eines pro Zeile)",
+                    placeholder="Mit freundlichen Grüßen\nRechtsanwalt Meier\nra-rhm.de",
+                    height=100
+                )
+
+                if st.button("💾 Speichern", type="primary"):
+                    if sig_name and sig_email:
+                        patterns = []
+                        for line in pattern_text.strip().split("\n"):
+                            if line.strip():
+                                patterns.append({
+                                    "type": "contains",
+                                    "value": line.strip(),
+                                    "weight": 1.0
+                                })
+                        # E-Mail-Adresse als Pattern hinzufügen
+                        patterns.append({
+                            "type": "email",
+                            "value": sig_email,
+                            "weight": 2.0
+                        })
+
+                        signature_service.create_signature(
+                            name=sig_name,
+                            email_address=sig_email,
+                            patterns=patterns,
+                            is_default=sig_is_default
+                        )
+                        st.success("✅ Signatur erstellt!")
+                        del st.session_state.edit_signature_id
+                        st.rerun()
+                    else:
+                        st.error("Bitte Name und E-Mail-Adresse eingeben")
+
+            elif edit_id:
+                sig = signature_service.get_signature(edit_id)
+                if sig:
+                    st.markdown(f"### {sig['name']} bearbeiten")
+
+                    sig_name = st.text_input("Name", value=sig['name'])
+                    sig_email = st.text_input("E-Mail-Adresse", value=sig.get('email_address', ''))
+                    sig_is_default = st.checkbox("Standard-Signatur", value=sig.get('is_default', False))
+                    sig_enabled = st.checkbox("Aktiv", value=sig.get('is_enabled', True))
+
+                    st.markdown("**Statistik**")
+                    st.write(f"Erkannt: {sig.get('times_detected', 0)} mal")
+                    if sig.get('last_detected_at'):
+                        st.write(f"Zuletzt: {format_date(sig['last_detected_at'])}")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button("💾 Speichern", type="primary"):
+                            signature_service.update_signature(
+                                edit_id,
+                                name=sig_name,
+                                email_address=sig_email,
+                                is_default=sig_is_default,
+                                is_enabled=sig_enabled
+                            )
+                            st.success("✅ Gespeichert!")
+                            st.rerun()
+                    with col2:
+                        if st.button("🗑️ Löschen"):
+                            signature_service.delete_signature(edit_id)
+                            del st.session_state.edit_signature_id
+                            st.rerun()
+                    with col3:
+                        if st.button("Abbrechen"):
+                            del st.session_state.edit_signature_id
+                            st.rerun()
+            else:
+                st.info("Wählen Sie eine Signatur aus oder erstellen Sie eine neue")
+
+    # ============================================================
+    # TAB: KLASSIFIKATIONSREGELN
+    # ============================================================
+    with tab_rules:
+        st.subheader("📐 E-Mail-Klassifikationsregeln")
+        st.markdown("Regeln für automatische Ordner-Zuweisung und Tags")
+
+        col_rules, col_edit = st.columns([1, 2])
+
+        with col_rules:
+            st.markdown("**Vorhandene Regeln**")
+
+            with get_db() as session:
+                rules = session.query(EmailClassificationRule).filter(
+                    EmailClassificationRule.user_id == user_id
+                ).order_by(EmailClassificationRule.priority.desc()).all()
+
+                for rule in rules:
+                    enabled = "✅" if rule.is_enabled else "❌"
+                    if st.button(
+                        f"{enabled} {rule.name} (P:{rule.priority})",
+                        key=f"rule_{rule.id}",
+                        use_container_width=True
+                    ):
+                        st.session_state.edit_rule_id = rule.id
+
+            st.divider()
+            if st.button("➕ Neue Regel", use_container_width=True):
+                st.session_state.edit_rule_id = "new"
+
+        with col_edit:
+            edit_rule_id = st.session_state.get('edit_rule_id')
+
+            if edit_rule_id == "new":
+                st.markdown("### Neue Regel erstellen")
+
+                rule_name = st.text_input("Regelname", placeholder="z.B. Telekom-Rechnungen")
+                rule_priority = st.slider("Priorität", 1, 100, 50)
+
+                st.markdown("**Bedingungen**")
+                cond_field = st.selectbox("Feld", ["from_address", "subject", "body"])
+                cond_op = st.selectbox("Operator", ["contains", "equals", "startswith", "regex"])
+                cond_value = st.text_input("Wert", placeholder="z.B. @telekom.de")
+
+                st.markdown("**Aktionen**")
+                target_folder = st.text_input("Ziel-Ordner", placeholder="z.B. Rechnungen/Telekom")
+                assign_tags = st.text_input("Tags (kommagetrennt)", placeholder="telekom, rechnung")
+
+                if st.button("💾 Regel erstellen", type="primary"):
+                    if rule_name and cond_value:
+                        with get_db() as session:
+                            new_rule = EmailClassificationRule(
+                                user_id=user_id,
+                                name=rule_name,
+                                priority=rule_priority,
+                                conditions={
+                                    "operator": "AND",
+                                    "conditions": [{
+                                        "field": cond_field,
+                                        "op": cond_op,
+                                        "value": cond_value
+                                    }]
+                                },
+                                target_folder_path=target_folder,
+                                assign_tags=[t.strip() for t in assign_tags.split(",") if t.strip()] if assign_tags else None,
+                                is_enabled=True
+                            )
+                            session.add(new_rule)
+                            session.commit()
+                        st.success("✅ Regel erstellt!")
+                        del st.session_state.edit_rule_id
+                        st.rerun()
+                    else:
+                        st.error("Bitte Name und Bedingung eingeben")
+
+            elif edit_rule_id:
+                with get_db() as session:
+                    rule = session.get(EmailClassificationRule, edit_rule_id)
+                    if rule:
+                        st.markdown(f"### {rule.name} bearbeiten")
+
+                        st.write(f"**Priorität:** {rule.priority}")
+                        st.write(f"**Ziel-Ordner:** {rule.target_folder_path or '-'}")
+                        st.write(f"**Tags:** {', '.join(rule.assign_tags or [])}")
+                        st.write(f"**Angewandt:** {rule.times_applied or 0} mal")
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            new_enabled = st.checkbox("Aktiv", value=rule.is_enabled)
+                            if new_enabled != rule.is_enabled:
+                                rule.is_enabled = new_enabled
+                                session.commit()
+                                st.rerun()
+                        with col2:
+                            if st.button("🗑️ Löschen"):
+                                session.delete(rule)
+                                session.commit()
+                                del st.session_state.edit_rule_id
+                                st.rerun()
+            else:
+                st.info("Wählen Sie eine Regel aus oder erstellen Sie eine neue")
 
     with tab_sent:
         st.subheader("📤 Gesendete E-Mails")

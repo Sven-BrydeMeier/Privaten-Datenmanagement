@@ -340,7 +340,7 @@ class Contact(Base):
 
 
 class Email(Base):
-    """E-Mail-Nachrichten"""
+    """E-Mail-Nachrichten mit Verfügungs- und Signatur-Erkennung"""
     __tablename__ = 'emails'
 
     id = Column(Integer, primary_key=True)
@@ -351,8 +351,11 @@ class Email(Base):
     folder = Column(String(100), default="inbox")  # inbox, sent, trash, etc.
 
     from_address = Column(String(255))
+    from_name = Column(String(255))  # Absender-Name
     to_addresses = Column(Text)  # JSON-Array
     cc_addresses = Column(Text)  # JSON-Array
+    bcc_addresses = Column(Text)  # JSON-Array (NEU)
+    reply_to = Column(String(255))  # Reply-To Header (NEU)
     subject = Column(String(1000))
     body_text = Column(Text)
     body_html = Column(Text)
@@ -363,11 +366,59 @@ class Email(Base):
     is_flagged = Column(Boolean, default=False)
     has_attachments = Column(Boolean, default=False)
 
+    # Threading / Konversation
+    in_reply_to = Column(String(255))  # In-Reply-To Header
+    references = Column(Text)  # References Header (für Thread)
+    conversation_id = Column(String(255))  # Konversations-ID
+
+    # Signatur-Erkennung
+    signature_detected = Column(Boolean, default=False)
+    signature_id = Column(Integer, ForeignKey('email_signatures.id'))
+    signature_confidence = Column(Float)  # Erkennungs-Konfidenz
+
+    # Verfügungs-Erkennung (Disposition)
+    has_disposition = Column(Boolean, default=False)
+    disposition_type = Column(String(100))  # z.B. "verfuegung", "bitte_veranlassen", "frist"
+    disposition_confidence = Column(Float)
+    disposition_extracted = Column(Boolean, default=False)  # Wurde Verfügung extrahiert?
+
+    # Klassifikation
+    classification_folder_id = Column(Integer, ForeignKey('folders.id'))
+    classification_tags = Column(JSON)  # Automatisch erkannte Tags
+    classification_confidence = Column(Float)
+    classification_reason = Column(Text)  # Warum so klassifiziert
+    classification_rule_id = Column(Integer, ForeignKey('email_classification_rules.id'))
+
+    # Verarbeitungsstatus
+    processing_status = Column(String(50), default="pending")  # pending, processing, completed, error, review
+    processing_error = Column(Text)
+    processed_at = Column(DateTime)
+    needs_review = Column(Boolean, default=False)  # Bei niedriger Konfidenz
+
     # Für KI-Antwortvorschläge
     needs_response = Column(Boolean, default=False)
     response_draft = Column(Text)
+    response_due_date = Column(DateTime)  # Frist für Antwort
+
+    # Priorität
+    priority = Column(Integer, default=3)  # 1=höchste, 5=niedrigste
 
     created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    signature = relationship("EmailSignature", back_populates="emails")
+    dispositions = relationship("EmailDisposition", back_populates="email")
+    attachments = relationship("EmailAttachment", back_populates="email")
+    classification_rule = relationship("EmailClassificationRule")
+    classification_folder = relationship("Folder")
+
+    __table_args__ = (
+        Index('idx_email_user_folder', 'user_id', 'folder'),
+        Index('idx_email_message_id', 'message_id'),
+        Index('idx_email_has_disposition', 'has_disposition'),
+        Index('idx_email_processing_status', 'processing_status'),
+    )
 
 
 class SmartFolder(Base):
@@ -1387,4 +1438,249 @@ class LayoutTemplate(Base):
     __table_args__ = (
         Index('idx_layout_template_user', 'user_id'),
         Index('idx_layout_template_sender', 'sender_pattern'),
+    )
+
+
+# ============================================================
+# E-MAIL PROCESSING MODELLE
+# ============================================================
+
+class EmailSignature(Base):
+    """E-Mail-Signaturen für Erkennung und Verwaltung"""
+    __tablename__ = 'email_signatures'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    name = Column(String(255), nullable=False)  # z.B. "Kanzlei RHM Standard"
+    description = Column(Text)
+
+    # Signatur-Identifikation
+    email_address = Column(String(255))  # z.B. "meier@ra-rhm.de"
+    is_default = Column(Boolean, default=False)  # Standard-Signatur
+
+    # Erkennungs-Patterns (JSON-Array von Mustern)
+    # Format: [
+    #   {"type": "exact", "value": "Mit freundlichen Grüßen"},
+    #   {"type": "contains", "value": "Rechtsanwalt"},
+    #   {"type": "regex", "value": "Tel\\.?:\\s*\\+?[0-9\\s/-]+"},
+    #   {"type": "fuzzy", "value": "Kanzlei Müller", "threshold": 80}
+    # ]
+    patterns = Column(JSON, nullable=False)
+
+    # Signatur-Text (für Anzeige/Vorschau)
+    signature_text = Column(Text)
+    signature_html = Column(Text)
+
+    # Statistik
+    times_detected = Column(Integer, default=0)
+    last_detected_at = Column(DateTime)
+
+    # Status
+    is_enabled = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    user = relationship("User")
+    emails = relationship("Email", back_populates="signature")
+
+    __table_args__ = (
+        Index('idx_email_signature_user', 'user_id'),
+        Index('idx_email_signature_email', 'email_address'),
+    )
+
+
+class DispositionActionType(enum.Enum):
+    """Typen von Verfügungs-Aktionen"""
+    MOVE_TO_FOLDER = "move_to_folder"  # In Ordner verschieben
+    CREATE_TASK = "create_task"  # Aufgabe erstellen
+    SET_DEADLINE = "set_deadline"  # Frist setzen
+    ASSIGN_TO = "assign_to"  # Zuweisen an
+    CREATE_RESPONSE = "create_response"  # Antwort erstellen
+    ARCHIVE = "archive"  # Archivieren
+    FILE_TO_CASE = "file_to_case"  # Zu Akte nehmen
+    FORWARD = "forward"  # Weiterleiten
+    CUSTOM = "custom"  # Benutzerdefiniert
+
+
+class EmailDisposition(Base):
+    """Verfügungen aus E-Mails extrahiert"""
+    __tablename__ = 'email_dispositions'
+
+    id = Column(Integer, primary_key=True)
+    email_id = Column(Integer, ForeignKey('emails.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Rohdaten
+    raw_text = Column(Text)  # Original-Verfügungstext
+    extracted_at = Column(DateTime, default=func.now())
+
+    # Erkennungs-Info
+    trigger_keyword = Column(String(255))  # z.B. "Verfügung:", "Bitte veranlassen"
+    detection_method = Column(String(50))  # "keyword", "ai", "manual"
+    confidence = Column(Float)
+
+    # Strukturierte Aktionen (JSON-Array)
+    # Format: [
+    #   {"type": "move_to_folder", "target": "Inkasso/Müller", "priority": 1},
+    #   {"type": "set_deadline", "date": "2024-12-31", "description": "Frist Klageerwiderung"},
+    #   {"type": "assign_to", "person": "Frau Schmidt", "email": "schmidt@ra-rhm.de"},
+    #   {"type": "create_task", "title": "Schriftsatz vorbereiten", "due_date": "2024-12-20"}
+    # ]
+    actions = Column(JSON)
+
+    # Verknüpfungen
+    target_folder_id = Column(Integer, ForeignKey('folders.id'))
+    target_entity_id = Column(Integer, ForeignKey('entities.id'))  # z.B. Mandant, Akte
+    assigned_to_contact_id = Column(Integer, ForeignKey('contacts.id'))
+
+    # Status
+    status = Column(String(50), default="open")  # open, in_progress, completed, cancelled
+    completed_at = Column(DateTime)
+    completed_by = Column(String(255))
+
+    # Audit
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    email = relationship("Email", back_populates="dispositions")
+    user = relationship("User")
+    target_folder = relationship("Folder")
+    target_entity = relationship("Entity")
+    assigned_to = relationship("Contact")
+
+    __table_args__ = (
+        Index('idx_disposition_email', 'email_id'),
+        Index('idx_disposition_status', 'status'),
+    )
+
+
+class EmailAttachment(Base):
+    """E-Mail-Anhänge"""
+    __tablename__ = 'email_attachments'
+
+    id = Column(Integer, primary_key=True)
+    email_id = Column(Integer, ForeignKey('emails.id'), nullable=False)
+    document_id = Column(Integer, ForeignKey('documents.id'))  # Verknüpfung zu importiertem Dokument
+
+    # Datei-Info
+    filename = Column(String(500), nullable=False)
+    mime_type = Column(String(255))
+    size = Column(Integer)  # Bytes
+    content_hash = Column(String(64))  # SHA-256
+
+    # Speicherort
+    storage_path = Column(String(1000))  # Pfad zum gespeicherten Anhang
+    is_stored = Column(Boolean, default=False)
+
+    # Extraktion
+    extracted_text = Column(Text)  # OCR/Text-Extraktion
+    extraction_status = Column(String(50))  # pending, completed, failed, skipped
+
+    # Klassifikation (optional separate vom E-Mail)
+    classification_category = Column(String(100))
+    classification_confidence = Column(Float)
+
+    # Content-Disposition
+    content_disposition = Column(String(50))  # inline, attachment
+    content_id = Column(String(255))  # CID für inline-Bilder
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    email = relationship("Email", back_populates="attachments")
+    document = relationship("Document")
+
+    __table_args__ = (
+        Index('idx_attachment_email', 'email_id'),
+        Index('idx_attachment_hash', 'content_hash'),
+    )
+
+
+class EmailClassificationRule(Base):
+    """Regeln für E-Mail-Klassifikation"""
+    __tablename__ = 'email_classification_rules'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+
+    # Regel-Priorität (höhere Zahl = wird zuerst geprüft)
+    priority = Column(Integer, default=50)
+
+    # Bedingungen (JSON)
+    # Format: {
+    #   "operator": "AND",  # AND, OR
+    #   "conditions": [
+    #     {"field": "from_address", "op": "contains", "value": "@telekom.de"},
+    #     {"field": "subject", "op": "contains", "value": "Rechnung"},
+    #     {"field": "body", "op": "regex", "value": "Rechnungsnummer:\\s*\\d+"},
+    #     {"field": "attachment_type", "op": "equals", "value": "application/pdf"}
+    #   ]
+    # }
+    conditions = Column(JSON, nullable=False)
+
+    # Aktionen bei Match
+    target_folder_id = Column(Integer, ForeignKey('folders.id'))
+    target_folder_path = Column(String(500))  # z.B. "Rechnungen/Telekom"
+    assign_tags = Column(JSON)  # ["telekom", "rechnung"]
+    assign_category = Column(String(100))
+    set_priority = Column(Integer)
+
+    # Verfügungs-Trigger (optional)
+    check_disposition = Column(Boolean, default=True)  # Prüfe auf Verfügung
+
+    # Statistik
+    times_applied = Column(Integer, default=0)
+    last_applied_at = Column(DateTime)
+
+    # Status
+    is_enabled = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Beziehungen
+    user = relationship("User")
+    target_folder = relationship("Folder")
+
+    __table_args__ = (
+        Index('idx_email_rule_user', 'user_id'),
+        Index('idx_email_rule_priority', 'priority'),
+    )
+
+
+class EmailProcessingLog(Base):
+    """Audit-Log für E-Mail-Verarbeitung"""
+    __tablename__ = 'email_processing_logs'
+
+    id = Column(Integer, primary_key=True)
+    email_id = Column(Integer, ForeignKey('emails.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Schritt
+    step = Column(String(100), nullable=False)  # fetch, parse, signature, disposition, classify, store
+    status = Column(String(50), nullable=False)  # success, warning, error, skipped
+
+    # Details
+    message = Column(Text)
+    details = Column(JSON)  # Zusätzliche strukturierte Daten
+
+    # Timing
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    duration_ms = Column(Integer)
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    email = relationship("Email")
+
+    __table_args__ = (
+        Index('idx_processing_log_email', 'email_id'),
     )
