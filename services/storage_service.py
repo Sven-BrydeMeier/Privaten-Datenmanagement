@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Versuche Supabase zu importieren
 try:
     from supabase import create_client, Client
+    from supabase.lib.client_options import ClientOptions
+    import httpx
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
@@ -80,11 +82,16 @@ class StorageService:
 
         if supabase_url and supabase_key:
             try:
-                self._supabase_client = create_client(supabase_url, supabase_key)
+                # Client mit längerem Timeout erstellen (120 Sekunden für große Dateien)
+                options = ClientOptions(
+                    postgrest_client_timeout=120,
+                    storage_client_timeout=120
+                )
+                self._supabase_client = create_client(supabase_url, supabase_key, options=options)
                 # Test connection by listing buckets
                 self._supabase_client.storage.list_buckets()
                 self._use_cloud = True
-                logger.info(f"Supabase Storage verbunden (Bucket: {self._bucket_name})")
+                logger.info(f"Supabase Storage verbunden (Bucket: {self._bucket_name}, Timeout: 120s)")
             except Exception as e:
                 logger.warning(f"Supabase Storage Fehler: {e}, verwende lokalen Speicher")
                 self._supabase_client = None
