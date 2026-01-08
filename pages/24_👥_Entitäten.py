@@ -89,6 +89,102 @@ def delete_entity(entity_id: int):
             session.commit()
 
 
+def scan_documents_for_entity(entity_id: int) -> dict:
+    """
+    Durchsucht alle vorhandenen Dokumente nach Übereinstimmungen mit einer Entität.
+
+    Returns:
+        dict mit 'found': Anzahl gefundener Dokumente, 'linked': Anzahl neu verknüpfter
+    """
+    from sqlalchemy import and_
+    from database.models import document_entities
+
+    result = {'found': 0, 'linked': 0, 'documents': []}
+
+    with get_db() as session:
+        entity = session.get(Entity, entity_id)
+        if not entity:
+            return result
+
+        # Suchbegriffe zusammenstellen: Name + Aliase + spezifische Meta-Werte
+        search_terms = [entity.name.lower()]
+        if entity.aliases:
+            search_terms.extend([a.lower() for a in entity.aliases])
+
+        # Meta-spezifische Suchbegriffe
+        if entity.meta:
+            # Kennzeichen bei Fahrzeugen
+            if entity.meta.get('plate'):
+                search_terms.append(entity.meta['plate'].lower())
+            # Dokumentennummer bei Ausweisen
+            if entity.meta.get('doc_number'):
+                search_terms.append(entity.meta['doc_number'].lower())
+
+        # Alle Dokumente des Benutzers laden
+        documents = session.query(Document).filter(
+            Document.user_id == user_id,
+            Document.is_deleted == False
+        ).all()
+
+        for doc in documents:
+            # Prüfe ob bereits verknüpft
+            existing_link = session.execute(
+                document_entities.select().where(
+                    and_(
+                        document_entities.c.document_id == doc.id,
+                        document_entities.c.entity_id == entity_id
+                    )
+                )
+            ).first()
+
+            if existing_link:
+                continue
+
+            # Text zum Durchsuchen zusammenstellen
+            searchable_text = ""
+            if doc.ocr_text:
+                searchable_text += doc.ocr_text.lower()
+            if doc.ai_summary:
+                searchable_text += " " + doc.ai_summary.lower()
+            if doc.sender:
+                searchable_text += " " + doc.sender.lower()
+            if doc.original_filename:
+                searchable_text += " " + doc.original_filename.lower()
+
+            # Suche nach Übereinstimmungen
+            matched = False
+            for term in search_terms:
+                if term and len(term) >= 3 and term in searchable_text:
+                    matched = True
+                    break
+
+            if matched:
+                result['found'] += 1
+                result['documents'].append({
+                    'id': doc.id,
+                    'title': doc.title or doc.original_filename,
+                    'date': doc.document_date
+                })
+
+                # Verknüpfung erstellen
+                session.execute(
+                    document_entities.insert().values(
+                        document_id=doc.id,
+                        entity_id=entity_id,
+                        relation_type='auto_detected',
+                        confidence=0.8
+                    )
+                )
+                result['linked'] += 1
+
+        # Entity-Statistik aktualisieren
+        if result['linked'] > 0:
+            entity.document_count = (entity.document_count or 0) + result['linked']
+            session.commit()
+
+    return result
+
+
 def get_entity_documents(entity_id: int):
     """Gibt alle Dokumente zurück, die mit einer Entity verknüpft sind"""
     with get_db() as session:
@@ -190,6 +286,9 @@ with tab_person:
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
+            scan_after_create = st.checkbox("🔍 Nach Erstellung vorhandene Dokumente durchsuchen", value=True,
+                help="Durchsucht alle vorhandenen Dokumente nach Übereinstimmungen mit dieser Person")
+
             if st.form_submit_button("Person erstellen"):
                 if name:
                     alias_list = [a.strip() for a in aliases.split(",") if a.strip()] if aliases else []
@@ -198,8 +297,16 @@ with tab_person:
                         "relation": relation if relation else None,
                         "minor": is_minor
                     }
-                    create_entity(EntityType.PERSON, name, display_name or None, alias_list, meta, folder_id)
+                    entity_id = create_entity(EntityType.PERSON, name, display_name or None, alias_list, meta, folder_id)
                     st.success(f"Person '{name}' wurde erstellt!")
+
+                    if scan_after_create:
+                        with st.spinner("Durchsuche vorhandene Dokumente..."):
+                            scan_result = scan_documents_for_entity(entity_id)
+                        if scan_result['linked'] > 0:
+                            st.success(f"✅ {scan_result['linked']} passende Dokumente gefunden und verknüpft!")
+                        else:
+                            st.info("Keine passenden Dokumente in Ihrem Bestand gefunden.")
                     st.rerun()
                 else:
                     st.error("Bitte geben Sie einen Namen ein.")
@@ -210,7 +317,7 @@ with tab_person:
         for person in persons:
             meta = person['meta']
             with st.container(border=True):
-                col1, col2, col3 = st.columns([3, 2, 1])
+                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
                 with col1:
                     st.write(f"**{person['display_name'] or person['name']}**")
                     if person['aliases']:
@@ -222,6 +329,83 @@ with tab_person:
                         st.write(f"🎂 {meta['birthday']}")
                 with col3:
                     st.write(f"📄 {person['document_count']}")
+                with col4:
+                    col_edit, col_scan, col_del = st.columns(3)
+                    with col_edit:
+                        if st.button("✏️", key=f"edit_person_{person['id']}", help="Bearbeiten"):
+                            st.session_state[f"editing_person_{person['id']}"] = True
+                    with col_scan:
+                        if st.button("🔍", key=f"scan_person_{person['id']}", help="Dokumente suchen"):
+                            with st.spinner("Durchsuche Dokumente..."):
+                                scan_result = scan_documents_for_entity(person['id'])
+                            if scan_result['linked'] > 0:
+                                st.success(f"✅ {scan_result['linked']} Dokumente verknüpft!")
+                                st.rerun()
+                            else:
+                                st.info("Keine neuen passenden Dokumente gefunden.")
+                    with col_del:
+                        if st.button("🗑️", key=f"del_person_{person['id']}", help="Löschen"):
+                            delete_entity(person['id'])
+                            st.rerun()
+
+                # Bearbeitungsformular
+                if st.session_state.get(f"editing_person_{person['id']}"):
+                    st.divider()
+                    with st.form(f"edit_person_form_{person['id']}"):
+                        edit_name = st.text_input("Name", value=person['name'])
+                        edit_display_name = st.text_input("Anzeigename", value=person['display_name'] or "")
+                        edit_aliases = st.text_input("Aliase (kommagetrennt)",
+                            value=", ".join(person['aliases']) if person['aliases'] else "")
+
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            current_birthday = None
+                            if meta.get('birthday'):
+                                try:
+                                    from datetime import date
+                                    current_birthday = date.fromisoformat(meta['birthday'])
+                                except:
+                                    pass
+                            edit_birthday = st.date_input("Geburtstag", value=current_birthday)
+                        with col_b:
+                            relation_options = ["", "Partner/in", "Kind", "Elternteil", "Geschwister", "Verwandte/r", "Freund/in", "Sonstige"]
+                            current_relation = meta.get('relation', "")
+                            rel_index = relation_options.index(current_relation) if current_relation in relation_options else 0
+                            edit_relation = st.selectbox("Beziehung", relation_options, index=rel_index)
+
+                        edit_minor = st.checkbox("Minderjährig", value=meta.get('minor', False))
+
+                        folders = get_folders()
+                        folder_options = {"(Kein Ordner)": None}
+                        folder_options.update({f['name']: f['id'] for f in folders})
+                        current_folder = next((f['name'] for f in folders if f['id'] == person['folder_id']), "(Kein Ordner)")
+                        edit_folder = st.selectbox("Zugeordneter Ordner", list(folder_options.keys()),
+                            index=list(folder_options.keys()).index(current_folder) if current_folder in folder_options else 0)
+
+                        col_save, col_cancel = st.columns(2)
+                        with col_save:
+                            if st.form_submit_button("💾 Speichern", type="primary"):
+                                new_aliases = [a.strip() for a in edit_aliases.split(",") if a.strip()]
+                                new_meta = {
+                                    "birthday": edit_birthday.isoformat() if edit_birthday else None,
+                                    "relation": edit_relation if edit_relation else None,
+                                    "minor": edit_minor
+                                }
+                                update_entity(
+                                    person['id'],
+                                    name=edit_name,
+                                    display_name=edit_display_name or None,
+                                    aliases=new_aliases,
+                                    meta=new_meta,
+                                    folder_id=folder_options.get(edit_folder)
+                                )
+                                del st.session_state[f"editing_person_{person['id']}"]
+                                st.success("Person aktualisiert!")
+                                st.rerun()
+                        with col_cancel:
+                            if st.form_submit_button("❌ Abbrechen"):
+                                del st.session_state[f"editing_person_{person['id']}"]
+                                st.rerun()
     else:
         st.info("Noch keine Personen angelegt.")
 
@@ -262,6 +446,9 @@ with tab_vehicle:
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
+            scan_after_create = st.checkbox("🔍 Nach Erstellung vorhandene Dokumente durchsuchen", value=True,
+                help="Durchsucht alle vorhandenen Dokumente nach Übereinstimmungen mit diesem Fahrzeug")
+
             if st.form_submit_button("Fahrzeug erstellen"):
                 if name:
                     meta = {
@@ -284,6 +471,14 @@ with tab_vehicle:
                         update_entity(entity_id, parent_entity_id=owner_id)
 
                     st.success(f"Fahrzeug '{name}' wurde erstellt!")
+
+                    if scan_after_create:
+                        with st.spinner("Durchsuche vorhandene Dokumente..."):
+                            scan_result = scan_documents_for_entity(entity_id)
+                        if scan_result['linked'] > 0:
+                            st.success(f"✅ {scan_result['linked']} passende Dokumente gefunden und verknüpft!")
+                        else:
+                            st.info("Keine passenden Dokumente in Ihrem Bestand gefunden.")
                     st.rerun()
                 else:
                     st.error("Bitte geben Sie eine Bezeichnung ein.")
@@ -294,7 +489,7 @@ with tab_vehicle:
         for vehicle in vehicles:
             meta = vehicle['meta']
             with st.container(border=True):
-                col1, col2, col3 = st.columns([3, 2, 1])
+                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
                 with col1:
                     st.write(f"**{vehicle['name']}**")
                     if meta.get('brand') and meta.get('model'):
@@ -306,6 +501,86 @@ with tab_vehicle:
                         st.write(f"📅 {meta['year']}")
                 with col3:
                     st.write(f"📄 {vehicle['document_count']}")
+                with col4:
+                    col_edit, col_scan, col_del = st.columns(3)
+                    with col_edit:
+                        if st.button("✏️", key=f"edit_vehicle_{vehicle['id']}", help="Bearbeiten"):
+                            st.session_state[f"editing_vehicle_{vehicle['id']}"] = True
+                    with col_scan:
+                        if st.button("🔍", key=f"scan_vehicle_{vehicle['id']}", help="Dokumente suchen"):
+                            with st.spinner("Durchsuche Dokumente..."):
+                                scan_result = scan_documents_for_entity(vehicle['id'])
+                            if scan_result['linked'] > 0:
+                                st.success(f"✅ {scan_result['linked']} Dokumente verknüpft!")
+                                st.rerun()
+                            else:
+                                st.info("Keine neuen passenden Dokumente gefunden.")
+                    with col_del:
+                        if st.button("🗑️", key=f"del_vehicle_{vehicle['id']}", help="Löschen"):
+                            delete_entity(vehicle['id'])
+                            st.rerun()
+
+                # Bearbeitungsformular
+                if st.session_state.get(f"editing_vehicle_{vehicle['id']}"):
+                    st.divider()
+                    with st.form(f"edit_vehicle_form_{vehicle['id']}"):
+                        edit_name = st.text_input("Bezeichnung", value=vehicle['name'])
+
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            edit_brand = st.text_input("Marke", value=meta.get('brand', ''))
+                            edit_model = st.text_input("Modell", value=meta.get('model', ''))
+                        with col_b:
+                            edit_plate = st.text_input("Kennzeichen", value=meta.get('plate', ''))
+                            edit_vin = st.text_input("Fahrgestellnummer", value=meta.get('vin', ''))
+
+                        col_c, col_d = st.columns(2)
+                        with col_c:
+                            edit_year = st.number_input("Baujahr", min_value=1900, max_value=2030,
+                                value=meta.get('year', 2020))
+                        with col_d:
+                            vehicle_types = ["PKW", "Motorrad", "Transporter", "LKW", "Anhänger", "Sonstige"]
+                            current_type = meta.get('vehicle_type', 'PKW')
+                            type_index = vehicle_types.index(current_type) if current_type in vehicle_types else 0
+                            edit_type = st.selectbox("Fahrzeugtyp", vehicle_types, index=type_index)
+
+                        folders = get_folders()
+                        folder_options = {"(Kein Ordner)": None}
+                        folder_options.update({f['name']: f['id'] for f in folders})
+                        current_folder = next((f['name'] for f in folders if f['id'] == vehicle['folder_id']), "(Kein Ordner)")
+                        edit_folder = st.selectbox("Zugeordneter Ordner", list(folder_options.keys()),
+                            index=list(folder_options.keys()).index(current_folder) if current_folder in folder_options else 0)
+
+                        col_save, col_cancel = st.columns(2)
+                        with col_save:
+                            if st.form_submit_button("💾 Speichern", type="primary"):
+                                new_meta = {
+                                    "brand": edit_brand,
+                                    "model": edit_model,
+                                    "plate": edit_plate,
+                                    "vin": edit_vin,
+                                    "year": edit_year,
+                                    "vehicle_type": edit_type
+                                }
+                                # Aliase aktualisieren
+                                new_aliases = [edit_plate] if edit_plate else []
+                                if edit_brand and edit_model:
+                                    new_aliases.append(f"{edit_brand} {edit_model}")
+
+                                update_entity(
+                                    vehicle['id'],
+                                    name=edit_name,
+                                    aliases=new_aliases,
+                                    meta=new_meta,
+                                    folder_id=folder_options.get(edit_folder)
+                                )
+                                del st.session_state[f"editing_vehicle_{vehicle['id']}"]
+                                st.success("Fahrzeug aktualisiert!")
+                                st.rerun()
+                        with col_cancel:
+                            if st.form_submit_button("❌ Abbrechen"):
+                                del st.session_state[f"editing_vehicle_{vehicle['id']}"]
+                                st.rerun()
     else:
         st.info("Noch keine Fahrzeuge angelegt.")
 
@@ -517,6 +792,9 @@ with tab_supplier:
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
+            scan_after_create = st.checkbox("🔍 Nach Erstellung vorhandene Dokumente durchsuchen", value=True,
+                help="Durchsucht alle vorhandenen Dokumente nach Übereinstimmungen mit diesem Lieferanten")
+
             if st.form_submit_button("Lieferant erstellen"):
                 if name:
                     meta = {
@@ -526,8 +804,16 @@ with tab_supplier:
                         "phone": contact_phone
                     }
                     alias_list = [a.strip() for a in aliases.split(",") if a.strip()] if aliases else []
-                    create_entity(EntityType.SUPPLIER, name, None, alias_list, meta, folder_id)
+                    entity_id = create_entity(EntityType.SUPPLIER, name, None, alias_list, meta, folder_id)
                     st.success(f"Lieferant '{name}' wurde erstellt!")
+
+                    if scan_after_create:
+                        with st.spinner("Durchsuche vorhandene Dokumente..."):
+                            scan_result = scan_documents_for_entity(entity_id)
+                        if scan_result['linked'] > 0:
+                            st.success(f"✅ {scan_result['linked']} passende Dokumente gefunden und verknüpft!")
+                        else:
+                            st.info("Keine passenden Dokumente in Ihrem Bestand gefunden.")
                     st.rerun()
                 else:
                     st.error("Bitte geben Sie einen Firmennamen ein.")
@@ -538,7 +824,7 @@ with tab_supplier:
         for supplier in suppliers:
             meta = supplier['meta']
             with st.container(border=True):
-                col1, col2, col3 = st.columns([3, 2, 1])
+                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
                 with col1:
                     st.write(f"**{supplier['name']}**")
                     if supplier['aliases']:
@@ -550,6 +836,81 @@ with tab_supplier:
                         st.write(f"🔧 {meta['industry']}")
                 with col3:
                     st.write(f"📄 {supplier['document_count']}")
+                with col4:
+                    col_edit, col_scan, col_del = st.columns(3)
+                    with col_edit:
+                        if st.button("✏️", key=f"edit_supplier_{supplier['id']}", help="Bearbeiten"):
+                            st.session_state[f"editing_supplier_{supplier['id']}"] = True
+                    with col_scan:
+                        if st.button("🔍", key=f"scan_supplier_{supplier['id']}", help="Dokumente suchen"):
+                            with st.spinner("Durchsuche Dokumente..."):
+                                scan_result = scan_documents_for_entity(supplier['id'])
+                            if scan_result['linked'] > 0:
+                                st.success(f"✅ {scan_result['linked']} Dokumente verknüpft!")
+                                st.rerun()
+                            else:
+                                st.info("Keine neuen passenden Dokumente gefunden.")
+                    with col_del:
+                        if st.button("🗑️", key=f"del_supplier_{supplier['id']}", help="Löschen"):
+                            delete_entity(supplier['id'])
+                            st.rerun()
+
+                # Bearbeitungsformular
+                if st.session_state.get(f"editing_supplier_{supplier['id']}"):
+                    st.divider()
+                    with st.form(f"edit_supplier_form_{supplier['id']}"):
+                        edit_name = st.text_input("Firmenname", value=supplier['name'])
+
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            categories = ["Handwerker", "Versicherung", "Bank", "Energieversorger",
+                                "Telekommunikation", "Behörde", "Arzt/Gesundheit", "Handel", "Online-Shop", "Sonstige"]
+                            current_cat = meta.get('category', 'Sonstige')
+                            cat_index = categories.index(current_cat) if current_cat in categories else len(categories)-1
+                            edit_category = st.selectbox("Kategorie", categories, index=cat_index)
+                        with col_b:
+                            edit_industry = st.text_input("Branche/Gewerk", value=meta.get('industry', ''))
+
+                        edit_aliases = st.text_input("Alternative Namen",
+                            value=", ".join(supplier['aliases']) if supplier['aliases'] else "")
+
+                        col_c, col_d = st.columns(2)
+                        with col_c:
+                            edit_email = st.text_input("E-Mail", value=meta.get('email', ''))
+                        with col_d:
+                            edit_phone = st.text_input("Telefon", value=meta.get('phone', ''))
+
+                        folders = get_folders()
+                        folder_options = {"(Kein Ordner)": None}
+                        folder_options.update({f['name']: f['id'] for f in folders})
+                        current_folder = next((f['name'] for f in folders if f['id'] == supplier['folder_id']), "(Kein Ordner)")
+                        edit_folder = st.selectbox("Zugeordneter Ordner", list(folder_options.keys()),
+                            index=list(folder_options.keys()).index(current_folder) if current_folder in folder_options else 0)
+
+                        col_save, col_cancel = st.columns(2)
+                        with col_save:
+                            if st.form_submit_button("💾 Speichern", type="primary"):
+                                new_meta = {
+                                    "category": edit_category,
+                                    "industry": edit_industry,
+                                    "email": edit_email,
+                                    "phone": edit_phone
+                                }
+                                new_aliases = [a.strip() for a in edit_aliases.split(",") if a.strip()]
+                                update_entity(
+                                    supplier['id'],
+                                    name=edit_name,
+                                    aliases=new_aliases,
+                                    meta=new_meta,
+                                    folder_id=folder_options.get(edit_folder)
+                                )
+                                del st.session_state[f"editing_supplier_{supplier['id']}"]
+                                st.success("Lieferant aktualisiert!")
+                                st.rerun()
+                        with col_cancel:
+                            if st.form_submit_button("❌ Abbrechen"):
+                                del st.session_state[f"editing_supplier_{supplier['id']}"]
+                                st.rerun()
     else:
         st.info("Noch keine Lieferanten angelegt.")
 
@@ -584,12 +945,23 @@ with tab_other:
             folder_name = st.selectbox("Zugeordneter Ordner", ["(Kein Ordner)"] + list(folder_options.keys()))
             folder_id = folder_options.get(folder_name)
 
+            scan_after_create = st.checkbox("🔍 Nach Erstellung vorhandene Dokumente durchsuchen", value=True,
+                help="Durchsucht alle vorhandenen Dokumente nach Übereinstimmungen mit dieser Entität")
+
             if st.form_submit_button("Entität erstellen"):
                 if name:
                     meta = {"notes": notes} if notes else {}
                     alias_list = [a.strip() for a in aliases.split(",") if a.strip()] if aliases else []
-                    create_entity(entity_type_map[entity_type_str], name, display_name or None, alias_list, meta, folder_id)
+                    entity_id = create_entity(entity_type_map[entity_type_str], name, display_name or None, alias_list, meta, folder_id)
                     st.success(f"Entität '{name}' wurde erstellt!")
+
+                    if scan_after_create:
+                        with st.spinner("Durchsuche vorhandene Dokumente..."):
+                            scan_result = scan_documents_for_entity(entity_id)
+                        if scan_result['linked'] > 0:
+                            st.success(f"✅ {scan_result['linked']} passende Dokumente gefunden und verknüpft!")
+                        else:
+                            st.info("Keine passenden Dokumente in Ihrem Bestand gefunden.")
                     st.rerun()
                 else:
                     st.error("Bitte geben Sie einen Namen ein.")
@@ -600,6 +972,7 @@ with tab_other:
 
     if others:
         for entity in others:
+            meta = entity['meta']
             type_emoji = {
                 EntityType.ORGANIZATION: "🏛️",
                 EntityType.PROJECT: "📁",
@@ -607,7 +980,7 @@ with tab_other:
             }.get(entity['entity_type'], "📌")
 
             with st.container(border=True):
-                col1, col2, col3 = st.columns([3, 2, 1])
+                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
                 with col1:
                     st.write(f"**{type_emoji} {entity['display_name'] or entity['name']}**")
                     if entity['aliases']:
@@ -616,6 +989,78 @@ with tab_other:
                     st.write(f"Typ: {entity['entity_type'].value if entity['entity_type'] else 'Unbekannt'}")
                 with col3:
                     st.write(f"📄 {entity['document_count']}")
+                with col4:
+                    col_edit, col_scan, col_del = st.columns(3)
+                    with col_edit:
+                        if st.button("✏️", key=f"edit_other_{entity['id']}", help="Bearbeiten"):
+                            st.session_state[f"editing_other_{entity['id']}"] = True
+                    with col_scan:
+                        if st.button("🔍", key=f"scan_other_{entity['id']}", help="Dokumente suchen"):
+                            with st.spinner("Durchsuche Dokumente..."):
+                                scan_result = scan_documents_for_entity(entity['id'])
+                            if scan_result['linked'] > 0:
+                                st.success(f"✅ {scan_result['linked']} Dokumente verknüpft!")
+                                st.rerun()
+                            else:
+                                st.info("Keine neuen passenden Dokumente gefunden.")
+                    with col_del:
+                        if st.button("🗑️", key=f"del_other_{entity['id']}", help="Löschen"):
+                            delete_entity(entity['id'])
+                            st.rerun()
+
+                # Bearbeitungsformular
+                if st.session_state.get(f"editing_other_{entity['id']}"):
+                    st.divider()
+                    with st.form(f"edit_other_form_{entity['id']}"):
+                        type_options = ["Organisation/Verein", "Projekt", "Vertrag"]
+                        type_map = {
+                            EntityType.ORGANIZATION: "Organisation/Verein",
+                            EntityType.PROJECT: "Projekt",
+                            EntityType.CONTRACT: "Vertrag"
+                        }
+                        current_type_str = type_map.get(entity['entity_type'], "Organisation/Verein")
+                        type_index = type_options.index(current_type_str) if current_type_str in type_options else 0
+                        edit_type_str = st.selectbox("Typ", type_options, index=type_index)
+
+                        edit_name = st.text_input("Name", value=entity['name'])
+                        edit_display_name = st.text_input("Anzeigename", value=entity['display_name'] or "")
+                        edit_aliases = st.text_input("Aliase (kommagetrennt)",
+                            value=", ".join(entity['aliases']) if entity['aliases'] else "")
+                        edit_notes = st.text_area("Notizen", value=meta.get('notes', ''))
+
+                        folders = get_folders()
+                        folder_options = {"(Kein Ordner)": None}
+                        folder_options.update({f['name']: f['id'] for f in folders})
+                        current_folder = next((f['name'] for f in folders if f['id'] == entity['folder_id']), "(Kein Ordner)")
+                        edit_folder = st.selectbox("Zugeordneter Ordner", list(folder_options.keys()),
+                            index=list(folder_options.keys()).index(current_folder) if current_folder in folder_options else 0)
+
+                        col_save, col_cancel = st.columns(2)
+                        with col_save:
+                            if st.form_submit_button("💾 Speichern", type="primary"):
+                                type_map_reverse = {
+                                    "Organisation/Verein": EntityType.ORGANIZATION,
+                                    "Projekt": EntityType.PROJECT,
+                                    "Vertrag": EntityType.CONTRACT
+                                }
+                                new_meta = {"notes": edit_notes} if edit_notes else {}
+                                new_aliases = [a.strip() for a in edit_aliases.split(",") if a.strip()]
+                                update_entity(
+                                    entity['id'],
+                                    name=edit_name,
+                                    display_name=edit_display_name or None,
+                                    entity_type=type_map_reverse.get(edit_type_str),
+                                    aliases=new_aliases,
+                                    meta=new_meta,
+                                    folder_id=folder_options.get(edit_folder)
+                                )
+                                del st.session_state[f"editing_other_{entity['id']}"]
+                                st.success("Entität aktualisiert!")
+                                st.rerun()
+                        with col_cancel:
+                            if st.form_submit_button("❌ Abbrechen"):
+                                del st.session_state[f"editing_other_{entity['id']}"]
+                                st.rerun()
     else:
         st.info("Noch keine sonstigen Entitäten angelegt.")
 
@@ -629,9 +1074,20 @@ with st.expander("ℹ️ Wie funktioniert die Entity-Erkennung?"):
     - Namen, Aliase und spezifische Merkmale (z.B. Kennzeichen) werden erkannt
     - Erkannte Dokumente werden automatisch mit der Entität verknüpft
 
+    **Dokumente durchsuchen (🔍):**
+    - Bei Erstellung einer neuen Entität werden automatisch alle vorhandenen Dokumente durchsucht
+    - Mit dem 🔍 Button können Sie jederzeit nach passenden Dokumenten suchen
+    - Gefundene Dokumente werden automatisch mit der Entität verknüpft
+
+    **Entitäten bearbeiten (✏️):**
+    - Klicken Sie auf ✏️ um eine Entität zu bearbeiten
+    - Ändern Sie Name, Aliase, Metadaten und Ordnerzuordnung
+    - Nach dem Speichern können Sie erneut nach Dokumenten suchen
+
     **Aliase nutzen:**
     - Geben Sie verschiedene Schreibweisen an (z.B. "Max Mustermann", "M. Mustermann", "Max")
     - Bei Fahrzeugen wird das Kennzeichen automatisch als Alias verwendet
+    - Je mehr Aliase, desto besser die Dokumentenerkennung
 
     **Ordner-Zuordnung:**
     - Weisen Sie einer Entität einen Ordner zu
