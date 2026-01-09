@@ -26,12 +26,24 @@ logger = logging.getLogger(__name__)
 # Versuche Supabase zu importieren
 try:
     from supabase import create_client, Client
-    from supabase.lib.client_options import ClientOptions
     import httpx
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
     logger.info("Supabase nicht verfügbar")
+
+# Versuche ClientOptions zu importieren (optional, für Timeout-Konfiguration)
+CLIENT_OPTIONS_AVAILABLE = False
+try:
+    from supabase.lib.client_options import ClientOptions
+    CLIENT_OPTIONS_AVAILABLE = True
+except ImportError:
+    # Versuche alternativen Import-Pfad
+    try:
+        from supabase import ClientOptions
+        CLIENT_OPTIONS_AVAILABLE = True
+    except ImportError:
+        logger.info("ClientOptions nicht verfügbar, verwende Standard-Timeout")
 
 # Lokaler Fallback-Pfad
 from config.settings import DOCUMENTS_DIR
@@ -82,16 +94,27 @@ class StorageService:
 
         if supabase_url and supabase_key:
             try:
-                # Client mit längerem Timeout erstellen (120 Sekunden für große Dateien)
-                options = ClientOptions(
-                    postgrest_client_timeout=120,
-                    storage_client_timeout=120
-                )
-                self._supabase_client = create_client(supabase_url, supabase_key, options=options)
+                # Client erstellen - mit Timeout-Optionen wenn verfügbar
+                if CLIENT_OPTIONS_AVAILABLE:
+                    try:
+                        options = ClientOptions(
+                            postgrest_client_timeout=120,
+                            storage_client_timeout=120
+                        )
+                        self._supabase_client = create_client(supabase_url, supabase_key, options=options)
+                        timeout_info = "120s"
+                    except (TypeError, AttributeError):
+                        # Falls die Parameter nicht unterstützt werden
+                        self._supabase_client = create_client(supabase_url, supabase_key)
+                        timeout_info = "Standard"
+                else:
+                    self._supabase_client = create_client(supabase_url, supabase_key)
+                    timeout_info = "Standard"
+
                 # Test connection by listing buckets
                 self._supabase_client.storage.list_buckets()
                 self._use_cloud = True
-                logger.info(f"Supabase Storage verbunden (Bucket: {self._bucket_name}, Timeout: 120s)")
+                logger.info(f"Supabase Storage verbunden (Bucket: {self._bucket_name}, Timeout: {timeout_info})")
             except Exception as e:
                 logger.warning(f"Supabase Storage Fehler: {e}, verwende lokalen Speicher")
                 self._supabase_client = None
