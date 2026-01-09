@@ -4,12 +4,15 @@ OCR-Service für Texterkennung aus Dokumenten und Bildern
 import io
 import re
 import base64
+import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from PIL import Image
 import streamlit as st
 
 from config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class OCRService:
