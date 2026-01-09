@@ -7,8 +7,15 @@ import hashlib
 import json
 import logging
 import traceback
-import psutil
 from datetime import datetime, timedelta
+
+# psutil ist optional (für Speicher-Monitoring)
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    psutil = None
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 import requests
@@ -132,6 +139,8 @@ class SyncDiagnostics:
 
     def capture_memory(self, label: str = ""):
         """Erfasst aktuelle Speichernutzung"""
+        if not PSUTIL_AVAILABLE:
+            return
         try:
             process = psutil.Process()
             mem_info = process.memory_info()

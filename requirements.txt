@@ -31,3 +31,4 @@ streamlit-drawable-canvas>=0.9.3
 python-docx>=1.1.0       # Word-Dokument Vorschau
 openpyxl>=3.1.0          # Excel-Dokument Vorschau
 extract-msg>=0.48.0      # Outlook MSG-Datei Parser
+psutil>=5.9.0            # System-Monitoring für Sync-Diagnostik
