@@ -559,51 +559,41 @@ def cleanup_temp_files(max_age_minutes: int = 30, pattern: str = None) -> Dict[s
     return result
 
 
-def aggressive_memory_cleanup():
+def aggressive_memory_cleanup(light_mode: bool = False):
     """
-    Führt aggressive Speicherbereinigung durch.
-    Kombiniert Garbage Collection, Cache-Clearing und Temp-File-Cleanup.
+    Führt Speicherbereinigung durch.
+
+    Args:
+        light_mode: Wenn True, nur minimale GC (für wenn RAM schon hoch ist)
     """
     import gc
 
-    # 1. Garbage Collection (mehrfach für zirkuläre Referenzen)
-    gc.collect()
+    if light_mode:
+        # Nur GC, keine weiteren Operationen die RAM brauchen
+        gc.collect(generation=2)
+        gc.collect(generation=1)
+        gc.collect(generation=0)
+        return
+
+    # Volle Bereinigung
+    # 1. Garbage Collection
     gc.collect()
     gc.collect()
 
     # 2. Streamlit Cache leeren
     clear_streamlit_cache()
 
-    # 3. Alte Temp-Dateien löschen (älter als 10 Minuten)
-    cleanup_temp_files(max_age_minutes=10)
-
-    # 4. Python interne Caches leeren wo möglich
+    # 3. Linecache leeren (klein und schnell)
     try:
         import linecache
         linecache.clearcache()
     except:
         pass
 
-    try:
-        import functools
-        # Leere functools.lru_cache wenn vorhanden
-        for obj in gc.get_objects():
-            if isinstance(obj, functools._lru_cache_wrapper):
-                try:
-                    obj.cache_clear()
-                except:
-                    pass
-    except:
-        pass
+    # ENTFERNT: gc.get_objects() Iteration - verbraucht selbst viel RAM!
+    # ENTFERNT: cleanup_temp_files - verbraucht RAM für Dateisystem-Operationen
 
-    # 5. Requests Session Cache leeren
-    try:
-        import requests.adapters
-        # HTTPAdapter pools zurücksetzen
-    except:
-        pass
-
-    logger.info("[CLEANUP] Aggressive Speicherbereinigung durchgeführt")
+    logger.info("[CLEANUP] Speicherbereinigung durchgeführt")
 
 
 
@@ -2663,13 +2653,22 @@ class CloudSyncService:
                         if idx % memory_check_interval == 0:
                             diag.capture_memory(f"file_{idx}")
 
-                    # Aggressive Speicherbereinigung um Überlauf zu vermeiden
+                    # Speicherbereinigung alle X Dateien
                     if idx > 0 and idx % cache_clear_interval == 0:
-                        aggressive_memory_cleanup()
+                        # Prüfe RAM vor Cleanup um zu entscheiden welcher Modus
+                        pre_cleanup_ram = get_current_ram_mb()
+                        use_light = pre_cleanup_ram > 350  # Bei hohem RAM nur light cleanup
+
+                        aggressive_memory_cleanup(light_mode=use_light)
+
                         if diag:
-                            diag.log_event("aggressive_cleanup", f"Aggressive Speicherbereinigung bei Datei {idx}")
-                            # Nach Cleanup auch Speicher-Snapshot erfassen
-                            diag.capture_memory(f"after_cleanup_{idx}")
+                            post_cleanup_ram = get_current_ram_mb()
+                            freed = pre_cleanup_ram - post_cleanup_ram
+                            diag.log_event("cleanup",
+                                           f"Cleanup bei Datei {idx}: {pre_cleanup_ram:.0f}→{post_cleanup_ram:.0f}MB (freed: {freed:.0f}MB, light={use_light})")
+                            # capture_memory nur wenn RAM niedrig genug (sonst verbraucht es selbst RAM)
+                            if post_cleanup_ram < 380:
+                                diag.capture_memory(f"after_cleanup_{idx}")
 
                         # Disk-Space Check nach Cleanup
                         disk_warning_mb = SYNC_CONFIG.get("disk_warning_threshold_mb", 100)
@@ -2746,6 +2745,17 @@ class CloudSyncService:
                             avg_time_per_file = elapsed / idx
                             remaining_files = result["files_total"] - idx
                             result["estimated_remaining_seconds"] = avg_time_per_file * remaining_files
+
+                    # VOR großen Dateien (>1MB): RAM prüfen und ggf. cleanen
+                    file_size_mb = file_info.get("size", 0) / (1024 * 1024)
+                    if file_size_mb > 1.0:
+                        pre_ram = get_current_ram_mb()
+                        if pre_ram > 300:  # Wenn RAM schon bei 300+ MB, vor großer Datei cleanen
+                            logger.info(f"[PRE-FILE] Große Datei ({file_size_mb:.1f}MB), RAM={pre_ram:.1f}MB - cleanup vor Download")
+                            aggressive_memory_cleanup(light_mode=True)
+                            if diag:
+                                diag.log_event("pre_file_cleanup",
+                                               f"Cleanup vor großer Datei ({file_size_mb:.1f}MB), RAM war {pre_ram:.1f}MB")
 
                     # Status: Download startet
                     result["current_step"] = "downloading"
@@ -2876,23 +2886,20 @@ class CloudSyncService:
                         break
 
                     elif current_ram > ram_warning_mb:
-                        # RAM hoch - Extra Cleanup durchführen
-                        logger.warning(f"[RAM-WARNING] RAM hoch: {current_ram:.1f}MB - führe extra Cleanup durch")
+                        # RAM hoch - NUR leichte GC (light_mode), da aggressive ops selbst RAM brauchen!
+                        logger.warning(f"[RAM-WARNING] RAM hoch: {current_ram:.1f}MB - führe light cleanup durch")
                         if diag:
-                            diag.log_event("ram_warning", f"RAM bei {current_ram:.1f}MB - extra Cleanup")
+                            diag.log_event("ram_warning", f"RAM bei {current_ram:.1f}MB - light cleanup")
 
-                        # Sehr aggressive Cleanup
-                        import gc
-                        gc.collect()
-                        gc.collect()
-                        gc.collect()
-                        aggressive_memory_cleanup()
+                        # NUR Garbage Collection, nichts anderes!
+                        aggressive_memory_cleanup(light_mode=True)
 
                         # Prüfe ob Cleanup geholfen hat
                         new_ram = get_current_ram_mb()
+                        freed = current_ram - new_ram
                         if diag:
-                            diag.log_event("ram_after_cleanup", f"RAM nach Cleanup: {new_ram:.1f}MB (vorher: {current_ram:.1f}MB)")
-                            diag.capture_memory(f"ram_cleanup_{idx}")
+                            diag.log_event("ram_after_cleanup", f"RAM: {new_ram:.1f}MB (freed: {freed:.1f}MB)")
+                            # KEINE capture_memory hier - das braucht selbst RAM!
 
                     # Kurze Pause zwischen Dateien um API-Limits zu vermeiden
                     # (besonders wichtig für Supabase Storage)
