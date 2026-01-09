@@ -2410,6 +2410,94 @@ File Extensions: {conn.file_extensions}""")
             else:
                 st.error("Bitte geben Sie einen gültigen Cloud-Link ein.")
 
+        # Vergangene Diagnose-Berichte anzeigen
+        st.markdown("---")
+        with st.expander("📊 Vergangene Diagnose-Berichte", expanded=False):
+            try:
+                past_reports = cloud_service.get_diagnostic_reports(limit=10)
+
+                if past_reports:
+                    st.markdown("**Letzte Sync-Diagnosen:**")
+
+                    for report in past_reports:
+                        status_icon = {
+                            "completed": "✅",
+                            "error": "❌",
+                            "running": "🔄",
+                            "aborted": "⚠️"
+                        }.get(report.get("sync_status", ""), "❓")
+
+                        started = report.get("sync_started_at")
+                        started_str = started.strftime("%d.%m.%Y %H:%M") if started else "?"
+
+                        with st.expander(f"{status_icon} {started_str} - {report.get('sync_status', '?')} ({report.get('files_successful', 0)}/{report.get('total_files', 0)} Dateien)"):
+                            # Zusammenfassung
+                            cols = st.columns(4)
+                            with cols[0]:
+                                st.metric("Dateien", f"{report.get('files_successful', 0)}/{report.get('total_files', 0)}")
+                            with cols[1]:
+                                duration = report.get('duration_seconds', 0) or 0
+                                st.metric("Dauer", f"{duration:.1f}s")
+                            with cols[2]:
+                                st.metric("API-Calls", report.get('api_calls_total', 0))
+                            with cols[3]:
+                                mem_growth = report.get('memory_growth_mb', 0) or 0
+                                st.metric("Speicher", f"{mem_growth:+.1f} MB")
+
+                            # Fehler anzeigen
+                            if report.get("error_message"):
+                                st.error(f"**Fehler:** {report.get('error_message')}")
+
+                            # Letzte erfolgreiche Datei
+                            if report.get("last_successful_file"):
+                                st.info(f"**Letzte erfolgreiche Datei:** `{report.get('last_successful_file')}` "
+                                       f"(Index: {report.get('last_successful_index', '?')})")
+
+                            # Mögliche Ursachen
+                            causes = report.get("possible_causes", [])
+                            if causes:
+                                st.markdown("**Mögliche Ursachen:**")
+                                for cause in causes:
+                                    st.warning(f"⚠️ {cause}")
+
+                            # Empfehlungen
+                            recommendations = report.get("recommendations", [])
+                            if recommendations:
+                                st.markdown("**Empfehlungen:**")
+                                for rec in recommendations:
+                                    st.info(f"💡 {rec}")
+
+                            # Fehler-Log
+                            errors_log = report.get("errors_log", [])
+                            if errors_log:
+                                with st.expander(f"🔴 Fehler-Log ({len(errors_log)} Fehler)"):
+                                    for err in errors_log[:10]:
+                                        st.text(f"[{err.get('type', '?')}] {err.get('message', '')[:80]}")
+                                    if len(errors_log) > 10:
+                                        st.caption(f"... und {len(errors_log) - 10} weitere")
+
+                            # Traceback falls vorhanden
+                            if report.get("error_traceback"):
+                                with st.expander("📋 Traceback"):
+                                    st.code(report.get("error_traceback"))
+
+                            # JSON-Export
+                            import json
+                            report_json = json.dumps(report, indent=2, default=str, ensure_ascii=False)
+                            st.download_button(
+                                label="📥 Bericht herunterladen",
+                                data=report_json,
+                                file_name=f"sync_diag_{report.get('id', 'unknown')}_{started_str.replace('.', '').replace(':', '').replace(' ', '_')}.json",
+                                mime="application/json",
+                                key=f"download_diag_{report.get('id', 0)}"
+                            )
+                else:
+                    st.info("Keine vergangenen Diagnose-Berichte vorhanden. "
+                           "Aktivieren Sie den Debug-Modus und starten Sie einen Import.")
+
+            except Exception as e:
+                st.warning(f"Diagnose-Berichte konnten nicht geladen werden: {e}")
+
         # Hinweis auf Einstellungen
         st.markdown("---")
         st.caption("💡 **Tipp:** Für erweiterte Cloud-Sync Optionen und API-Konfiguration besuchen Sie **Einstellungen → Cloud-Sync**.")

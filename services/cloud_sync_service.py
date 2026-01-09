@@ -27,8 +27,16 @@ from bs4 import BeautifulSoup
 from database.models import Document, Folder, DocumentStatus
 from database.db import get_db
 from database.extended_models import (
-    CloudSyncConnection, CloudSyncLog, CloudProvider, SyncStatus
+    CloudSyncConnection, CloudSyncLog, CloudProvider, SyncStatus, CloudSyncDiagnostic
 )
+
+# Streamlit Cache-Clearing (optional)
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
+    st = None
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +341,137 @@ SYNC_CONFIG = {
     "db_reconnect_attempts": 3,   # Versuche für DB-Reconnect
     "pause_between_files": 0.3,   # Pause zwischen Dateien (Sekunden)
     "memory_check_interval": 5,   # Alle X Dateien Speicher prüfen
+    "cache_clear_interval": 10,   # Alle X Dateien Cache leeren
 }
+
+
+def clear_streamlit_cache():
+    """
+    Leert den Streamlit-Cache um Speicherüberlauf zu vermeiden.
+    Wird während langer Sync-Operationen aufgerufen.
+    """
+    if not STREAMLIT_AVAILABLE:
+        return
+
+    try:
+        # Versuche verschiedene Cache-Clear-Methoden
+        if hasattr(st, 'cache_data'):
+            st.cache_data.clear()
+            logger.debug("[CACHE] st.cache_data geleert")
+
+        if hasattr(st, 'cache_resource'):
+            st.cache_resource.clear()
+            logger.debug("[CACHE] st.cache_resource geleert")
+
+        # Legacy Cache (ältere Streamlit-Versionen)
+        if hasattr(st, 'legacy_caching'):
+            st.legacy_caching.clear_cache()
+            logger.debug("[CACHE] Legacy-Cache geleert")
+
+        # Garbage Collection ausführen
+        import gc
+        gc.collect()
+        logger.info("[CACHE] Streamlit-Cache und Garbage Collection durchgeführt")
+
+    except Exception as e:
+        logger.warning(f"[CACHE] Fehler beim Cache-Leeren: {e}")
+
+
+def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnostics',
+                          status: str = "running", error_message: str = None,
+                          error_traceback: str = None) -> Optional[int]:
+    """
+    Speichert Diagnose-Daten in die Datenbank.
+
+    Args:
+        user_id: Benutzer-ID
+        connection_id: Cloud-Verbindungs-ID
+        diag: SyncDiagnostics-Objekt
+        status: Sync-Status (running, completed, error, aborted)
+        error_message: Fehlermeldung falls vorhanden
+        error_traceback: Traceback falls vorhanden
+
+    Returns:
+        ID des erstellten/aktualisierten Diagnose-Eintrags
+    """
+    try:
+        with get_db() as session:
+            summary = diag.get_summary()
+            analysis = diag.get_failure_analysis()
+            full_report = diag.get_full_report()
+
+            # Prüfen ob bereits ein laufender Eintrag existiert
+            existing = session.query(CloudSyncDiagnostic).filter(
+                CloudSyncDiagnostic.user_id == user_id,
+                CloudSyncDiagnostic.connection_id == connection_id,
+                CloudSyncDiagnostic.sync_status == "running"
+            ).first()
+
+            if existing:
+                # Existierenden Eintrag aktualisieren
+                diag_entry = existing
+            else:
+                # Neuen Eintrag erstellen
+                diag_entry = CloudSyncDiagnostic(
+                    user_id=user_id,
+                    connection_id=connection_id,
+                    sync_started_at=diag.start_time or datetime.now()
+                )
+                session.add(diag_entry)
+
+            # Felder aktualisieren
+            diag_entry.sync_status = status
+            if status in ["completed", "error", "aborted"]:
+                diag_entry.sync_ended_at = datetime.now()
+
+            # Zusammenfassung
+            diag_entry.total_files = summary.get("total_files", 0)
+            diag_entry.files_processed = summary.get("files_processed", 0)
+            diag_entry.files_successful = summary.get("files_successful", 0)
+            diag_entry.files_skipped = summary.get("files_skipped", 0)
+            diag_entry.files_failed = summary.get("files_failed", 0)
+            diag_entry.duration_seconds = summary.get("duration_seconds", 0)
+
+            # Letzte erfolgreiche Datei
+            diag_entry.last_successful_file = summary.get("last_successful_file")
+            diag_entry.last_successful_index = diag.current_file_index - 1 if diag.current_file_index > 0 else None
+            if diag.last_successful_time:
+                diag_entry.last_successful_at = diag.last_successful_time
+
+            # API-Statistiken
+            diag_entry.api_calls_total = summary.get("api_calls_total", 0)
+            diag_entry.api_calls_failed = summary.get("api_calls_failed", 0)
+            diag_entry.api_avg_duration_ms = summary.get("api_avg_duration_ms", 0)
+            diag_entry.api_max_duration_ms = summary.get("api_max_duration_ms", 0)
+
+            # Speicher-Statistiken
+            diag_entry.memory_start_mb = summary.get("memory_start_mb", 0)
+            diag_entry.memory_end_mb = summary.get("memory_end_mb", 0)
+            diag_entry.memory_max_mb = summary.get("memory_max_mb", 0)
+            diag_entry.memory_growth_mb = summary.get("memory_growth_mb", 0)
+
+            # Fehleranalyse
+            diag_entry.possible_causes = analysis.get("possible_causes", [])
+            diag_entry.recommendations = analysis.get("recommendations", [])
+
+            # Vollständige Logs (begrenzt auf die letzten Einträge um DB-Größe zu begrenzen)
+            diag_entry.events_log = full_report.get("events", [])[-100:]
+            diag_entry.api_calls_log = full_report.get("api_calls", [])[-50:]
+            diag_entry.file_operations_log = full_report.get("file_operations", [])[-100:]
+            diag_entry.errors_log = full_report.get("errors", [])
+            diag_entry.memory_snapshots = full_report.get("memory_snapshots", [])
+
+            # Fehlermeldungen
+            diag_entry.error_message = error_message
+            diag_entry.error_traceback = error_traceback
+
+            session.commit()
+            logger.info(f"[DIAG-DB] Diagnose-Eintrag gespeichert (ID: {diag_entry.id}, Status: {status})")
+            return diag_entry.id
+
+    except Exception as e:
+        logger.error(f"[DIAG-DB] Fehler beim Speichern der Diagnose: {e}")
+        return None
 
 
 def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0,
@@ -720,6 +858,70 @@ class CloudSyncService:
             session.delete(connection)
             session.commit()
             return True
+
+    def get_diagnostic_reports(self, limit: int = 20, connection_id: int = None) -> List[Dict]:
+        """
+        Holt vergangene Diagnose-Berichte aus der Datenbank.
+
+        Args:
+            limit: Maximale Anzahl Berichte
+            connection_id: Optional - nur für eine bestimmte Verbindung
+
+        Returns:
+            Liste von Diagnose-Berichten
+        """
+        with get_db() as session:
+            query = session.query(CloudSyncDiagnostic).filter(
+                CloudSyncDiagnostic.user_id == self.user_id
+            )
+
+            if connection_id:
+                query = query.filter(CloudSyncDiagnostic.connection_id == connection_id)
+
+            reports = query.order_by(CloudSyncDiagnostic.sync_started_at.desc()).limit(limit).all()
+
+            result = []
+            for report in reports:
+                result.append({
+                    "id": report.id,
+                    "connection_id": report.connection_id,
+                    "sync_started_at": report.sync_started_at,
+                    "sync_ended_at": report.sync_ended_at,
+                    "sync_status": report.sync_status,
+                    "total_files": report.total_files,
+                    "files_processed": report.files_processed,
+                    "files_successful": report.files_successful,
+                    "files_skipped": report.files_skipped,
+                    "files_failed": report.files_failed,
+                    "duration_seconds": report.duration_seconds,
+                    "last_successful_file": report.last_successful_file,
+                    "last_successful_index": report.last_successful_index,
+                    "last_successful_at": report.last_successful_at,
+                    "api_calls_total": report.api_calls_total,
+                    "api_calls_failed": report.api_calls_failed,
+                    "api_avg_duration_ms": report.api_avg_duration_ms,
+                    "api_max_duration_ms": report.api_max_duration_ms,
+                    "memory_start_mb": report.memory_start_mb,
+                    "memory_end_mb": report.memory_end_mb,
+                    "memory_max_mb": report.memory_max_mb,
+                    "memory_growth_mb": report.memory_growth_mb,
+                    "possible_causes": report.possible_causes,
+                    "recommendations": report.recommendations,
+                    "error_message": report.error_message,
+                    "error_traceback": report.error_traceback,
+                    "events_log": report.events_log,
+                    "api_calls_log": report.api_calls_log,
+                    "file_operations_log": report.file_operations_log,
+                    "errors_log": report.errors_log,
+                    "memory_snapshots": report.memory_snapshots,
+                })
+
+            return result
+
+    def get_latest_diagnostic(self, connection_id: int = None) -> Optional[Dict]:
+        """Holt den neuesten Diagnose-Bericht"""
+        reports = self.get_diagnostic_reports(limit=1, connection_id=connection_id)
+        return reports[0] if reports else None
 
     # ==================== DROPBOX API ====================
 
@@ -2203,9 +2405,16 @@ class CloudSyncService:
                 # Konfiguration für Pausen und Checks
                 pause_between_files = SYNC_CONFIG.get("pause_between_files", 0.3)
                 memory_check_interval = SYNC_CONFIG.get("memory_check_interval", 5)
+                cache_clear_interval = SYNC_CONFIG.get("cache_clear_interval", 10)
                 db_check_interval = 10  # Alle X Dateien DB-Verbindung prüfen
+                diag_save_interval = 5  # Alle X Dateien Diagnose in DB speichern
                 consecutive_errors = 0
                 max_consecutive_errors = 5  # Nach X Fehlern hintereinander abbrechen
+
+                # Initiale Diagnose-Speicherung in DB
+                if diag and enable_diagnostics:
+                    save_diagnostic_to_db(self.user_id, connection_id, diag, status="running")
+                    diag.log_event("diag_save", "Initiale Diagnose in DB gespeichert")
 
                 # Phase 2: Dateien herunterladen und importieren
                 for idx, file_info in enumerate(files_to_sync):
@@ -2223,6 +2432,17 @@ class CloudSyncService:
                         # Speicher prüfen nach Intervall
                         if idx % memory_check_interval == 0:
                             diag.capture_memory(f"file_{idx}")
+
+                    # Cache leeren um Speicherüberlauf zu vermeiden
+                    if idx > 0 and idx % cache_clear_interval == 0:
+                        clear_streamlit_cache()
+                        if diag:
+                            diag.log_event("cache_clear", f"Cache geleert bei Datei {idx}")
+
+                    # Diagnose periodisch in DB speichern (für den Fall eines Abbruchs)
+                    if diag and enable_diagnostics and idx > 0 and idx % diag_save_interval == 0:
+                        save_diagnostic_to_db(self.user_id, connection_id, diag, status="running")
+                        diag.log_event("diag_save", f"Diagnose in DB gespeichert bei Datei {idx}")
 
                     # Datenbankverbindung prüfen (alle X Dateien)
                     if idx > 0 and idx % db_check_interval == 0:
@@ -2403,12 +2623,30 @@ class CloudSyncService:
                         "files_error": result["files_error"],
                         "elapsed_seconds": result["elapsed_seconds"]
                     })
+                    # Finale Diagnose in DB speichern
+                    if enable_diagnostics:
+                        final_status = "completed" if result["success"] else "error"
+                        save_diagnostic_to_db(
+                            self.user_id, connection_id, diag,
+                            status=final_status,
+                            error_message=result.get("error")
+                        )
 
             except Exception as e:
                 logger.error(f"Sync-Fehler für Verbindung {connection_id}: {e}")
+                import traceback
+                error_tb = traceback.format_exc()
                 if diag:
                     diag.log_error("sync_exception", f"Allgemeiner Sync-Fehler: {str(e)}", e)
                     diag.finish(False, {"error": str(e)})
+                    # Fehler-Diagnose in DB speichern
+                    if enable_diagnostics:
+                        save_diagnostic_to_db(
+                            self.user_id, connection_id, diag,
+                            status="error",
+                            error_message=str(e),
+                            error_traceback=error_tb
+                        )
                 connection.status = SyncStatus.ERROR
                 connection.last_sync_error = str(e)
                 result["phase"] = "error"
@@ -2416,6 +2654,9 @@ class CloudSyncService:
                 result["errors"].append(str(e))
 
             session.commit()
+
+        # Cache am Ende leeren
+        clear_streamlit_cache()
 
         # Sync-Log schreiben
         self._write_sync_log(connection_id, result)

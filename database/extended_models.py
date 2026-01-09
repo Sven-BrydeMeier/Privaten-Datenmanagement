@@ -806,3 +806,75 @@ class DocumentComment(Base):
         Index('idx_comment_document', 'document_id'),
         Index('idx_comment_user', 'user_id'),
     )
+
+
+# ============== CLOUD-SYNC DIAGNOSE ==============
+
+class CloudSyncDiagnostic(Base):
+    """
+    Speichert detaillierte Diagnose-Berichte für Cloud-Synchronisierungen.
+    Ermöglicht die Analyse von Sync-Abbrüchen auch nach einem Neustart.
+    """
+    __tablename__ = 'cloud_sync_diagnostics'
+
+    id = Column(Integer, primary_key=True)
+    connection_id = Column(Integer, ForeignKey('cloud_sync_connections.id'))
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+
+    # Sync-Informationen
+    sync_started_at = Column(DateTime, nullable=False)
+    sync_ended_at = Column(DateTime)
+    sync_status = Column(String(50))  # running, completed, error, aborted
+
+    # Zusammenfassung
+    total_files = Column(Integer, default=0)
+    files_processed = Column(Integer, default=0)
+    files_successful = Column(Integer, default=0)
+    files_skipped = Column(Integer, default=0)
+    files_failed = Column(Integer, default=0)
+    duration_seconds = Column(Float)
+
+    # Letzte erfolgreiche Datei (wichtig für Debugging)
+    last_successful_file = Column(String(500))
+    last_successful_index = Column(Integer)
+    last_successful_at = Column(DateTime)
+
+    # API-Statistiken
+    api_calls_total = Column(Integer, default=0)
+    api_calls_failed = Column(Integer, default=0)
+    api_avg_duration_ms = Column(Float)
+    api_max_duration_ms = Column(Float)
+
+    # Speicher-Statistiken
+    memory_start_mb = Column(Float)
+    memory_end_mb = Column(Float)
+    memory_max_mb = Column(Float)
+    memory_growth_mb = Column(Float)
+
+    # Fehleranalyse (als JSON)
+    possible_causes = Column(JSON)  # Liste möglicher Ursachen
+    recommendations = Column(JSON)  # Liste von Empfehlungen
+
+    # Vollständige Diagnose-Daten (JSON)
+    events_log = Column(JSON)  # Alle Events
+    api_calls_log = Column(JSON)  # Alle API-Aufrufe
+    file_operations_log = Column(JSON)  # Alle Datei-Operationen
+    errors_log = Column(JSON)  # Alle Fehler mit Tracebacks
+    memory_snapshots = Column(JSON)  # Speicher-Snapshots
+
+    # Fehler-Details
+    error_message = Column(Text)
+    error_traceback = Column(Text)
+
+    created_at = Column(DateTime, default=func.now())
+
+    # Beziehungen
+    connection = relationship("CloudSyncConnection")
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_sync_diag_user', 'user_id'),
+        Index('idx_sync_diag_connection', 'connection_id'),
+        Index('idx_sync_diag_status', 'sync_status'),
+        Index('idx_sync_diag_date', 'sync_started_at'),
+    )
