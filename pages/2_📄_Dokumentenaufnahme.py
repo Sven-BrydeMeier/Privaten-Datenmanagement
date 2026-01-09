@@ -286,6 +286,8 @@ def save_document(file_data: bytes, filename: str, user_id: int) -> Document:
         mime_type = "image/png"
     elif lower_filename.endswith('.eml'):
         mime_type = "message/rfc822"
+    elif lower_filename.endswith('.msg'):
+        mime_type = "application/vnd.ms-outlook"
     elif lower_filename.endswith('.jpg') or lower_filename.endswith('.jpeg'):
         mime_type = "image/jpeg"
     else:
@@ -386,13 +388,21 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                     if is_debug:
                         debug_log("🔤 Starte Text-Extraktion...", "info")
 
-                    # E-Mail (.eml) Verarbeitung
-                    if document.mime_type == "message/rfc822" or document.filename.lower().endswith('.eml'):
+                    # E-Mail (.eml oder .msg) Verarbeitung
+                    lower_filename = document.filename.lower()
+                    is_email_file = (
+                        document.mime_type == "message/rfc822" or
+                        document.mime_type == "application/vnd.ms-outlook" or
+                        lower_filename.endswith('.eml') or
+                        lower_filename.endswith('.msg')
+                    )
+                    if is_email_file:
+                        email_type = "MSG" if lower_filename.endswith('.msg') else "EML"
                         if is_debug:
-                            debug_log("📧 E-Mail erkannt - parse Inhalt...", "info")
+                            debug_log(f"📧 {email_type}-E-Mail erkannt - parse Inhalt...", "info")
                         try:
                             email_parser = get_email_parser()
-                            parsed_email = email_parser.parse_eml(file_data)
+                            parsed_email = email_parser.parse_email_file(file_data, document.filename)
 
                             # Text aus E-Mail extrahieren
                             full_text = parsed_email.get("full_text", "")
@@ -880,8 +890,8 @@ with tab_upload:
 
     uploaded_file = st.file_uploader(
         "PDF, Bild oder E-Mail auswählen",
-        type=['pdf', 'jpg', 'jpeg', 'png', 'eml'],
-        help="Unterstützte Formate: PDF, JPG, PNG, EML (E-Mail)"
+        type=['pdf', 'jpg', 'jpeg', 'png', 'eml', 'msg'],
+        help="Unterstützte Formate: PDF, JPG, PNG, EML, MSG (Outlook)"
     )
 
     if uploaded_file:
@@ -1151,7 +1161,7 @@ with tab_folder:
 
     folder_files = st.file_uploader(
         "Dateien auswählen",
-        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'eml'],
+        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'eml', 'msg'],
         accept_multiple_files=True,
         key="multi_file_upload",
         help="Halten Sie Strg gedrückt um mehrere Dateien auszuwählen, oder Strg+A für alle"
@@ -1400,7 +1410,7 @@ with tab_folder:
 
     multi_files = st.file_uploader(
         "Dateien auswählen (Mehrfachauswahl möglich)",
-        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'eml'],
+        type=['pdf', 'jpg', 'jpeg', 'png', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'eml', 'msg'],
         accept_multiple_files=True,
         key="folder_multi_upload",
         help="Halten Sie Strg/Cmd gedrückt um mehrere Dateien auszuwählen"

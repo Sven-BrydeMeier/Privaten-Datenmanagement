@@ -1,9 +1,10 @@
 """
-Email Parser Service für .eml Dateien
+Email Parser Service für .eml und .msg Dateien
 
 Ermöglicht das Importieren von E-Mails als Dokumente ins DMS.
 Unterstützt:
 - .eml Dateien (RFC 822 Format)
+- .msg Dateien (Microsoft Outlook Format)
 - Extraktion von Metadaten (Absender, Betreff, Datum)
 - Extraktion von Anhängen
 - Textextraktion für Volltextsuche
@@ -19,9 +20,19 @@ from typing import Dict, List, Optional, Tuple, BinaryIO
 import logging
 import re
 import html
+import tempfile
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Versuche extract-msg zu importieren
+try:
+    import extract_msg
+    MSG_SUPPORT = True
+except ImportError:
+    MSG_SUPPORT = False
+    logger.info("extract-msg nicht installiert, MSG-Unterstützung deaktiviert")
 
 
 class EmailParserService:
@@ -308,6 +319,164 @@ class EmailParserService:
         if sender_domain:
             return f"E-Mail von {sender_domain} ({date_str})"
         return f"E-Mail vom {date_str}"
+
+    def parse_msg(self, file_data: bytes) -> Dict:
+        """
+        Parst eine .msg Datei (Microsoft Outlook Format) und extrahiert alle Informationen.
+
+        Args:
+            file_data: Binärdaten der .msg Datei
+
+        Returns:
+            Dict mit allen extrahierten Informationen (gleiches Format wie parse_eml)
+        """
+        if not MSG_SUPPORT:
+            logger.error("MSG-Unterstützung nicht verfügbar. Bitte 'extract-msg' installieren.")
+            return {
+                "subject": "MSG-Datei (nicht unterstützt)",
+                "from_address": "",
+                "from_name": "",
+                "to_addresses": [],
+                "cc_addresses": [],
+                "date": datetime.now(),
+                "body_text": "MSG-Dateien werden nicht unterstützt. Bitte installieren Sie 'extract-msg'.",
+                "body_html": "",
+                "attachments": [],
+                "message_id": "",
+                "full_text": "MSG-Datei nicht unterstützt",
+                "error": "extract-msg nicht installiert"
+            }
+
+        result = {
+            "subject": "",
+            "from_address": "",
+            "from_name": "",
+            "to_addresses": [],
+            "cc_addresses": [],
+            "date": None,
+            "body_text": "",
+            "body_html": "",
+            "attachments": [],
+            "message_id": "",
+            "full_text": ""
+        }
+
+        temp_file = None
+        try:
+            # MSG-Datei in temporäre Datei schreiben (extract-msg braucht Dateipfad)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.msg')
+            temp_file.write(file_data)
+            temp_file.close()
+
+            # MSG-Datei öffnen
+            msg = extract_msg.Message(temp_file.name)
+
+            # Metadaten extrahieren
+            result["subject"] = msg.subject or ""
+            result["from_address"] = msg.sender or ""
+            result["from_name"] = msg.senderName or ""
+
+            # Empfänger
+            if msg.to:
+                # Kann eine einzelne Adresse oder kommagetrennte Liste sein
+                to_addrs = msg.to.split(';') if ';' in msg.to else msg.to.split(',')
+                for addr in to_addrs:
+                    addr = addr.strip()
+                    if addr:
+                        result["to_addresses"].append({
+                            "name": "",
+                            "address": addr
+                        })
+
+            # CC
+            if msg.cc:
+                cc_addrs = msg.cc.split(';') if ';' in msg.cc else msg.cc.split(',')
+                for addr in cc_addrs:
+                    addr = addr.strip()
+                    if addr:
+                        result["cc_addresses"].append({
+                            "name": "",
+                            "address": addr
+                        })
+
+            # Datum
+            if msg.date:
+                try:
+                    if isinstance(msg.date, datetime):
+                        result["date"] = msg.date
+                    else:
+                        # Versuche verschiedene Formate
+                        result["date"] = datetime.fromisoformat(str(msg.date).replace('Z', '+00:00'))
+                except Exception:
+                    result["date"] = datetime.now()
+            else:
+                result["date"] = datetime.now()
+
+            # Body
+            result["body_text"] = msg.body or ""
+            if msg.htmlBody:
+                result["body_html"] = msg.htmlBody if isinstance(msg.htmlBody, str) else msg.htmlBody.decode('utf-8', errors='replace')
+
+            # Message-ID
+            result["message_id"] = msg.messageId or ""
+
+            # Anhänge
+            for attachment in msg.attachments:
+                try:
+                    att_data = attachment.data
+                    if att_data:
+                        result["attachments"].append({
+                            "filename": attachment.longFilename or attachment.shortFilename or "attachment",
+                            "mime_type": attachment.mimetype or "application/octet-stream",
+                            "data": att_data,
+                            "size": len(att_data)
+                        })
+                        logger.debug(f"MSG-Anhang: {attachment.longFilename}")
+                except Exception as att_error:
+                    logger.warning(f"Fehler beim Extrahieren eines MSG-Anhangs: {att_error}")
+
+            # Volltext erstellen
+            result["full_text"] = self._create_full_text(result)
+
+            logger.info(f"MSG erfolgreich geparst: {result['subject']}")
+
+        except Exception as e:
+            logger.error(f"Fehler beim Parsen der MSG-Datei: {e}")
+            result["error"] = str(e)
+            result["subject"] = "Fehler beim Lesen der MSG-Datei"
+            result["body_text"] = f"Die MSG-Datei konnte nicht gelesen werden: {str(e)}"
+            result["full_text"] = result["body_text"]
+
+        finally:
+            # Temporäre Datei löschen
+            if temp_file and os.path.exists(temp_file.name):
+                try:
+                    os.unlink(temp_file.name)
+                except Exception:
+                    pass
+
+        return result
+
+    def parse_email_file(self, file_data: bytes, filename: str) -> Dict:
+        """
+        Parst eine E-Mail-Datei basierend auf der Dateiendung.
+
+        Args:
+            file_data: Binärdaten der Datei
+            filename: Dateiname (für Erkennung des Formats)
+
+        Returns:
+            Dict mit extrahierten Informationen
+        """
+        lower_filename = filename.lower()
+
+        if lower_filename.endswith('.msg'):
+            return self.parse_msg(file_data)
+        elif lower_filename.endswith('.eml'):
+            return self.parse_eml(file_data)
+        else:
+            logger.warning(f"Unbekanntes E-Mail-Format: {filename}")
+            return self.parse_eml(file_data)  # Fallback auf EML
 
     def get_detected_sender(self, parsed_email: Dict) -> str:
         """Extrahiert den Absender für die Klassifizierung."""
