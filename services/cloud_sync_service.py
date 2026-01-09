@@ -146,24 +146,44 @@ class SyncDiagnostics:
             logger.error(f"[SYNC-ERROR] Exception: {exception}")
 
     def capture_memory(self, label: str = ""):
-        """Erfasst aktuelle Speichernutzung"""
-        if not PSUTIL_AVAILABLE:
-            return
+        """Erfasst aktuelle Speicher- und Disk-Nutzung"""
+        snapshot = {
+            "timestamp": datetime.now().isoformat(),
+            "elapsed_ms": self._elapsed_ms(),
+            "label": label,
+            "file_index": self.current_file_index,
+            "rss_mb": 0,
+            "vms_mb": 0,
+            "disk_tmp_used_mb": 0,
+            "disk_tmp_free_mb": 0,
+            "disk_tmp_percent": 0,
+            "temp_files_count": 0,
+            "temp_files_size_mb": 0
+        }
+
+        # Python Memory (wenn psutil verfügbar)
+        if PSUTIL_AVAILABLE:
+            try:
+                process = psutil.Process()
+                mem_info = process.memory_info()
+                snapshot["rss_mb"] = round(mem_info.rss / 1024 / 1024, 2)
+                snapshot["vms_mb"] = round(mem_info.vms / 1024 / 1024, 2)
+            except Exception as e:
+                logger.debug(f"Memory capture failed: {e}")
+
+        # Disk Usage (immer verfügbar)
         try:
-            process = psutil.Process()
-            mem_info = process.memory_info()
-            snapshot = {
-                "timestamp": datetime.now().isoformat(),
-                "elapsed_ms": self._elapsed_ms(),
-                "label": label,
-                "rss_mb": round(mem_info.rss / 1024 / 1024, 2),
-                "vms_mb": round(mem_info.vms / 1024 / 1024, 2),
-                "file_index": self.current_file_index
-            }
-            self.memory_snapshots.append(snapshot)
-            logger.debug(f"[SYNC-MEM] {label}: RSS={snapshot['rss_mb']}MB")
+            disk_info = get_disk_usage()
+            snapshot["disk_tmp_used_mb"] = disk_info.get("tmp_used_mb", 0)
+            snapshot["disk_tmp_free_mb"] = disk_info.get("tmp_free_mb", 0)
+            snapshot["disk_tmp_percent"] = disk_info.get("tmp_percent_used", 0)
+            snapshot["temp_files_count"] = disk_info.get("temp_files_count", 0)
+            snapshot["temp_files_size_mb"] = disk_info.get("temp_files_size_mb", 0)
         except Exception as e:
-            logger.debug(f"Memory capture failed: {e}")
+            logger.debug(f"Disk usage capture failed: {e}")
+
+        self.memory_snapshots.append(snapshot)
+        logger.debug(f"[SYNC-MEM] {label}: RSS={snapshot['rss_mb']}MB, Disk=/tmp {snapshot['disk_tmp_used_mb']}MB used ({snapshot['disk_tmp_percent']}%)")
 
     def set_phase(self, phase: str):
         """Setzt die aktuelle Phase"""
@@ -341,7 +361,9 @@ SYNC_CONFIG = {
     "db_reconnect_attempts": 3,   # Versuche für DB-Reconnect
     "pause_between_files": 0.3,   # Pause zwischen Dateien (Sekunden)
     "memory_check_interval": 5,   # Alle X Dateien Speicher prüfen
-    "cache_clear_interval": 10,   # Alle X Dateien Cache leeren
+    "cache_clear_interval": 5,    # Alle X Dateien aggressive Cleanup durchführen (reduziert von 10)
+    "disk_warning_threshold_mb": 100,  # Warnung wenn weniger als X MB frei
+    "disk_critical_threshold_mb": 50,  # Abbruch wenn weniger als X MB frei
 }
 
 
@@ -375,6 +397,186 @@ def clear_streamlit_cache():
 
     except Exception as e:
         logger.warning(f"[CACHE] Fehler beim Cache-Leeren: {e}")
+
+
+def get_disk_usage() -> Dict[str, Any]:
+    """
+    Ermittelt die Festplattennutzung (wichtig für Streamlit Cloud mit 500MB Limit).
+    Gibt Informationen über verfügbaren Speicher in /tmp und Arbeitsverzeichnis zurück.
+    """
+    import shutil
+    import tempfile
+
+    result = {
+        "tmp_total_mb": 0,
+        "tmp_used_mb": 0,
+        "tmp_free_mb": 0,
+        "tmp_percent_used": 0,
+        "cwd_total_mb": 0,
+        "cwd_used_mb": 0,
+        "cwd_free_mb": 0,
+        "cwd_percent_used": 0,
+        "temp_dir": tempfile.gettempdir(),
+        "temp_files_count": 0,
+        "temp_files_size_mb": 0
+    }
+
+    try:
+        # /tmp Verzeichnis (Streamlit Cloud Ephemeral Storage)
+        tmp_dir = tempfile.gettempdir()
+        if os.path.exists(tmp_dir):
+            usage = shutil.disk_usage(tmp_dir)
+            result["tmp_total_mb"] = round(usage.total / (1024 * 1024), 2)
+            result["tmp_used_mb"] = round(usage.used / (1024 * 1024), 2)
+            result["tmp_free_mb"] = round(usage.free / (1024 * 1024), 2)
+            result["tmp_percent_used"] = round((usage.used / usage.total) * 100, 1) if usage.total > 0 else 0
+
+            # Zähle temp-Dateien und ihre Größe
+            temp_size = 0
+            temp_count = 0
+            try:
+                for entry in os.scandir(tmp_dir):
+                    if entry.is_file():
+                        temp_count += 1
+                        try:
+                            temp_size += entry.stat().st_size
+                        except:
+                            pass
+            except:
+                pass
+            result["temp_files_count"] = temp_count
+            result["temp_files_size_mb"] = round(temp_size / (1024 * 1024), 2)
+
+        # Aktuelles Arbeitsverzeichnis
+        cwd = os.getcwd()
+        if os.path.exists(cwd):
+            usage = shutil.disk_usage(cwd)
+            result["cwd_total_mb"] = round(usage.total / (1024 * 1024), 2)
+            result["cwd_used_mb"] = round(usage.used / (1024 * 1024), 2)
+            result["cwd_free_mb"] = round(usage.free / (1024 * 1024), 2)
+            result["cwd_percent_used"] = round((usage.used / usage.total) * 100, 1) if usage.total > 0 else 0
+
+    except Exception as e:
+        logger.warning(f"[DISK] Fehler beim Ermitteln der Disk-Nutzung: {e}")
+        result["error"] = str(e)
+
+    return result
+
+
+def cleanup_temp_files(max_age_minutes: int = 30, pattern: str = None) -> Dict[str, Any]:
+    """
+    Bereinigt temporäre Dateien um Speicherplatz freizugeben.
+
+    Args:
+        max_age_minutes: Lösche Dateien älter als X Minuten (Standard: 30)
+        pattern: Optional - nur Dateien mit bestimmtem Muster löschen
+
+    Returns:
+        Dict mit Informationen über gelöschte Dateien
+    """
+    import tempfile
+    import glob
+
+    result = {
+        "files_deleted": 0,
+        "bytes_freed": 0,
+        "errors": [],
+        "temp_dir": tempfile.gettempdir()
+    }
+
+    try:
+        tmp_dir = tempfile.gettempdir()
+        now = datetime.now()
+        cutoff_time = now - timedelta(minutes=max_age_minutes)
+
+        # Python-eigene temp files (tmp*, temp*, etc.)
+        patterns_to_clean = [
+            os.path.join(tmp_dir, "tmp*"),
+            os.path.join(tmp_dir, "temp*"),
+            os.path.join(tmp_dir, "*.tmp"),
+            os.path.join(tmp_dir, "*.temp"),
+            os.path.join(tmp_dir, "streamlit*"),  # Streamlit temp files
+        ]
+
+        if pattern:
+            patterns_to_clean = [os.path.join(tmp_dir, pattern)]
+
+        for file_pattern in patterns_to_clean:
+            for filepath in glob.glob(file_pattern):
+                try:
+                    if os.path.isfile(filepath):
+                        # Prüfe Alter der Datei
+                        mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+                        if mtime < cutoff_time:
+                            file_size = os.path.getsize(filepath)
+                            os.remove(filepath)
+                            result["files_deleted"] += 1
+                            result["bytes_freed"] += file_size
+                            logger.debug(f"[CLEANUP] Gelöscht: {filepath} ({file_size} Bytes)")
+                except PermissionError:
+                    pass  # Datei wird gerade verwendet
+                except Exception as e:
+                    result["errors"].append(f"{filepath}: {str(e)}")
+
+        # Konvertiere zu MB
+        result["mb_freed"] = round(result["bytes_freed"] / (1024 * 1024), 2)
+
+        if result["files_deleted"] > 0:
+            logger.info(f"[CLEANUP] {result['files_deleted']} Temp-Dateien gelöscht, {result['mb_freed']} MB freigegeben")
+
+    except Exception as e:
+        logger.warning(f"[CLEANUP] Fehler beim Bereinigen: {e}")
+        result["errors"].append(str(e))
+
+    return result
+
+
+def aggressive_memory_cleanup():
+    """
+    Führt aggressive Speicherbereinigung durch.
+    Kombiniert Garbage Collection, Cache-Clearing und Temp-File-Cleanup.
+    """
+    import gc
+
+    # 1. Garbage Collection (mehrfach für zirkuläre Referenzen)
+    gc.collect()
+    gc.collect()
+    gc.collect()
+
+    # 2. Streamlit Cache leeren
+    clear_streamlit_cache()
+
+    # 3. Alte Temp-Dateien löschen (älter als 10 Minuten)
+    cleanup_temp_files(max_age_minutes=10)
+
+    # 4. Python interne Caches leeren wo möglich
+    try:
+        import linecache
+        linecache.clearcache()
+    except:
+        pass
+
+    try:
+        import functools
+        # Leere functools.lru_cache wenn vorhanden
+        for obj in gc.get_objects():
+            if isinstance(obj, functools._lru_cache_wrapper):
+                try:
+                    obj.cache_clear()
+                except:
+                    pass
+    except:
+        pass
+
+    # 5. Requests Session Cache leeren
+    try:
+        import requests.adapters
+        # HTTPAdapter pools zurücksetzen
+    except:
+        pass
+
+    logger.info("[CLEANUP] Aggressive Speicherbereinigung durchgeführt")
+
 
 
 def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnostics',
@@ -2433,11 +2635,43 @@ class CloudSyncService:
                         if idx % memory_check_interval == 0:
                             diag.capture_memory(f"file_{idx}")
 
-                    # Cache leeren um Speicherüberlauf zu vermeiden
+                    # Aggressive Speicherbereinigung um Überlauf zu vermeiden
                     if idx > 0 and idx % cache_clear_interval == 0:
-                        clear_streamlit_cache()
+                        aggressive_memory_cleanup()
                         if diag:
-                            diag.log_event("cache_clear", f"Cache geleert bei Datei {idx}")
+                            diag.log_event("aggressive_cleanup", f"Aggressive Speicherbereinigung bei Datei {idx}")
+                            # Nach Cleanup auch Speicher-Snapshot erfassen
+                            diag.capture_memory(f"after_cleanup_{idx}")
+
+                        # Disk-Space Check nach Cleanup
+                        disk_warning_mb = SYNC_CONFIG.get("disk_warning_threshold_mb", 100)
+                        disk_critical_mb = SYNC_CONFIG.get("disk_critical_threshold_mb", 50)
+                        disk_info = get_disk_usage()
+                        tmp_free_mb = disk_info.get("tmp_free_mb", 999999)
+
+                        if tmp_free_mb < disk_critical_mb:
+                            # Kritisch wenig Speicherplatz - Abbruch
+                            error_msg = f"Kritisch wenig Speicherplatz: {tmp_free_mb:.1f}MB frei (min: {disk_critical_mb}MB)"
+                            logger.error(f"[DISK-CRITICAL] {error_msg}")
+                            if diag:
+                                diag.log_error("disk_space_critical", error_msg, None)
+                            result["phase"] = "error"
+                            result["error"] = error_msg
+                            result["errors"].append(error_msg)
+                            # Diagnose speichern vor Abbruch
+                            if diag and enable_diagnostics:
+                                save_diagnostic_to_db(self.user_id, connection_id, diag,
+                                                      status="error", error_message=error_msg)
+                            break
+
+                        elif tmp_free_mb < disk_warning_mb:
+                            # Warnung - aber weiter machen mit extra Cleanup
+                            logger.warning(f"[DISK-WARNING] Wenig Speicherplatz: {tmp_free_mb:.1f}MB frei")
+                            if diag:
+                                diag.log_event("disk_space_warning",
+                                               f"Wenig Speicherplatz: {tmp_free_mb:.1f}MB frei - extra Cleanup")
+                            # Zusätzlicher Temp-File Cleanup
+                            cleanup_temp_files(max_age_minutes=5)
 
                     # Diagnose periodisch in DB speichern (für den Fall eines Abbruchs)
                     if diag and enable_diagnostics and idx > 0 and idx % diag_save_interval == 0:
@@ -2833,7 +3067,9 @@ class CloudSyncService:
         Returns:
             Tuple von (status: 'synced'/'skipped'/'error', processing_steps: Liste von Status-Updates)
         """
+        import gc
         processing_steps = []
+        file_content = None  # Initialisieren für finally-Block
 
         try:
             provider = file_info.get("provider", "")
@@ -2939,6 +3175,14 @@ class CloudSyncService:
                 "detail": f"❌ Fehler: {str(e)}"
             })
             return "error", processing_steps
+
+        finally:
+            # WICHTIG: Explizite Speicherfreigabe nach jeder Datei
+            # Dies verhindert Speicherakkumulation bei großen Syncs
+            if file_content is not None:
+                del file_content
+            # Garbage Collection für diese einzelne Datei
+            gc.collect()
 
     def _sync_dropbox(self, connection: CloudSyncConnection,
                       session, process_documents: bool) -> Dict:

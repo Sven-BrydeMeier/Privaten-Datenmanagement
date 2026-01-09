@@ -2026,7 +2026,7 @@ with tab_cloud:
                                 st.markdown("**🌐 API-Calls**")
                                 debug_api_container = st.empty()
                             with debug_cols[2]:
-                                st.markdown("**💾 Speicher**")
+                                st.markdown("**💾 RAM & Disk**")
                                 debug_memory_container = st.empty()
 
                             st.markdown("**📄 Datei-Operationen**")
@@ -2140,14 +2140,28 @@ with tab_cloud:
                                                 api_text += f"{status_icon} `{status}` {duration:.0f}ms\n`{endpoint}...`\n\n"
                                             debug_api_container.markdown(api_text or "*Keine API-Calls*")
 
-                                        # Speicher anzeigen
+                                        # Speicher und Disk anzeigen
                                         if debug_memory_container and diag_live.get("memory_snapshots"):
                                             mem = diag_live["memory_snapshots"][-1] if diag_live["memory_snapshots"] else {}
                                             rss = mem.get("rss_mb", 0)
                                             label = mem.get("label", "")
-                                            debug_memory_container.markdown(f"**{rss:.1f} MB**\n`{label}`")
+                                            disk_used = mem.get("disk_tmp_used_mb", 0)
+                                            disk_free = mem.get("disk_tmp_free_mb", 0)
+                                            disk_percent = mem.get("disk_tmp_percent", 0)
+                                            temp_count = mem.get("temp_files_count", 0)
+
+                                            # Farbe basierend auf kritischen Werten
+                                            ram_color = "🔴" if rss > 400 else "🟡" if rss > 300 else "🟢"
+                                            disk_color = "🔴" if disk_free < 50 else "🟡" if disk_free < 100 else "🟢"
+
+                                            mem_text = f"**RAM:** {ram_color} {rss:.1f} MB\n"
+                                            mem_text += f"**Disk:** {disk_color} {disk_free:.1f} MB frei\n"
+                                            mem_text += f"*/tmp: {disk_percent:.1f}% belegt*\n"
+                                            mem_text += f"*Temp-Files: {temp_count}*\n"
+                                            mem_text += f"`{label}`"
+                                            debug_memory_container.markdown(mem_text)
                                         elif debug_memory_container:
-                                            debug_memory_container.markdown("*psutil nicht verfügbar*")
+                                            debug_memory_container.markdown("*Monitoring nicht verfügbar*")
 
                                         # Datei-Operationen anzeigen
                                         if debug_files_container and diag_live.get("file_operations"):
