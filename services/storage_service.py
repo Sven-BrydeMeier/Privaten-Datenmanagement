@@ -254,7 +254,10 @@ class StorageService:
 
             for attempt in range(max_retries):
                 try:
-                    # Upload zu Supabase
+                    # Upload zu Supabase mit längerer Wartezeit bei großen Dateien
+                    file_size_mb = len(file_data) / (1024 * 1024)
+                    logger.info(f"[UPLOAD] Versuch {attempt + 1}/{max_retries}: {filename} ({file_size_mb:.2f} MB)")
+
                     response = self._supabase_client.storage.from_(self._bucket_name).upload(
                         path=storage_path,
                         file=file_data,
@@ -262,36 +265,57 @@ class StorageService:
                     )
 
                     # Upload erfolgreich wenn keine Exception geworfen wurde
-                    # KEINE Verifizierung mehr - das verdoppelt die API-Calls und verursacht Timeouts
                     logger.info(f"Datei in Cloud hochgeladen: {storage_path}")
                     return True, cloud_path
 
                 except Exception as e:
                     last_error = str(e)
+                    error_type = type(e).__name__
+
+                    # JSON-Parsing-Fehler (leere Antwort von Supabase)
+                    if "Expecting value" in last_error or "JSONDecodeError" in error_type:
+                        logger.warning(f"[UPLOAD] Leere Antwort von Supabase (Versuch {attempt + 1}): {last_error}")
+                        # Dies könnte ein Timeout oder Server-Fehler sein - warte länger
+                        if attempt < max_retries - 1:
+                            wait_time = 3 * (2 ** attempt)  # 3, 6, 12 Sekunden
+                            logger.info(f"[UPLOAD] Warte {wait_time}s vor erneutem Versuch...")
+                            time.sleep(wait_time)
+                            continue
 
                     # Wenn Datei bereits existiert, ist das auch OK
-                    if "already exists" in last_error.lower() or "duplicate" in last_error.lower():
+                    elif "already exists" in last_error.lower() or "duplicate" in last_error.lower():
                         logger.info(f"Datei existiert bereits in Cloud: {storage_path}")
                         return True, cloud_path
 
                     # Rate Limiting erkennen
                     elif "rate" in last_error.lower() or "limit" in last_error.lower() or "429" in last_error:
-                        logger.warning(f"Rate Limiting erkannt, warte {2 ** attempt} Sekunden...")
-                        time.sleep(2 ** attempt)  # Exponentielles Backoff
+                        wait_time = 5 * (2 ** attempt)  # 5, 10, 20 Sekunden
+                        logger.warning(f"[UPLOAD] Rate Limiting erkannt, warte {wait_time}s...")
+                        time.sleep(wait_time)
                         continue
 
                     # Timeout oder Netzwerkfehler
-                    elif "timeout" in last_error.lower() or "connection" in last_error.lower():
-                        logger.warning(f"Netzwerkfehler bei Upload (Versuch {attempt + 1}/{max_retries}): {last_error}")
+                    elif "timeout" in last_error.lower() or "connection" in last_error.lower() or "read operation" in last_error.lower():
+                        logger.warning(f"[UPLOAD] Netzwerkfehler (Versuch {attempt + 1}/{max_retries}): {last_error}")
                         if attempt < max_retries - 1:
-                            time.sleep(2 ** attempt)
+                            wait_time = 4 * (2 ** attempt)  # 4, 8, 16 Sekunden
+                            logger.info(f"[UPLOAD] Warte {wait_time}s vor erneutem Versuch...")
+                            time.sleep(wait_time)
+                            continue
+
+                    # SSL/TLS Fehler
+                    elif "ssl" in last_error.lower() or "certificate" in last_error.lower():
+                        logger.warning(f"[UPLOAD] SSL-Fehler (Versuch {attempt + 1}): {last_error}")
+                        if attempt < max_retries - 1:
+                            time.sleep(2)
                             continue
 
                     else:
-                        logger.error(f"Cloud Upload Fehler: {last_error}")
+                        logger.error(f"Cloud Upload Fehler ({error_type}): {last_error}")
 
-                    # Bei anderen Fehlern: Fallback auf lokal
-                    break
+                    # Bei anderen Fehlern: Fallback auf lokal nach letztem Versuch
+                    if attempt >= max_retries - 1:
+                        break
 
             # Alle Retries fehlgeschlagen
             if last_error:
