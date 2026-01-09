@@ -313,6 +313,171 @@ def create_sync_diagnostics() -> SyncDiagnostics:
     return _current_sync_diagnostics
 
 
+# ==================== SYNC KONFIGURATION ====================
+# Konfigurierbare Timeouts und Retry-Einstellungen
+SYNC_CONFIG = {
+    "download_timeout": 120,      # Sekunden für einzelne Downloads
+    "api_timeout": 60,            # Sekunden für API-Aufrufe
+    "upload_timeout": 180,        # Sekunden für Uploads zu Supabase
+    "max_retries": 3,             # Maximale Wiederholungsversuche
+    "retry_delay_base": 2,        # Basis-Verzögerung für exponentielles Backoff (Sekunden)
+    "db_reconnect_attempts": 3,   # Versuche für DB-Reconnect
+    "pause_between_files": 0.3,   # Pause zwischen Dateien (Sekunden)
+    "memory_check_interval": 5,   # Alle X Dateien Speicher prüfen
+}
+
+
+def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0,
+                       exceptions: tuple = (Exception,), diag: 'SyncDiagnostics' = None):
+    """
+    Decorator für automatische Wiederholung mit exponentiellem Backoff.
+
+    Args:
+        max_retries: Maximale Anzahl Wiederholungen
+        base_delay: Basis-Verzögerung in Sekunden
+        exceptions: Tuple von Exceptions die wiederholt werden sollen
+        diag: Optional SyncDiagnostics für Logging
+    """
+    import time
+    import functools
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(
+                            f"[RETRY] {func.__name__} Versuch {attempt + 1}/{max_retries + 1} "
+                            f"fehlgeschlagen: {e}. Warte {delay:.1f}s..."
+                        )
+                        if diag:
+                            diag.log_event("retry",
+                                f"Wiederhole {func.__name__} nach {delay:.1f}s (Versuch {attempt + 2})",
+                                {"error": str(e), "attempt": attempt + 1})
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            f"[RETRY] {func.__name__} endgültig fehlgeschlagen nach "
+                            f"{max_retries + 1} Versuchen: {e}"
+                        )
+            raise last_exception
+        return wrapper
+    return decorator
+
+
+class DatabaseConnectionManager:
+    """
+    Verwaltet Datenbank-Verbindungen mit automatischem Recovery.
+    """
+
+    def __init__(self):
+        self._session = None
+        self._reconnect_attempts = 0
+
+    def get_session(self):
+        """Gibt eine aktive Session zurück, mit Recovery bei Bedarf"""
+        if self._session is None:
+            self._session = self._create_session()
+        return self._session
+
+    def _create_session(self):
+        """Erstellt eine neue Session"""
+        from database.db import get_db
+        return get_db().__enter__()
+
+    def check_connection(self) -> bool:
+        """Prüft ob die Verbindung aktiv ist"""
+        if self._session is None:
+            return False
+        try:
+            # Simple Query zum Testen
+            from sqlalchemy import text
+            self._session.execute(text("SELECT 1"))
+            return True
+        except Exception as e:
+            logger.warning(f"DB-Verbindungscheck fehlgeschlagen: {e}")
+            return False
+
+    def reconnect(self, max_attempts: int = 3) -> bool:
+        """
+        Versucht die Datenbankverbindung wiederherzustellen.
+
+        Returns:
+            True wenn erfolgreich, False sonst
+        """
+        import time
+
+        logger.info("[DB-RECOVERY] Starte Verbindungs-Recovery...")
+
+        for attempt in range(max_attempts):
+            try:
+                # Alte Session schließen
+                if self._session:
+                    try:
+                        self._session.rollback()
+                        self._session.close()
+                    except:
+                        pass
+                    self._session = None
+
+                # Kurze Pause vor Reconnect
+                if attempt > 0:
+                    delay = 2 ** attempt
+                    logger.info(f"[DB-RECOVERY] Warte {delay}s vor Versuch {attempt + 1}...")
+                    time.sleep(delay)
+
+                # Neue Session erstellen
+                self._session = self._create_session()
+
+                # Verbindung testen
+                if self.check_connection():
+                    logger.info(f"[DB-RECOVERY] Verbindung wiederhergestellt (Versuch {attempt + 1})")
+                    self._reconnect_attempts = 0
+                    return True
+
+            except Exception as e:
+                logger.error(f"[DB-RECOVERY] Versuch {attempt + 1} fehlgeschlagen: {e}")
+
+        logger.error(f"[DB-RECOVERY] Konnte Verbindung nach {max_attempts} Versuchen nicht wiederherstellen")
+        return False
+
+    def safe_commit(self) -> bool:
+        """
+        Führt einen sicheren Commit durch mit Recovery bei Fehler.
+
+        Returns:
+            True wenn erfolgreich, False sonst
+        """
+        try:
+            self._session.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[DB] Commit fehlgeschlagen: {e}")
+            try:
+                self._session.rollback()
+            except:
+                pass
+
+            # Versuche Recovery
+            if self.reconnect():
+                return False  # Commit war nicht erfolgreich, aber Verbindung ist wieder da
+            return False
+
+    def safe_rollback(self):
+        """Führt einen sicheren Rollback durch"""
+        try:
+            if self._session:
+                self._session.rollback()
+        except Exception as e:
+            logger.warning(f"[DB] Rollback fehlgeschlagen: {e}")
+
+
 # ==================== PUBLIC GOOGLE DRIVE KONSTANTEN ====================
 # Direkte Download-URL für öffentliche Dateien
 GOOGLE_DRIVE_DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={file_id}"
@@ -1443,72 +1608,125 @@ class CloudSyncService:
         }
         return mime_map.get(ext, 'application/octet-stream')
 
-    def _google_public_download_file(self, file_id: str) -> Tuple[bytes, bool]:
+    def _google_public_download_file(self, file_id: str, max_retries: int = None) -> Tuple[bytes, bool]:
         """
         Lädt eine Datei von einem öffentlichen Google Drive herunter.
+        Mit konfigurierbarem Timeout und Retry-Logik.
+
+        Args:
+            file_id: Google Drive Datei-ID
+            max_retries: Maximale Wiederholungsversuche (default: aus SYNC_CONFIG)
 
         Returns:
             Tuple von (file_content, success)
         """
-        try:
-            # Direkte Download-URL
-            download_url = GOOGLE_DRIVE_DOWNLOAD_URL.format(file_id=file_id)
+        import time
 
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
+        if max_retries is None:
+            max_retries = SYNC_CONFIG.get("max_retries", 3)
 
-            # Erste Anfrage - kann eine Bestätigungsseite zurückgeben
-            session = requests.Session()
-            response = session.get(download_url, headers=headers, stream=True, timeout=60)
+        timeout = SYNC_CONFIG.get("download_timeout", 120)
+        base_delay = SYNC_CONFIG.get("retry_delay_base", 2)
 
-            # Prüfe auf Virus-Scan-Warnung (große Dateien)
-            if 'download_warning' in response.url or b'confirm=' in response.content[:1000]:
-                # Extrahiere Bestätigungs-Token
-                confirm_token = None
+        last_error = None
 
-                for key, value in response.cookies.items():
-                    if key.startswith('download_warning'):
-                        confirm_token = value
-                        break
+        for attempt in range(max_retries + 1):
+            try:
+                # Direkte Download-URL
+                download_url = GOOGLE_DRIVE_DOWNLOAD_URL.format(file_id=file_id)
 
-                if not confirm_token:
-                    # Versuche Token aus HTML zu extrahieren
-                    match = re.search(r'confirm=([a-zA-Z0-9_-]+)', response.text)
-                    if match:
-                        confirm_token = match.group(1)
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
 
-                if confirm_token:
-                    # Zweite Anfrage mit Bestätigung
-                    confirm_url = f"{download_url}&confirm={confirm_token}"
-                    response = session.get(confirm_url, headers=headers, stream=True, timeout=60)
+                # Erste Anfrage - kann eine Bestätigungsseite zurückgeben
+                session = requests.Session()
 
-            # Prüfe ob Download erfolgreich
-            content_type = response.headers.get('Content-Type', '')
+                logger.debug(f"[DOWNLOAD] Versuch {attempt + 1}/{max_retries + 1} für {file_id} (Timeout: {timeout}s)")
 
-            if 'text/html' in content_type:
-                # Wahrscheinlich eine Fehlerseite
-                if 'Access denied' in response.text or 'denied' in response.text.lower():
-                    logger.warning(f"Zugriff verweigert für Datei {file_id}")
+                response = session.get(download_url, headers=headers, stream=True, timeout=timeout)
+
+                # Prüfe auf Virus-Scan-Warnung (große Dateien)
+                if 'download_warning' in response.url or b'confirm=' in response.content[:1000]:
+                    # Extrahiere Bestätigungs-Token
+                    confirm_token = None
+
+                    for key, value in response.cookies.items():
+                        if key.startswith('download_warning'):
+                            confirm_token = value
+                            break
+
+                    if not confirm_token:
+                        # Versuche Token aus HTML zu extrahieren
+                        match = re.search(r'confirm=([a-zA-Z0-9_-]+)', response.text)
+                        if match:
+                            confirm_token = match.group(1)
+
+                    if confirm_token:
+                        # Zweite Anfrage mit Bestätigung
+                        confirm_url = f"{download_url}&confirm={confirm_token}"
+                        response = session.get(confirm_url, headers=headers, stream=True, timeout=timeout)
+
+                # Prüfe ob Download erfolgreich
+                content_type = response.headers.get('Content-Type', '')
+
+                if 'text/html' in content_type:
+                    # Wahrscheinlich eine Fehlerseite
+                    if 'Access denied' in response.text or 'denied' in response.text.lower():
+                        logger.warning(f"Zugriff verweigert für Datei {file_id}")
+                        return b'', False
+                    elif 'quota' in response.text.lower():
+                        logger.warning(f"Download-Quota überschritten für Datei {file_id}")
+                        # Bei Quota-Fehler länger warten
+                        if attempt < max_retries:
+                            delay = base_delay * (4 ** attempt)  # Längere Wartezeit bei Quota
+                            logger.info(f"[QUOTA] Warte {delay}s vor erneutem Versuch...")
+                            time.sleep(delay)
+                            continue
+                        return b'', False
+
+                # Lade vollständigen Inhalt
+                content = response.content
+
+                if len(content) == 0:
+                    if attempt < max_retries:
+                        logger.warning(f"[DOWNLOAD] Leere Antwort für {file_id}, versuche erneut...")
+                        time.sleep(base_delay * (2 ** attempt))
+                        continue
                     return b'', False
-                elif 'quota' in response.text.lower():
-                    logger.warning(f"Download-Quota überschritten für Datei {file_id}")
-                    return b'', False
 
-            # Lade vollständigen Inhalt
-            content = response.content
+                logger.debug(f"[DOWNLOAD] Erfolgreich: {len(content)} Bytes für {file_id}")
+                return content, True
 
-            if len(content) == 0:
-                return b'', False
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                logger.warning(f"[DOWNLOAD] Timeout bei Versuch {attempt + 1} für {file_id}")
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.info(f"[DOWNLOAD] Warte {delay}s vor Retry...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"[DOWNLOAD] Timeout nach {max_retries + 1} Versuchen für {file_id}")
 
-            return content, True
+            except requests.exceptions.ConnectionError as e:
+                last_error = e
+                logger.warning(f"[DOWNLOAD] Verbindungsfehler bei Versuch {attempt + 1} für {file_id}: {e}")
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.info(f"[DOWNLOAD] Warte {delay}s vor Retry...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"[DOWNLOAD] Verbindung fehlgeschlagen nach {max_retries + 1} Versuchen")
 
-        except requests.exceptions.Timeout:
-            logger.error(f"Timeout beim Download von Datei {file_id}")
-            return b'', False
-        except Exception as e:
-            logger.error(f"Fehler beim Download von Datei {file_id}: {e}")
-            return b'', False
+            except Exception as e:
+                last_error = e
+                logger.error(f"[DOWNLOAD] Fehler bei Versuch {attempt + 1} für {file_id}: {e}")
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    time.sleep(delay)
+
+        logger.error(f"[DOWNLOAD] Endgültig fehlgeschlagen für {file_id}: {last_error}")
+        return b'', False
 
     def _collect_dropbox_files_public(self, connection: CloudSyncConnection,
                                        session) -> List[Dict]:
@@ -1955,6 +2173,13 @@ class CloudSyncService:
                     diag.set_phase("downloading")
                 yield result.copy()
 
+                # Konfiguration für Pausen und Checks
+                pause_between_files = SYNC_CONFIG.get("pause_between_files", 0.3)
+                memory_check_interval = SYNC_CONFIG.get("memory_check_interval", 5)
+                db_check_interval = 10  # Alle X Dateien DB-Verbindung prüfen
+                consecutive_errors = 0
+                max_consecutive_errors = 5  # Nach X Fehlern hintereinander abbrechen
+
                 # Phase 2: Dateien herunterladen und importieren
                 for idx, file_info in enumerate(files_to_sync):
                     file_start_time = time.time()
@@ -1968,9 +2193,40 @@ class CloudSyncService:
                     # Diagnose: Datei-Fortschritt aktualisieren
                     if diag:
                         diag.set_file_progress(idx + 1, result["files_total"])
-                        # Alle 10 Dateien Speicher prüfen
-                        if idx % 10 == 0:
+                        # Speicher prüfen nach Intervall
+                        if idx % memory_check_interval == 0:
                             diag.capture_memory(f"file_{idx}")
+
+                    # Datenbankverbindung prüfen (alle X Dateien)
+                    if idx > 0 and idx % db_check_interval == 0:
+                        try:
+                            from sqlalchemy import text
+                            session.execute(text("SELECT 1"))
+                            if diag:
+                                diag.log_event("db_check", f"DB-Verbindung OK bei Datei {idx}")
+                        except Exception as db_err:
+                            logger.warning(f"[DB-CHECK] Verbindung unterbrochen bei Datei {idx}: {db_err}")
+                            if diag:
+                                diag.log_error("db_connection_lost", f"Verbindung unterbrochen bei Datei {idx}", db_err)
+
+                            # Versuche Recovery
+                            try:
+                                session.rollback()
+                                # Warte kurz und versuche Reconnect
+                                time.sleep(2)
+                                session.execute(text("SELECT 1"))
+                                logger.info("[DB-CHECK] Verbindung wiederhergestellt")
+                                if diag:
+                                    diag.log_event("db_reconnect", "DB-Verbindung wiederhergestellt")
+                            except Exception as reconnect_err:
+                                logger.error(f"[DB-CHECK] Reconnect fehlgeschlagen: {reconnect_err}")
+                                if diag:
+                                    diag.log_error("db_reconnect_failed", "Reconnect fehlgeschlagen", reconnect_err)
+                                # Beende Sync aber speichere was wir haben
+                                result["phase"] = "error"
+                                result["error"] = f"Datenbankverbindung verloren bei Datei {idx}"
+                                result["errors"].append(result["error"])
+                                break
 
                     # Fortschritt berechnen
                     if result["files_total"] > 0:
@@ -1991,11 +2247,13 @@ class CloudSyncService:
                                        {"file_size": file_info.get("size", 0)})
                     yield result.copy()
 
-                    # Datei verarbeiten
+                    # Datei verarbeiten mit Fehler-Isolation
+                    file_success = False
                     try:
                         sync_status, processing_steps = self._process_file_with_status(
                             connection, session, file_info, process_documents, result
                         )
+                        file_success = (sync_status in ["synced", "skipped"])
 
                         file_duration = (time.time() - file_start_time) * 1000
 
@@ -2070,10 +2328,27 @@ class CloudSyncService:
                         except:
                             pass
 
+                    # Fehler-Tracking für Abbruch bei zu vielen aufeinanderfolgenden Fehlern
+                    if file_success:
+                        consecutive_errors = 0  # Reset bei Erfolg
+                    else:
+                        consecutive_errors += 1
+                        logger.warning(f"[ERROR-TRACK] Aufeinanderfolgende Fehler: {consecutive_errors}/{max_consecutive_errors}")
+
+                        if consecutive_errors >= max_consecutive_errors:
+                            logger.error(f"[ERROR-TRACK] Abbruch nach {consecutive_errors} aufeinanderfolgenden Fehlern")
+                            if diag:
+                                diag.log_error("consecutive_errors",
+                                    f"Abbruch nach {consecutive_errors} aufeinanderfolgenden Fehlern",
+                                    None)
+                            result["error"] = f"Zu viele aufeinanderfolgende Fehler ({consecutive_errors})"
+                            result["errors"].append(result["error"])
+                            break
+
                     # Kurze Pause zwischen Dateien um API-Limits zu vermeiden
                     # (besonders wichtig für Supabase Storage)
                     if idx < len(files_to_sync) - 1:  # Nicht nach letzter Datei
-                        time.sleep(0.2)  # 200ms Pause
+                        time.sleep(pause_between_files)
 
                 # Phase 3: Abschluss
                 result["phase"] = "completed"
