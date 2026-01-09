@@ -6,6 +6,8 @@ import os
 import hashlib
 import json
 import logging
+import traceback
+import psutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
@@ -22,6 +24,293 @@ from database.extended_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== SYNC DIAGNOSTICS ====================
+class SyncDiagnostics:
+    """
+    Umfassendes Diagnose-System für Cloud-Synchronisation.
+    Erfasst detaillierte Metriken zu jedem Sync-Vorgang.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        """Setzt alle Diagnose-Daten zurück"""
+        self.start_time = None
+        self.end_time = None
+        self.events = []  # Liste aller Events mit Zeitstempel
+        self.api_calls = []  # API-Aufrufe mit Timing
+        self.file_operations = []  # Datei-Operationen
+        self.errors = []  # Detaillierte Fehler
+        self.memory_snapshots = []  # Speicher-Nutzung
+        self.current_file_index = 0
+        self.total_files = 0
+        self.last_successful_file = None
+        self.last_successful_time = None
+        self.phase = "not_started"
+        self.connection_info = {}
+
+    def start(self, connection_info: dict = None):
+        """Startet die Diagnose-Erfassung"""
+        self.reset()
+        self.start_time = datetime.now()
+        self.connection_info = connection_info or {}
+        self.log_event("sync_started", f"Sync gestartet für Verbindung: {connection_info}")
+        self.capture_memory("start")
+
+    def log_event(self, event_type: str, detail: str, extra: dict = None):
+        """Loggt ein Event mit Zeitstempel"""
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "elapsed_ms": self._elapsed_ms(),
+            "type": event_type,
+            "detail": detail,
+            "extra": extra or {}
+        }
+        self.events.append(event)
+        logger.info(f"[SYNC-DIAG] {event_type}: {detail}")
+
+    def log_api_call(self, endpoint: str, method: str, status_code: int,
+                     duration_ms: float, response_size: int = 0, error: str = None):
+        """Loggt einen API-Aufruf"""
+        call = {
+            "timestamp": datetime.now().isoformat(),
+            "elapsed_ms": self._elapsed_ms(),
+            "endpoint": endpoint[:100],  # Kürzen für Übersichtlichkeit
+            "method": method,
+            "status_code": status_code,
+            "duration_ms": round(duration_ms, 2),
+            "response_size": response_size,
+            "error": error
+        }
+        self.api_calls.append(call)
+
+        status_str = f"✅ {status_code}" if status_code == 200 else f"❌ {status_code}"
+        logger.info(f"[SYNC-API] {method} {endpoint[:50]}... -> {status_str} ({duration_ms:.0f}ms)")
+
+    def log_file_operation(self, filename: str, operation: str, status: str,
+                          file_size: int = 0, duration_ms: float = 0, error: str = None):
+        """Loggt eine Datei-Operation"""
+        op = {
+            "timestamp": datetime.now().isoformat(),
+            "elapsed_ms": self._elapsed_ms(),
+            "file_index": self.current_file_index,
+            "filename": filename,
+            "operation": operation,
+            "status": status,
+            "file_size": file_size,
+            "duration_ms": round(duration_ms, 2),
+            "error": error
+        }
+        self.file_operations.append(op)
+
+        if status == "success":
+            self.last_successful_file = filename
+            self.last_successful_time = datetime.now()
+
+        status_icon = "✅" if status == "success" else "⏭️" if status == "skipped" else "❌"
+        logger.info(f"[SYNC-FILE] {status_icon} [{self.current_file_index}/{self.total_files}] {filename} - {operation}")
+
+    def log_error(self, error_type: str, message: str, exception: Exception = None):
+        """Loggt einen Fehler mit vollständigem Traceback"""
+        error = {
+            "timestamp": datetime.now().isoformat(),
+            "elapsed_ms": self._elapsed_ms(),
+            "file_index": self.current_file_index,
+            "type": error_type,
+            "message": message,
+            "exception_type": type(exception).__name__ if exception else None,
+            "exception_message": str(exception) if exception else None,
+            "traceback": traceback.format_exc() if exception else None
+        }
+        self.errors.append(error)
+        logger.error(f"[SYNC-ERROR] {error_type}: {message}")
+        if exception:
+            logger.error(f"[SYNC-ERROR] Exception: {exception}")
+
+    def capture_memory(self, label: str = ""):
+        """Erfasst aktuelle Speichernutzung"""
+        try:
+            process = psutil.Process()
+            mem_info = process.memory_info()
+            snapshot = {
+                "timestamp": datetime.now().isoformat(),
+                "elapsed_ms": self._elapsed_ms(),
+                "label": label,
+                "rss_mb": round(mem_info.rss / 1024 / 1024, 2),
+                "vms_mb": round(mem_info.vms / 1024 / 1024, 2),
+                "file_index": self.current_file_index
+            }
+            self.memory_snapshots.append(snapshot)
+            logger.debug(f"[SYNC-MEM] {label}: RSS={snapshot['rss_mb']}MB")
+        except Exception as e:
+            logger.debug(f"Memory capture failed: {e}")
+
+    def set_phase(self, phase: str):
+        """Setzt die aktuelle Phase"""
+        self.phase = phase
+        self.log_event("phase_change", f"Phase gewechselt zu: {phase}")
+        self.capture_memory(f"phase_{phase}")
+
+    def set_file_progress(self, current: int, total: int):
+        """Aktualisiert Datei-Fortschritt"""
+        self.current_file_index = current
+        self.total_files = total
+
+    def finish(self, success: bool, final_stats: dict = None):
+        """Beendet die Diagnose-Erfassung"""
+        self.end_time = datetime.now()
+        self.capture_memory("end")
+        self.log_event("sync_finished",
+                       f"Sync {'erfolgreich' if success else 'mit Fehlern'} beendet",
+                       {"success": success, "stats": final_stats})
+
+    def _elapsed_ms(self) -> int:
+        """Berechnet verstrichene Zeit in Millisekunden"""
+        if not self.start_time:
+            return 0
+        return int((datetime.now() - self.start_time).total_seconds() * 1000)
+
+    def get_summary(self) -> dict:
+        """Gibt eine Zusammenfassung der Diagnose zurück"""
+        total_duration = (self.end_time - self.start_time).total_seconds() if self.end_time and self.start_time else 0
+
+        # API-Statistiken
+        api_durations = [c["duration_ms"] for c in self.api_calls]
+        api_errors = [c for c in self.api_calls if c.get("error") or c.get("status_code", 200) >= 400]
+
+        # Datei-Statistiken
+        successful_files = [f for f in self.file_operations if f["status"] == "success"]
+        failed_files = [f for f in self.file_operations if f["status"] == "error"]
+        skipped_files = [f for f in self.file_operations if f["status"] == "skipped"]
+
+        # Speicher-Statistiken
+        if self.memory_snapshots:
+            mem_start = self.memory_snapshots[0]["rss_mb"] if self.memory_snapshots else 0
+            mem_end = self.memory_snapshots[-1]["rss_mb"] if self.memory_snapshots else 0
+            mem_max = max(s["rss_mb"] for s in self.memory_snapshots)
+        else:
+            mem_start = mem_end = mem_max = 0
+
+        return {
+            "duration_seconds": round(total_duration, 2),
+            "phase": self.phase,
+            "total_files": self.total_files,
+            "files_processed": self.current_file_index,
+            "files_successful": len(successful_files),
+            "files_failed": len(failed_files),
+            "files_skipped": len(skipped_files),
+            "last_successful_file": self.last_successful_file,
+            "last_successful_time": self.last_successful_time.isoformat() if self.last_successful_time else None,
+            "api_calls_total": len(self.api_calls),
+            "api_calls_failed": len(api_errors),
+            "api_avg_duration_ms": round(sum(api_durations) / len(api_durations), 2) if api_durations else 0,
+            "api_max_duration_ms": max(api_durations) if api_durations else 0,
+            "errors_total": len(self.errors),
+            "memory_start_mb": mem_start,
+            "memory_end_mb": mem_end,
+            "memory_max_mb": mem_max,
+            "memory_growth_mb": round(mem_end - mem_start, 2),
+            "events_count": len(self.events)
+        }
+
+    def get_full_report(self) -> dict:
+        """Gibt den vollständigen Diagnose-Bericht zurück"""
+        return {
+            "summary": self.get_summary(),
+            "connection_info": self.connection_info,
+            "events": self.events[-100:],  # Letzte 100 Events
+            "api_calls": self.api_calls[-50:],  # Letzte 50 API-Calls
+            "file_operations": self.file_operations[-100:],  # Letzte 100 Datei-Ops
+            "errors": self.errors,  # Alle Fehler
+            "memory_snapshots": self.memory_snapshots
+        }
+
+    def get_failure_analysis(self) -> dict:
+        """Analysiert mögliche Ursachen für Sync-Abbrüche"""
+        analysis = {
+            "possible_causes": [],
+            "recommendations": []
+        }
+
+        # Analyse: Timeout-Muster
+        slow_api_calls = [c for c in self.api_calls if c["duration_ms"] > 30000]  # > 30s
+        if slow_api_calls:
+            analysis["possible_causes"].append(
+                f"Langsame API-Antworten: {len(slow_api_calls)} Aufrufe > 30s"
+            )
+            analysis["recommendations"].append(
+                "Netzwerkverbindung prüfen oder Timeout erhöhen"
+            )
+
+        # Analyse: API-Fehler
+        api_errors = [c for c in self.api_calls if c.get("status_code", 200) >= 400]
+        if api_errors:
+            status_codes = set(c["status_code"] for c in api_errors)
+            analysis["possible_causes"].append(
+                f"API-Fehler: {len(api_errors)} Fehler mit Codes {status_codes}"
+            )
+            if 429 in status_codes:
+                analysis["recommendations"].append(
+                    "Rate-Limiting erkannt - längere Pausen zwischen Anfragen einfügen"
+                )
+            if 401 in status_codes or 403 in status_codes:
+                analysis["recommendations"].append(
+                    "Authentifizierungsfehler - Token erneuern oder Berechtigungen prüfen"
+                )
+
+        # Analyse: Speicherwachstum
+        if self.memory_snapshots:
+            mem_growth = self.memory_snapshots[-1]["rss_mb"] - self.memory_snapshots[0]["rss_mb"]
+            if mem_growth > 500:  # > 500MB Wachstum
+                analysis["possible_causes"].append(
+                    f"Hoher Speicherverbrauch: +{mem_growth:.0f}MB während Sync"
+                )
+                analysis["recommendations"].append(
+                    "Batch-Größe reduzieren oder Speicher freigeben"
+                )
+
+        # Analyse: Abbruch-Punkt
+        if self.current_file_index < self.total_files and self.last_successful_file:
+            analysis["possible_causes"].append(
+                f"Sync bei Datei {self.current_file_index}/{self.total_files} abgebrochen"
+            )
+            analysis["last_successful"] = {
+                "file": self.last_successful_file,
+                "time": self.last_successful_time.isoformat() if self.last_successful_time else None,
+                "index": self.current_file_index - 1
+            }
+
+        # Analyse: Häufige Fehlertypen
+        if self.errors:
+            error_types = {}
+            for e in self.errors:
+                t = e.get("type", "unknown")
+                error_types[t] = error_types.get(t, 0) + 1
+            analysis["error_distribution"] = error_types
+
+            most_common = max(error_types, key=error_types.get)
+            analysis["recommendations"].append(
+                f"Häufigster Fehlertyp: {most_common} ({error_types[most_common]}x)"
+            )
+
+        return analysis
+
+
+# Globale Diagnose-Instanz für aktuellen Sync
+_current_sync_diagnostics: Optional[SyncDiagnostics] = None
+
+def get_sync_diagnostics() -> Optional[SyncDiagnostics]:
+    """Gibt die aktuelle Diagnose-Instanz zurück"""
+    return _current_sync_diagnostics
+
+def create_sync_diagnostics() -> SyncDiagnostics:
+    """Erstellt eine neue Diagnose-Instanz"""
+    global _current_sync_diagnostics
+    _current_sync_diagnostics = SyncDiagnostics()
+    return _current_sync_diagnostics
 
 
 # ==================== PUBLIC GOOGLE DRIVE KONSTANTEN ====================
@@ -1452,7 +1741,8 @@ class CloudSyncService:
     def sync_connection_with_progress(self, connection_id: int,
                                        process_documents: bool = True,
                                        batch_size: int = 0,
-                                       batch_offset: int = 0):
+                                       batch_offset: int = 0,
+                                       enable_diagnostics: bool = True):
         """
         Führt Synchronisation mit Fortschritts-Updates durch (Generator).
 
@@ -1461,6 +1751,7 @@ class CloudSyncService:
             process_documents: Ob Dokumente verarbeitet werden sollen
             batch_size: Maximale Anzahl Dateien pro Durchlauf (0 = alle)
             batch_offset: Ab welcher Datei begonnen werden soll
+            enable_diagnostics: Aktiviert detaillierte Diagnose-Erfassung
 
         Yields:
             Dict mit Fortschrittsinformationen:
@@ -1477,9 +1768,21 @@ class CloudSyncService:
             - success: True wenn abgeschlossen und erfolgreich
             - error: Fehlermeldung falls vorhanden
             - batch_info: Informationen zum Batch-Modus
+            - diagnostics: Diagnose-Zusammenfassung (wenn aktiviert)
         """
         import time
         start_time = time.time()
+
+        # Diagnose-System initialisieren
+        diag = None
+        if enable_diagnostics:
+            diag = create_sync_diagnostics()
+            diag.start({
+                "connection_id": connection_id,
+                "batch_size": batch_size,
+                "batch_offset": batch_offset,
+                "process_documents": process_documents
+            })
 
         result = {
             "phase": "initializing",
@@ -1559,31 +1862,53 @@ class CloudSyncService:
             try:
                 # Phase 1: Dateien scannen
                 result["phase"] = "scanning"
+                if diag:
+                    diag.set_phase("scanning")
                 yield result.copy()
 
                 try:
+                    scan_start = time.time()
                     if connection.provider == CloudProvider.DROPBOX:
                         # Öffentliche oder authentifizierte Dropbox
                         if is_public_dropbox:
+                            if diag:
+                                diag.log_event("scan_start", "Starte Dropbox Public Scan")
                             files_to_sync = self._collect_dropbox_files_public(connection, session)
                         else:
+                            if diag:
+                                diag.log_event("scan_start", "Starte Dropbox API Scan")
                             files_to_sync = self._collect_dropbox_files(connection, session)
                     elif connection.provider == CloudProvider.GOOGLE_DRIVE:
                         # Öffentliche Ordner verwenden andere Methode
                         if is_public_google_drive:
                             logger.info("Starte öffentliche Google Drive Sammlung...")
+                            if diag:
+                                diag.log_event("scan_start", "Starte Google Drive Public Scan")
                             files_to_sync = self._collect_google_drive_files_public(connection, session)
                             logger.info(f"Sammlung abgeschlossen: {len(files_to_sync)} Dateien")
                         else:
+                            if diag:
+                                diag.log_event("scan_start", "Starte Google Drive API Scan")
                             files_to_sync = self._collect_google_drive_files(connection, session)
                     else:
                         result["phase"] = "error"
                         result["error"] = f"Provider {connection.provider} nicht unterstützt"
                         result["errors"].append(result["error"])
+                        if diag:
+                            diag.log_error("unsupported_provider", result["error"])
                         yield result
                         return
+
+                    scan_duration = (time.time() - scan_start) * 1000
+                    if diag:
+                        diag.log_event("scan_complete",
+                                       f"Scan abgeschlossen: {len(files_to_sync)} Dateien in {scan_duration:.0f}ms",
+                                       {"files_found": len(files_to_sync), "duration_ms": scan_duration})
+
                 except Exception as collect_error:
                     logger.error(f"Fehler beim Sammeln der Dateien: {collect_error}")
+                    if diag:
+                        diag.log_error("scan_error", str(collect_error), collect_error)
                     result["phase"] = "error"
                     result["error"] = f"Fehler beim Scannen: {str(collect_error)}"
                     result["errors"].append(result["error"])
@@ -1592,6 +1917,8 @@ class CloudSyncService:
 
                 result["files_total"] = len(files_to_sync)
                 logger.info(f"Dateien gefunden: {result['files_total']}")
+                if diag:
+                    diag.set_file_progress(0, result["files_total"])
 
                 # Batch-Info speichern
                 result["batch_info"]["total_files_found"] = len(files_to_sync)
@@ -1624,16 +1951,26 @@ class CloudSyncService:
                     return
 
                 result["phase"] = "downloading"
+                if diag:
+                    diag.set_phase("downloading")
                 yield result.copy()
 
                 # Phase 2: Dateien herunterladen und importieren
                 for idx, file_info in enumerate(files_to_sync):
-                    elapsed = time.time() - start_time
+                    file_start_time = time.time()
+                    elapsed = file_start_time - start_time
                     result["elapsed_seconds"] = elapsed
                     result["current_file"] = file_info.get("name", "Unbekannt")
                     result["current_file_size"] = file_info.get("size", 0)
                     result["files_processed"] = idx
                     result["source_folder"] = file_info.get("source_folder", "")
+
+                    # Diagnose: Datei-Fortschritt aktualisieren
+                    if diag:
+                        diag.set_file_progress(idx + 1, result["files_total"])
+                        # Alle 10 Dateien Speicher prüfen
+                        if idx % 10 == 0:
+                            diag.capture_memory(f"file_{idx}")
 
                     # Fortschritt berechnen
                     if result["files_total"] > 0:
@@ -1648,6 +1985,10 @@ class CloudSyncService:
                     # Status: Download startet
                     result["current_step"] = "downloading"
                     result["current_step_detail"] = f"Lade {file_info.get('name')} herunter..."
+                    if diag:
+                        diag.log_event("file_start",
+                                       f"Starte Datei {idx+1}/{result['files_total']}: {file_info.get('name')}",
+                                       {"file_size": file_info.get("size", 0)})
                     yield result.copy()
 
                     # Datei verarbeiten
@@ -1655,6 +1996,8 @@ class CloudSyncService:
                         sync_status, processing_steps = self._process_file_with_status(
                             connection, session, file_info, process_documents, result
                         )
+
+                        file_duration = (time.time() - file_start_time) * 1000
 
                         # Yield für jeden Verarbeitungsschritt
                         for step in processing_steps:
@@ -1665,16 +2008,30 @@ class CloudSyncService:
                         if sync_status == "synced":
                             result["files_synced"] += 1
                             result["synced_files"].append(file_info.get("name"))
+                            # Diagnose: Erfolgreiche Datei
+                            if diag:
+                                diag.log_file_operation(
+                                    file_info.get("name"), "import", "success",
+                                    file_info.get("size", 0), file_duration
+                                )
                             # Commit nach jedem erfolgreichen Import!
                             try:
                                 session.commit()
                             except Exception as commit_err:
                                 logger.error(f"Commit Fehler für {file_info.get('name')}: {commit_err}")
+                                if diag:
+                                    diag.log_error("commit_error", str(commit_err), commit_err)
                                 session.rollback()
                                 result["files_error"] += 1
                                 result["errors"].append(f"{file_info.get('name')}: Commit fehlgeschlagen")
                         elif sync_status == "skipped":
                             result["files_skipped"] += 1
+                            # Diagnose: Übersprungene Datei
+                            if diag:
+                                diag.log_file_operation(
+                                    file_info.get("name"), "skip", "skipped",
+                                    file_info.get("size", 0), file_duration
+                                )
                         else:
                             result["files_error"] += 1
                             # Rollback bei Fehler, damit nächste Datei funktioniert
@@ -1689,11 +2046,24 @@ class CloudSyncService:
                                     error_detail = step.get("detail", error_detail)
                                     break
                             result["errors"].append(f"{file_info.get('name')}: {error_detail}")
+                            # Diagnose: Fehler bei Datei
+                            if diag:
+                                diag.log_file_operation(
+                                    file_info.get("name"), "import", "error",
+                                    file_info.get("size", 0), file_duration, error_detail
+                                )
 
                     except Exception as e:
                         logger.error(f"Fehler beim Import von {file_info.get('name')}: {e}")
                         result["files_error"] += 1
                         result["errors"].append(f"{file_info.get('name')}: {str(e)}")
+                        # Diagnose: Exception bei Datei
+                        if diag:
+                            diag.log_error("file_exception", f"Datei {file_info.get('name')}: {str(e)}", e)
+                            diag.log_file_operation(
+                                file_info.get("name"), "import", "error",
+                                file_info.get("size", 0), 0, str(e)
+                            )
                         # Rollback bei Exception
                         try:
                             session.rollback()
@@ -1707,6 +2077,8 @@ class CloudSyncService:
 
                 # Phase 3: Abschluss
                 result["phase"] = "completed"
+                if diag:
+                    diag.set_phase("completed")
                 result["files_processed"] = result["files_total"]
                 result["progress_percent"] = 100
                 result["new_files"] = result["files_synced"]
@@ -1721,8 +2093,20 @@ class CloudSyncService:
                 connection.last_sync_error = None
                 connection.total_files_synced += result["files_synced"]
 
+                # Diagnose abschließen
+                if diag:
+                    diag.finish(result["success"], {
+                        "files_synced": result["files_synced"],
+                        "files_skipped": result["files_skipped"],
+                        "files_error": result["files_error"],
+                        "elapsed_seconds": result["elapsed_seconds"]
+                    })
+
             except Exception as e:
                 logger.error(f"Sync-Fehler für Verbindung {connection_id}: {e}")
+                if diag:
+                    diag.log_error("sync_exception", f"Allgemeiner Sync-Fehler: {str(e)}", e)
+                    diag.finish(False, {"error": str(e)})
                 connection.status = SyncStatus.ERROR
                 connection.last_sync_error = str(e)
                 result["phase"] = "error"
@@ -1737,6 +2121,11 @@ class CloudSyncService:
         # Wenn Fehler vorhanden, erste Fehlermeldung setzen
         if result["errors"] and not result["error"]:
             result["error"] = result["errors"][0]
+
+        # Diagnose-Zusammenfassung ans Ergebnis anhängen
+        if diag:
+            result["diagnostics"] = diag.get_summary()
+            result["diagnostics_analysis"] = diag.get_failure_analysis()
 
         yield result
 

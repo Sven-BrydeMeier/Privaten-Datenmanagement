@@ -3,6 +3,7 @@ Einstellungen - API-Keys, E-Mail-Konfiguration, Sicherheit
 """
 import streamlit as st
 from pathlib import Path
+from datetime import datetime
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -998,6 +999,77 @@ with tab_cloud:
                                 sync_status.success(f"✅ {files_processed} Dateien importiert! Alle Dateien synchronisiert.")
                         elif final_result:
                             sync_status.error(final_result.get("error", "Fehler"))
+
+                        # Diagnose-Informationen anzeigen (wenn vorhanden)
+                        if final_result and final_result.get("diagnostics"):
+                            diag = final_result.get("diagnostics", {})
+                            analysis = final_result.get("diagnostics_analysis", {})
+
+                            with st.expander("🔬 Sync-Diagnose Details", expanded=False):
+                                # Übersicht
+                                st.markdown("#### 📊 Übersicht")
+                                dc1, dc2, dc3, dc4 = st.columns(4)
+                                with dc1:
+                                    st.metric("⏱️ Dauer", f"{diag.get('duration_seconds', 0):.1f}s")
+                                with dc2:
+                                    st.metric("📁 Dateien", f"{diag.get('files_processed', 0)}/{diag.get('total_files', 0)}")
+                                with dc3:
+                                    st.metric("✅ Erfolgreich", diag.get('files_successful', 0))
+                                with dc4:
+                                    st.metric("❌ Fehler", diag.get('files_failed', 0))
+
+                                # API-Statistiken
+                                st.markdown("#### 🌐 API-Aufrufe")
+                                ac1, ac2, ac3 = st.columns(3)
+                                with ac1:
+                                    st.metric("Gesamt", diag.get('api_calls_total', 0))
+                                with ac2:
+                                    st.metric("Ø Dauer", f"{diag.get('api_avg_duration_ms', 0):.0f}ms")
+                                with ac3:
+                                    st.metric("Max Dauer", f"{diag.get('api_max_duration_ms', 0):.0f}ms")
+
+                                # Speicher
+                                st.markdown("#### 💾 Speichernutzung")
+                                mc1, mc2, mc3 = st.columns(3)
+                                with mc1:
+                                    st.metric("Start", f"{diag.get('memory_start_mb', 0):.0f} MB")
+                                with mc2:
+                                    st.metric("Ende", f"{diag.get('memory_end_mb', 0):.0f} MB")
+                                with mc3:
+                                    growth = diag.get('memory_growth_mb', 0)
+                                    st.metric("Wachstum", f"+{growth:.0f} MB" if growth > 0 else f"{growth:.0f} MB")
+
+                                # Letzte erfolgreiche Datei
+                                if diag.get('last_successful_file'):
+                                    st.markdown("#### 📄 Letzte erfolgreiche Datei")
+                                    st.info(f"**{diag.get('last_successful_file')}**\num {diag.get('last_successful_time', 'unbekannt')}")
+
+                                # Fehler-Analyse
+                                if analysis.get('possible_causes'):
+                                    st.markdown("#### ⚠️ Mögliche Probleme")
+                                    for cause in analysis.get('possible_causes', []):
+                                        st.warning(cause)
+
+                                if analysis.get('recommendations'):
+                                    st.markdown("#### 💡 Empfehlungen")
+                                    for rec in analysis.get('recommendations', []):
+                                        st.info(rec)
+
+                                # Vollständigen Diagnose-Bericht herunterladen
+                                try:
+                                    from services.cloud_sync_service import get_sync_diagnostics
+                                    full_diag = get_sync_diagnostics()
+                                    if full_diag:
+                                        import json
+                                        report_json = json.dumps(full_diag.get_full_report(), indent=2, default=str)
+                                        st.download_button(
+                                            "📥 Vollständigen Diagnose-Bericht herunterladen",
+                                            data=report_json,
+                                            file_name=f"sync_diagnose_{conn.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                                            mime="application/json"
+                                        )
+                                except Exception as diag_err:
+                                    st.caption(f"Diagnose-Bericht nicht verfügbar: {diag_err}")
 
                     st.divider()
         else:
