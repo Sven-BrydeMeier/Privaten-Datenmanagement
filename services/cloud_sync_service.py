@@ -76,7 +76,7 @@ class SyncDiagnostics:
         self.capture_memory("start")
 
     def log_event(self, event_type: str, detail: str, extra: dict = None):
-        """Loggt ein Event mit Zeitstempel"""
+        """Loggt ein Event mit Zeitstempel (max 100 Events behalten)"""
         event = {
             "timestamp": datetime.now().isoformat(),
             "elapsed_ms": self._elapsed_ms(),
@@ -85,11 +85,14 @@ class SyncDiagnostics:
             "extra": extra or {}
         }
         self.events.append(event)
+        # Begrenze Liste um Speicher zu sparen
+        if len(self.events) > 100:
+            self.events = self.events[-100:]
         logger.info(f"[SYNC-DIAG] {event_type}: {detail}")
 
     def log_api_call(self, endpoint: str, method: str, status_code: int,
                      duration_ms: float, response_size: int = 0, error: str = None):
-        """Loggt einen API-Aufruf"""
+        """Loggt einen API-Aufruf (max 50 Calls behalten)"""
         call = {
             "timestamp": datetime.now().isoformat(),
             "elapsed_ms": self._elapsed_ms(),
@@ -101,13 +104,16 @@ class SyncDiagnostics:
             "error": error
         }
         self.api_calls.append(call)
+        # Begrenze Liste um Speicher zu sparen
+        if len(self.api_calls) > 50:
+            self.api_calls = self.api_calls[-50:]
 
         status_str = f"✅ {status_code}" if status_code == 200 else f"❌ {status_code}"
         logger.info(f"[SYNC-API] {method} {endpoint[:50]}... -> {status_str} ({duration_ms:.0f}ms)")
 
     def log_file_operation(self, filename: str, operation: str, status: str,
                           file_size: int = 0, duration_ms: float = 0, error: str = None):
-        """Loggt eine Datei-Operation"""
+        """Loggt eine Datei-Operation (max 50 Operationen behalten)"""
         op = {
             "timestamp": datetime.now().isoformat(),
             "elapsed_ms": self._elapsed_ms(),
@@ -120,6 +126,9 @@ class SyncDiagnostics:
             "error": error
         }
         self.file_operations.append(op)
+        # Begrenze Liste um Speicher zu sparen
+        if len(self.file_operations) > 50:
+            self.file_operations = self.file_operations[-50:]
 
         if status == "success":
             self.last_successful_file = filename
@@ -129,7 +138,7 @@ class SyncDiagnostics:
         logger.info(f"[SYNC-FILE] {status_icon} [{self.current_file_index}/{self.total_files}] {filename} - {operation}")
 
     def log_error(self, error_type: str, message: str, exception: Exception = None):
-        """Loggt einen Fehler mit vollständigem Traceback"""
+        """Loggt einen Fehler mit vollständigem Traceback (max 30 Fehler behalten)"""
         error = {
             "timestamp": datetime.now().isoformat(),
             "elapsed_ms": self._elapsed_ms(),
@@ -141,6 +150,9 @@ class SyncDiagnostics:
             "traceback": traceback.format_exc() if exception else None
         }
         self.errors.append(error)
+        # Begrenze Liste um Speicher zu sparen
+        if len(self.errors) > 30:
+            self.errors = self.errors[-30:]
         logger.error(f"[SYNC-ERROR] {error_type}: {message}")
         if exception:
             logger.error(f"[SYNC-ERROR] Exception: {exception}")
@@ -183,6 +195,9 @@ class SyncDiagnostics:
             logger.debug(f"Disk usage capture failed: {e}")
 
         self.memory_snapshots.append(snapshot)
+        # Begrenze Liste um Speicher zu sparen
+        if len(self.memory_snapshots) > 30:
+            self.memory_snapshots = self.memory_snapshots[-30:]
         logger.debug(f"[SYNC-MEM] {label}: RSS={snapshot['rss_mb']}MB, Disk=/tmp {snapshot['disk_tmp_used_mb']}MB used ({snapshot['disk_tmp_percent']}%)")
 
     def set_phase(self, phase: str):
@@ -364,7 +379,20 @@ SYNC_CONFIG = {
     "cache_clear_interval": 5,    # Alle X Dateien aggressive Cleanup durchführen (reduziert von 10)
     "disk_warning_threshold_mb": 100,  # Warnung wenn weniger als X MB frei
     "disk_critical_threshold_mb": 50,  # Abbruch wenn weniger als X MB frei
+    "ram_warning_threshold_mb": 350,   # RAM-Warnung: Extra Cleanup wenn überschritten
+    "ram_critical_threshold_mb": 450,  # RAM-Kritisch: Abbruch wenn überschritten
 }
+
+
+def get_current_ram_mb() -> float:
+    """Gibt die aktuelle RAM-Nutzung in MB zurück."""
+    if not PSUTIL_AVAILABLE:
+        return 0.0
+    try:
+        process = psutil.Process()
+        return process.memory_info().rss / 1024 / 1024
+    except:
+        return 0.0
 
 
 def clear_streamlit_cache():
@@ -2825,6 +2853,46 @@ class CloudSyncService:
                             result["error"] = f"Zu viele aufeinanderfolgende Fehler ({consecutive_errors})"
                             result["errors"].append(result["error"])
                             break
+
+                    # RAM-Check nach JEDER Datei - kritisch für Streamlit Cloud
+                    current_ram = get_current_ram_mb()
+                    ram_warning_mb = SYNC_CONFIG.get("ram_warning_threshold_mb", 350)
+                    ram_critical_mb = SYNC_CONFIG.get("ram_critical_threshold_mb", 450)
+
+                    if current_ram > ram_critical_mb:
+                        # Kritisch hoher RAM - Abbruch um Crash zu vermeiden
+                        error_msg = f"RAM kritisch hoch: {current_ram:.1f}MB (max: {ram_critical_mb}MB) - Abbruch bei Datei {idx}"
+                        logger.error(f"[RAM-CRITICAL] {error_msg}")
+                        if diag:
+                            diag.log_error("ram_critical", error_msg, None)
+                            diag.capture_memory(f"ram_critical_{idx}")
+                        result["phase"] = "error"
+                        result["error"] = error_msg
+                        result["errors"].append(error_msg)
+                        # Diagnose speichern vor Abbruch
+                        if diag and enable_diagnostics:
+                            save_diagnostic_to_db(self.user_id, connection_id, diag,
+                                                  status="error", error_message=error_msg)
+                        break
+
+                    elif current_ram > ram_warning_mb:
+                        # RAM hoch - Extra Cleanup durchführen
+                        logger.warning(f"[RAM-WARNING] RAM hoch: {current_ram:.1f}MB - führe extra Cleanup durch")
+                        if diag:
+                            diag.log_event("ram_warning", f"RAM bei {current_ram:.1f}MB - extra Cleanup")
+
+                        # Sehr aggressive Cleanup
+                        import gc
+                        gc.collect()
+                        gc.collect()
+                        gc.collect()
+                        aggressive_memory_cleanup()
+
+                        # Prüfe ob Cleanup geholfen hat
+                        new_ram = get_current_ram_mb()
+                        if diag:
+                            diag.log_event("ram_after_cleanup", f"RAM nach Cleanup: {new_ram:.1f}MB (vorher: {current_ram:.1f}MB)")
+                            diag.capture_memory(f"ram_cleanup_{idx}")
 
                     # Kurze Pause zwischen Dateien um API-Limits zu vermeiden
                     # (besonders wichtig für Supabase Storage)
