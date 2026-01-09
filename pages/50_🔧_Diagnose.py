@@ -379,7 +379,10 @@ try:
 
     storage = get_storage_service()
 
-    # Debug-Informationen
+    # Status holen - dies initialisiert den Storage falls nötig
+    status = storage.get_status()
+
+    # Debug-Informationen (nach Initialisierung!)
     st.markdown("**Debug-Info:**")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -398,7 +401,6 @@ try:
         else:
             st.error("❌ Cloud Storage konnte nicht initialisiert werden. Prüfe die Secrets.")
 
-    status = storage.get_status()
     st.json(status)
 
     if status.get('type') == 'supabase':
