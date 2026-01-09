@@ -2901,6 +2901,12 @@ class CloudSyncService:
                             diag.log_event("ram_after_cleanup", f"RAM: {new_ram:.1f}MB (freed: {freed:.1f}MB)")
                             # KEINE capture_memory hier - das braucht selbst RAM!
 
+                    elif current_ram > 320:
+                        # RAM moderat hoch (320-350MB) - nur schnelle GC nach jeder Datei
+                        import gc
+                        gc.collect(generation=0)  # Nur junge Objekte, sehr schnell
+                        gc.collect(generation=1)
+
                     # Kurze Pause zwischen Dateien um API-Limits zu vermeiden
                     # (besonders wichtig für Supabase Storage)
                     if idx < len(files_to_sync) - 1:  # Nicht nach letzter Datei
