@@ -559,28 +559,29 @@ def cleanup_temp_files(max_age_minutes: int = 30, pattern: str = None) -> Dict[s
     return result
 
 
-def aggressive_memory_cleanup(light_mode: bool = False):
+def aggressive_memory_cleanup(light_mode: bool = False, force_cache_clear: bool = False):
     """
     Führt Speicherbereinigung durch.
 
     Args:
         light_mode: Wenn True, nur minimale GC (für wenn RAM schon hoch ist)
+        force_cache_clear: Wenn True, Cache leeren auch in light_mode (für wenn GC nichts bringt)
     """
     import gc
 
-    if light_mode:
+    if light_mode and not force_cache_clear:
         # Nur GC, keine weiteren Operationen die RAM brauchen
         gc.collect(generation=2)
         gc.collect(generation=1)
         gc.collect(generation=0)
         return
 
-    # Volle Bereinigung
+    # Volle Bereinigung (oder light_mode mit force_cache_clear)
     # 1. Garbage Collection
     gc.collect()
     gc.collect()
 
-    # 2. Streamlit Cache leeren
+    # 2. Streamlit Cache leeren - das befreit den meisten Speicher!
     clear_streamlit_cache()
 
     # 3. Linecache leeren (klein und schnell)
@@ -593,7 +594,7 @@ def aggressive_memory_cleanup(light_mode: bool = False):
     # ENTFERNT: gc.get_objects() Iteration - verbraucht selbst viel RAM!
     # ENTFERNT: cleanup_temp_files - verbraucht RAM für Dateisystem-Operationen
 
-    logger.info("[CLEANUP] Speicherbereinigung durchgeführt")
+    logger.info("[CLEANUP] Speicherbereinigung durchgeführt (cache_clear=%s)", force_cache_clear)
 
 
 
@@ -2636,6 +2637,22 @@ class CloudSyncService:
                     save_diagnostic_to_db(self.user_id, connection_id, diag, status="running")
                     diag.log_event("diag_save", "Initiale Diagnose in DB gespeichert")
 
+                # INITIAL RAM CHECK: Wenn RAM schon hoch ist, Cache SOFORT leeren!
+                initial_ram = get_current_ram_mb()
+                if initial_ram > 380:
+                    logger.warning(f"[RAM-INITIAL] RAM bereits bei {initial_ram:.1f}MB - leere Cache vor Sync!")
+                    if diag:
+                        diag.log_event("ram_initial_cleanup", f"RAM bei Start: {initial_ram:.1f}MB - Cache wird geleert")
+                    clear_streamlit_cache()
+                    import gc
+                    gc.collect()
+                    gc.collect()
+                    new_ram = get_current_ram_mb()
+                    freed = initial_ram - new_ram
+                    logger.info(f"[RAM-INITIAL] Nach Cleanup: {new_ram:.1f}MB (freed: {freed:.1f}MB)")
+                    if diag:
+                        diag.log_event("ram_initial_after", f"RAM nach initial cleanup: {new_ram:.1f}MB (freed: {freed:.1f}MB)")
+
                 # Phase 2: Dateien herunterladen und importieren
                 for idx, file_info in enumerate(files_to_sync):
                     file_start_time = time.time()
@@ -2886,17 +2903,27 @@ class CloudSyncService:
                         break
 
                     elif current_ram > ram_warning_mb:
-                        # RAM hoch - NUR leichte GC (light_mode), da aggressive ops selbst RAM brauchen!
+                        # RAM hoch - versuche erst leichte GC
                         logger.warning(f"[RAM-WARNING] RAM hoch: {current_ram:.1f}MB - führe light cleanup durch")
                         if diag:
                             diag.log_event("ram_warning", f"RAM bei {current_ram:.1f}MB - light cleanup")
 
-                        # NUR Garbage Collection, nichts anderes!
+                        # Erst versuchen: NUR Garbage Collection
                         aggressive_memory_cleanup(light_mode=True)
 
                         # Prüfe ob Cleanup geholfen hat
                         new_ram = get_current_ram_mb()
                         freed = current_ram - new_ram
+
+                        # Wenn light_mode nichts befreit UND RAM > 400MB: Cache leeren!
+                        if freed < 5 and new_ram > 400:
+                            logger.warning(f"[RAM-ESCALATE] Light cleanup ineffektiv (freed {freed:.1f}MB), RAM noch {new_ram:.1f}MB - leere Cache!")
+                            if diag:
+                                diag.log_event("ram_escalate", f"Light cleanup ineffektiv, Cache wird geleert")
+                            aggressive_memory_cleanup(light_mode=True, force_cache_clear=True)
+                            new_ram = get_current_ram_mb()
+                            freed = current_ram - new_ram
+
                         if diag:
                             diag.log_event("ram_after_cleanup", f"RAM: {new_ram:.1f}MB (freed: {freed:.1f}MB)")
                             # KEINE capture_memory hier - das braucht selbst RAM!
