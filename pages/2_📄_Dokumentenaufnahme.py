@@ -1477,14 +1477,19 @@ with tab_cloud:
     st.markdown("Importieren Sie Dokumente direkt aus Dropbox oder Google Drive.")
 
     # Import Cloud-Sync Service
+    CLOUD_IMPORT_ERROR = None
     try:
         from services.cloud_sync_service import CloudSyncService, CloudProvider, SyncStatus
         CLOUD_IMPORT_AVAILABLE = True
-    except ImportError:
+    except ImportError as e:
         CLOUD_IMPORT_AVAILABLE = False
+        CLOUD_IMPORT_ERROR = f"ImportError: {e}"
+    except Exception as e:
+        CLOUD_IMPORT_AVAILABLE = False
+        CLOUD_IMPORT_ERROR = f"{type(e).__name__}: {e}"
 
     if not CLOUD_IMPORT_AVAILABLE:
-        st.error("Cloud-Import Module nicht verfügbar.")
+        st.error(f"Cloud-Import Module nicht verfügbar. {CLOUD_IMPORT_ERROR or ''}")
     else:
         user_id = get_current_user_id()
         cloud_service = CloudSyncService(user_id)
