@@ -2035,10 +2035,28 @@ class CloudSyncService:
                 "has_more": False,
                 "next_offset": 0,
                 "total_files_found": 0
-            }
+            },
+            "diagnostics_live": None  # Live-Diagnose-Daten für Debug-Modus
         }
 
-        yield result.copy()
+        def add_live_diagnostics(res: dict) -> dict:
+            """Fügt aktuelle Live-Diagnose-Daten zum Ergebnis hinzu"""
+            if diag and enable_diagnostics:
+                res["diagnostics_live"] = {
+                    "events": diag.events[-20:] if diag.events else [],  # Letzte 20 Events
+                    "api_calls": diag.api_calls[-10:] if diag.api_calls else [],  # Letzte 10 API-Calls
+                    "file_operations": diag.file_operations[-10:] if diag.file_operations else [],
+                    "errors": diag.errors[-10:] if diag.errors else [],
+                    "memory_snapshots": diag.memory_snapshots[-5:] if diag.memory_snapshots else [],
+                    "current_file_index": diag.current_file_index,
+                    "total_files": diag.total_files,
+                    "phase": diag.phase,
+                    "last_successful_file": diag.last_successful_file,
+                    "elapsed_ms": diag._elapsed_ms()
+                }
+            return res.copy()
+
+        yield add_live_diagnostics(result)
 
         with get_db() as session:
             connection = session.query(CloudSyncConnection).filter(
@@ -2050,14 +2068,14 @@ class CloudSyncService:
                 result["phase"] = "error"
                 result["error"] = "Verbindung nicht gefunden"
                 result["errors"].append(result["error"])
-                yield result
+                yield add_live_diagnostics(result)
                 return
 
             if not connection.is_active:
                 result["phase"] = "error"
                 result["error"] = "Verbindung ist deaktiviert"
                 result["errors"].append(result["error"])
-                yield result
+                yield add_live_diagnostics(result)
                 return
 
             # Prüfen ob Access Token vorhanden (außer bei öffentlichen Ordnern)
@@ -2079,7 +2097,7 @@ class CloudSyncService:
                 result["error"] = "Kein Access Token konfiguriert. Bitte API-Konfiguration in Einstellungen prüfen."
                 result["errors"].append(result["error"])
                 result["success"] = True  # Nicht als Fehler behandeln, nur Hinweis
-                yield result
+                yield add_live_diagnostics(result)
                 return
 
             # Status auf "syncing" setzen
@@ -2091,7 +2109,7 @@ class CloudSyncService:
                 result["phase"] = "scanning"
                 if diag:
                     diag.set_phase("scanning")
-                yield result.copy()
+                yield add_live_diagnostics(result)
 
                 try:
                     scan_start = time.time()
@@ -2123,7 +2141,7 @@ class CloudSyncService:
                         result["errors"].append(result["error"])
                         if diag:
                             diag.log_error("unsupported_provider", result["error"])
-                        yield result
+                        yield add_live_diagnostics(result)
                         return
 
                     scan_duration = (time.time() - scan_start) * 1000
@@ -2139,7 +2157,7 @@ class CloudSyncService:
                     result["phase"] = "error"
                     result["error"] = f"Fehler beim Scannen: {str(collect_error)}"
                     result["errors"].append(result["error"])
-                    yield result
+                    yield add_live_diagnostics(result)
                     return
 
                 result["files_total"] = len(files_to_sync)
@@ -2174,13 +2192,13 @@ class CloudSyncService:
                     connection.status = SyncStatus.COMPLETED
                     connection.last_sync_at = datetime.now()
                     session.commit()
-                    yield result
+                    yield add_live_diagnostics(result)
                     return
 
                 result["phase"] = "downloading"
                 if diag:
                     diag.set_phase("downloading")
-                yield result.copy()
+                yield add_live_diagnostics(result)
 
                 # Konfiguration für Pausen und Checks
                 pause_between_files = SYNC_CONFIG.get("pause_between_files", 0.3)
@@ -2254,7 +2272,7 @@ class CloudSyncService:
                         diag.log_event("file_start",
                                        f"Starte Datei {idx+1}/{result['files_total']}: {file_info.get('name')}",
                                        {"file_size": file_info.get("size", 0)})
-                    yield result.copy()
+                    yield add_live_diagnostics(result)
 
                     # Datei verarbeiten mit Fehler-Isolation
                     file_success = False
@@ -2270,7 +2288,7 @@ class CloudSyncService:
                         for step in processing_steps:
                             result["current_step"] = step.get("step", "processing")
                             result["current_step_detail"] = step.get("detail", "")
-                            yield result.copy()
+                            yield add_live_diagnostics(result)
 
                         if sync_status == "synced":
                             result["files_synced"] += 1
@@ -2406,12 +2424,13 @@ class CloudSyncService:
         if result["errors"] and not result["error"]:
             result["error"] = result["errors"][0]
 
-        # Diagnose-Zusammenfassung ans Ergebnis anhängen
+        # Diagnose-Zusammenfassung ans Ergebnis anhängen (vollständiger Bericht am Ende)
         if diag:
             result["diagnostics"] = diag.get_summary()
             result["diagnostics_analysis"] = diag.get_failure_analysis()
+            result["diagnostics_full_report"] = diag.get_full_report()
 
-        yield result
+        yield add_live_diagnostics(result)
 
     def _collect_dropbox_files(self, connection: CloudSyncConnection,
                                 session) -> List[Dict]:

@@ -1613,6 +1613,21 @@ with tab_cloud:
             else:
                 return f"{bytes_size / (1024 * 1024):.1f} MB"
 
+        # Debug-Modus Toggle
+        st.markdown("---")
+        debug_mode = st.checkbox(
+            "🔧 **Debug-Modus aktivieren**",
+            value=False,
+            help="Aktiviert detailliertes Logging um Sync-Probleme zu diagnostizieren. "
+                 "Zeigt Live-Events, API-Aufrufe, Speicherverbrauch und Fehleranalyse."
+        )
+
+        if debug_mode:
+            st.info(
+                "🔧 **Debug-Modus aktiv** - Während des Imports werden detaillierte "
+                "Diagnose-Informationen angezeigt: Events, API-Calls, DB-Status, Speicher und Fehler."
+            )
+
         # Buttons nebeneinander
         col_import, col_diagnose = st.columns([2, 1])
 
@@ -1990,6 +2005,36 @@ with tab_cloud:
                     # Fortschrittsanzeige
                     progress_container = st.container()
 
+                    # Debug-Container (nur wenn Debug-Modus aktiv)
+                    debug_container = None
+                    debug_log_container = None
+                    debug_api_container = None
+                    debug_files_container = None
+                    debug_memory_container = None
+                    debug_errors_container = None
+
+                    if debug_mode:
+                        st.markdown("---")
+                        st.markdown("### 🔧 Debug-Konsole (Live)")
+                        debug_container = st.container()
+                        with debug_container:
+                            debug_cols = st.columns([2, 2, 1])
+                            with debug_cols[0]:
+                                st.markdown("**📋 Events**")
+                                debug_log_container = st.empty()
+                            with debug_cols[1]:
+                                st.markdown("**🌐 API-Calls**")
+                                debug_api_container = st.empty()
+                            with debug_cols[2]:
+                                st.markdown("**💾 Speicher**")
+                                debug_memory_container = st.empty()
+
+                            st.markdown("**📄 Datei-Operationen**")
+                            debug_files_container = st.empty()
+
+                            st.markdown("**❌ Fehler**")
+                            debug_errors_container = st.empty()
+
                     with progress_container:
                         progress_bar = st.progress(0, text="Initialisiere...")
                         status_container = st.empty()
@@ -2001,7 +2046,7 @@ with tab_cloud:
                         final_result = None
                         sync_error = None
                         try:
-                            for progress in cloud_service.sync_connection_with_progress(conn.id):
+                            for progress in cloud_service.sync_connection_with_progress(conn.id, enable_diagnostics=debug_mode):
                                 final_result = progress
                                 phase = progress.get("phase", "")
 
@@ -2068,6 +2113,67 @@ with tab_cloud:
                                     progress_bar.progress(0, text="❌ Fehler")
                                     status_container.error(f"❌ Fehler: {progress.get('error', 'Unbekannt')}")
                                     step_detail_container.empty()
+
+                                # === DEBUG-MODUS: Live-Diagnose anzeigen ===
+                                if debug_mode and debug_container:
+                                    diag_live = progress.get("diagnostics_live")
+                                    if diag_live:
+                                        # Events anzeigen
+                                        if debug_log_container and diag_live.get("events"):
+                                            events_text = ""
+                                            for evt in reversed(diag_live["events"][-10:]):
+                                                ts = evt.get("timestamp", "")[-12:-4]  # HH:MM:SS
+                                                elapsed = evt.get("elapsed_ms", 0)
+                                                evt_type = evt.get("type", "")
+                                                detail = evt.get("detail", "")[:50]
+                                                events_text += f"`{ts}` [{elapsed}ms] **{evt_type}**\n{detail}\n\n"
+                                            debug_log_container.markdown(events_text or "*Keine Events*")
+
+                                        # API-Calls anzeigen
+                                        if debug_api_container and diag_live.get("api_calls"):
+                                            api_text = ""
+                                            for call in reversed(diag_live["api_calls"][-5:]):
+                                                status = call.get("status_code", 0)
+                                                duration = call.get("duration_ms", 0)
+                                                endpoint = call.get("endpoint", "")[:30]
+                                                status_icon = "✅" if status == 200 else "❌"
+                                                api_text += f"{status_icon} `{status}` {duration:.0f}ms\n`{endpoint}...`\n\n"
+                                            debug_api_container.markdown(api_text or "*Keine API-Calls*")
+
+                                        # Speicher anzeigen
+                                        if debug_memory_container and diag_live.get("memory_snapshots"):
+                                            mem = diag_live["memory_snapshots"][-1] if diag_live["memory_snapshots"] else {}
+                                            rss = mem.get("rss_mb", 0)
+                                            label = mem.get("label", "")
+                                            debug_memory_container.markdown(f"**{rss:.1f} MB**\n`{label}`")
+                                        elif debug_memory_container:
+                                            debug_memory_container.markdown("*psutil nicht verfügbar*")
+
+                                        # Datei-Operationen anzeigen
+                                        if debug_files_container and diag_live.get("file_operations"):
+                                            files_text = ""
+                                            for op in reversed(diag_live["file_operations"][-5:]):
+                                                fname = op.get("filename", "")[:40]
+                                                operation = op.get("operation", "")
+                                                status = op.get("status", "")
+                                                duration = op.get("duration_ms", 0)
+                                                status_icon = "✅" if status == "success" else "⏭️" if status == "skipped" else "❌"
+                                                files_text += f"{status_icon} `{fname}` - {operation} ({duration:.0f}ms)\n"
+                                            debug_files_container.code(files_text or "Keine Datei-Operationen")
+
+                                        # Fehler anzeigen
+                                        if debug_errors_container and diag_live.get("errors"):
+                                            errors_text = ""
+                                            for err in diag_live["errors"][-5:]:
+                                                err_type = err.get("type", "")
+                                                msg = err.get("message", "")[:60]
+                                                exc_type = err.get("exception_type", "")
+                                                errors_text += f"🔴 **{err_type}**: {msg}\n"
+                                                if exc_type:
+                                                    errors_text += f"   Exception: `{exc_type}`\n"
+                                            debug_errors_container.markdown(errors_text)
+                                        elif debug_errors_container:
+                                            debug_errors_container.markdown("*Keine Fehler* ✅")
                         except Exception as sync_err:
                             sync_error = str(sync_err)
                             st.error(f"❌ Sync-Fehler: {sync_error}")
@@ -2177,6 +2283,120 @@ File Extensions: {conn.file_extensions}""")
                                     st.warning(f"⚠️ API-Authentifizierung erforderlich. Bitte konfigurieren Sie Ihre Cloud-API unter **Einstellungen → Cloud-Sync**.")
                                 else:
                                     st.error(f"❌ Import fehlgeschlagen: {error_msg}")
+
+                            # === DEBUG-MODUS: Vollständiger Diagnose-Bericht ===
+                            if debug_mode and final_result:
+                                st.markdown("---")
+                                st.markdown("### 🔧 Vollständiger Diagnose-Bericht")
+
+                                # Zusammenfassung anzeigen
+                                diagnostics = final_result.get("diagnostics")
+                                if diagnostics:
+                                    st.markdown("#### 📊 Zusammenfassung")
+                                    diag_cols = st.columns(4)
+                                    with diag_cols[0]:
+                                        st.metric("Dauer", f"{diagnostics.get('duration_seconds', 0):.1f}s")
+                                    with diag_cols[1]:
+                                        st.metric("Dateien verarbeitet",
+                                                  f"{diagnostics.get('files_successful', 0)}/{diagnostics.get('total_files', 0)}")
+                                    with diag_cols[2]:
+                                        st.metric("API-Aufrufe", diagnostics.get('api_calls_total', 0))
+                                    with diag_cols[3]:
+                                        mem_growth = diagnostics.get('memory_growth_mb', 0)
+                                        st.metric("Speicherwachstum", f"{mem_growth:+.1f} MB")
+
+                                    # Detaillierte Statistiken
+                                    with st.expander("📈 Detaillierte Statistiken", expanded=True):
+                                        stat_cols = st.columns(2)
+                                        with stat_cols[0]:
+                                            st.markdown("**Datei-Statistiken:**")
+                                            st.write(f"- Erfolgreich: {diagnostics.get('files_successful', 0)}")
+                                            st.write(f"- Übersprungen: {diagnostics.get('files_skipped', 0)}")
+                                            st.write(f"- Fehlgeschlagen: {diagnostics.get('files_failed', 0)}")
+                                            if diagnostics.get('last_successful_file'):
+                                                st.write(f"- Letzte erfolgreiche: `{diagnostics.get('last_successful_file')}`")
+                                        with stat_cols[1]:
+                                            st.markdown("**API-Statistiken:**")
+                                            st.write(f"- Aufrufe gesamt: {diagnostics.get('api_calls_total', 0)}")
+                                            st.write(f"- Fehlgeschlagen: {diagnostics.get('api_calls_failed', 0)}")
+                                            st.write(f"- Ø Dauer: {diagnostics.get('api_avg_duration_ms', 0):.0f}ms")
+                                            st.write(f"- Max Dauer: {diagnostics.get('api_max_duration_ms', 0):.0f}ms")
+
+                                        st.markdown("**Speicher-Statistiken:**")
+                                        st.write(f"- Start: {diagnostics.get('memory_start_mb', 0):.1f} MB")
+                                        st.write(f"- Ende: {diagnostics.get('memory_end_mb', 0):.1f} MB")
+                                        st.write(f"- Maximum: {diagnostics.get('memory_max_mb', 0):.1f} MB")
+
+                                # Fehleranalyse anzeigen
+                                analysis = final_result.get("diagnostics_analysis")
+                                if analysis:
+                                    causes = analysis.get("possible_causes", [])
+                                    recommendations = analysis.get("recommendations", [])
+
+                                    if causes or recommendations:
+                                        with st.expander("🔍 Fehleranalyse", expanded=True):
+                                            if causes:
+                                                st.markdown("**Mögliche Ursachen:**")
+                                                for cause in causes:
+                                                    st.warning(f"⚠️ {cause}")
+
+                                            if recommendations:
+                                                st.markdown("**Empfehlungen:**")
+                                                for rec in recommendations:
+                                                    st.info(f"💡 {rec}")
+
+                                            last_success = analysis.get("last_successful")
+                                            if last_success:
+                                                st.markdown("**Letzter erfolgreicher Import:**")
+                                                st.code(f"Datei: {last_success.get('file')}\n"
+                                                        f"Index: {last_success.get('index')}\n"
+                                                        f"Zeit: {last_success.get('time')}")
+
+                                # Vollständiger Bericht zum Download
+                                full_report = final_result.get("diagnostics_full_report")
+                                if full_report:
+                                    import json
+                                    with st.expander("📄 Vollständiger Debug-Report (JSON)", expanded=False):
+                                        # Events zeigen
+                                        st.markdown("**Letzte Events:**")
+                                        events = full_report.get("events", [])[-20:]
+                                        for evt in events:
+                                            ts = evt.get("timestamp", "")[-12:]
+                                            st.text(f"[{ts}] {evt.get('type')}: {evt.get('detail', '')[:80]}")
+
+                                        # API-Calls zeigen
+                                        st.markdown("**API-Aufrufe:**")
+                                        api_calls = full_report.get("api_calls", [])[-10:]
+                                        for call in api_calls:
+                                            status = call.get("status_code", 0)
+                                            duration = call.get("duration_ms", 0)
+                                            endpoint = call.get("endpoint", "")[:50]
+                                            error = call.get("error", "")
+                                            status_icon = "✅" if status == 200 else "❌"
+                                            st.text(f"{status_icon} [{status}] {duration:.0f}ms - {endpoint}")
+                                            if error:
+                                                st.text(f"    Error: {error[:60]}")
+
+                                        # Alle Fehler zeigen
+                                        all_errors = full_report.get("errors", [])
+                                        if all_errors:
+                                            st.markdown("**Alle Fehler:**")
+                                            for err in all_errors:
+                                                st.error(f"🔴 **{err.get('type')}**: {err.get('message')}")
+                                                if err.get("traceback"):
+                                                    with st.expander(f"Traceback für {err.get('type')}"):
+                                                        st.code(err.get("traceback"))
+
+                                        # JSON-Export
+                                        st.markdown("---")
+                                        st.markdown("**JSON-Export:**")
+                                        report_json = json.dumps(full_report, indent=2, default=str, ensure_ascii=False)
+                                        st.download_button(
+                                            label="📥 Debug-Report herunterladen",
+                                            data=report_json,
+                                            file_name=f"cloud_sync_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                                            mime="application/json"
+                                        )
 
                     # Bei einmaligem Import Verbindung deaktivieren
                     if import_mode == "once":
