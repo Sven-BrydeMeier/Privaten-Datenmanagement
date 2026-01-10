@@ -3220,6 +3220,10 @@ class CloudSyncService:
                 "detail": f"✅ Heruntergeladen: {len(file_content):,} Bytes"
             })
 
+            # WICHTIG: Content-Hash berechnen für Duplikat-Erkennung!
+            import hashlib
+            content_hash = hashlib.sha256(file_content).hexdigest()
+
             # Quellordner-Pfad für intelligente Kategorisierung
             source_folder_path = file_info.get("source_folder") or file_info.get("path") or ""
 
@@ -3237,7 +3241,7 @@ class CloudSyncService:
                 filename,
                 file_content,
                 file_info.get("size", len(file_content)),
-                file_info.get("hash"),
+                content_hash,  # Berechneter Hash statt file_info.get("hash") das None war!
                 source_folder_path,
                 process_documents
             )
@@ -3258,7 +3262,7 @@ class CloudSyncService:
                 user_id=self.user_id,
                 remote_file_path=file_info.get("path") or file_info.get("name"),
                 remote_file_id=file_info.get("id"),
-                remote_file_hash=file_info.get("hash"),
+                remote_file_hash=content_hash,  # Berechneter Hash!
                 file_size=file_info.get("size"),
                 file_modified_at=modified_time,
                 document_id=doc.id if doc else None,
