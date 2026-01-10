@@ -379,8 +379,8 @@ SYNC_CONFIG = {
     "cache_clear_interval": 5,    # Alle X Dateien aggressive Cleanup durchführen (reduziert von 10)
     "disk_warning_threshold_mb": 100,  # Warnung wenn weniger als X MB frei
     "disk_critical_threshold_mb": 50,  # Abbruch wenn weniger als X MB frei
-    "ram_warning_threshold_mb": 350,   # RAM-Warnung: Extra Cleanup wenn überschritten
-    "ram_critical_threshold_mb": 450,  # RAM-Kritisch: Abbruch wenn überschritten
+    "ram_warning_threshold_mb": 300,   # RAM-Warnung: Extra Cleanup wenn überschritten
+    "ram_critical_threshold_mb": 400,  # RAM-Kritisch: Abbruch wenn überschritten
 }
 
 
@@ -2639,7 +2639,7 @@ class CloudSyncService:
 
                 # INITIAL RAM CHECK: Wenn RAM schon hoch ist, Cache SOFORT leeren!
                 initial_ram = get_current_ram_mb()
-                if initial_ram > 380:
+                if initial_ram > 320:
                     logger.warning(f"[RAM-INITIAL] RAM bereits bei {initial_ram:.1f}MB - leere Cache vor Sync!")
                     if diag:
                         diag.log_event("ram_initial_cleanup", f"RAM bei Start: {initial_ram:.1f}MB - Cache wird geleert")
@@ -2915,8 +2915,8 @@ class CloudSyncService:
                         new_ram = get_current_ram_mb()
                         freed = current_ram - new_ram
 
-                        # Wenn light_mode nichts befreit UND RAM > 400MB: Cache leeren!
-                        if freed < 5 and new_ram > 400:
+                        # Wenn light_mode nichts befreit UND RAM > 340MB: Cache leeren!
+                        if freed < 5 and new_ram > 340:
                             logger.warning(f"[RAM-ESCALATE] Light cleanup ineffektiv (freed {freed:.1f}MB), RAM noch {new_ram:.1f}MB - leere Cache!")
                             if diag:
                                 diag.log_event("ram_escalate", f"Light cleanup ineffektiv, Cache wird geleert")
@@ -2928,8 +2928,8 @@ class CloudSyncService:
                             diag.log_event("ram_after_cleanup", f"RAM: {new_ram:.1f}MB (freed: {freed:.1f}MB)")
                             # KEINE capture_memory hier - das braucht selbst RAM!
 
-                    elif current_ram > 320:
-                        # RAM moderat hoch (320-350MB) - nur schnelle GC nach jeder Datei
+                    elif current_ram > 280:
+                        # RAM moderat hoch (280-300MB) - nur schnelle GC nach jeder Datei
                         import gc
                         gc.collect(generation=0)  # Nur junge Objekte, sehr schnell
                         gc.collect(generation=1)
