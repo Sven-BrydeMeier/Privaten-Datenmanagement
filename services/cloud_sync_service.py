@@ -418,6 +418,27 @@ def clear_streamlit_cache():
             st.legacy_caching.clear_cache()
             logger.debug("[CACHE] Legacy-Cache geleert")
 
+        # Session State bereinigen - hier liegt oft viel Speicher!
+        if hasattr(st, 'session_state'):
+            keys_to_clear = []
+            for key in st.session_state:
+                # Große Daten-Keys identifizieren (Vorschauen, Suchergebnisse, etc.)
+                if any(pattern in key.lower() for pattern in [
+                    'preview', 'thumbnail', 'search_result', 'document_list',
+                    'cached_', 'temp_', 'buffer', 'content', 'file_data'
+                ]):
+                    keys_to_clear.append(key)
+
+            for key in keys_to_clear:
+                try:
+                    del st.session_state[key]
+                    logger.debug(f"[CACHE] Session-State Key gelöscht: {key}")
+                except:
+                    pass
+
+            if keys_to_clear:
+                logger.info(f"[CACHE] {len(keys_to_clear)} Session-State Keys bereinigt")
+
         # Garbage Collection ausführen
         import gc
         gc.collect()
