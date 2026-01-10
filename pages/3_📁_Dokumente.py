@@ -735,9 +735,18 @@ with col_docs:
                                 st.session_state.move_document_id = doc['id']
                                 st.rerun()
 
-                            if st.button("🔗 Teilen", key=f"share_{doc['id']}"):
-                                link = generate_share_link(doc['id'])
-                                st.code(link)
+                            # Teilen mit besserem UI
+                            st.markdown("---")
+                            st.markdown("**🔗 Teilen**")
+                            share_link = generate_share_link(doc['id'])
+                            st.text_input(
+                                "Link kopieren:",
+                                value=share_link,
+                                key=f"share_link_{doc['id']}",
+                                label_visibility="collapsed"
+                            )
+                            st.caption("Link ist 7 Tage gültig")
+                            st.markdown("---")
 
                             if st.button("🗑️ Löschen", key=f"del_{doc['id']}"):
                                 st.session_state.delete_document_id = doc['id']

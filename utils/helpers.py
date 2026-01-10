@@ -165,7 +165,7 @@ def generate_share_link(document_id: int, expires_hours: int = 168) -> str:
         expires_hours: Gültigkeit in Stunden (Standard: 7 Tage)
 
     Returns:
-        Freigabe-Token
+        Vollständige Freigabe-URL
     """
     # Token generieren
     random_part = uuid.uuid4().hex[:16]
@@ -186,7 +186,20 @@ def generate_share_link(document_id: int, expires_hours: int = 168) -> str:
         'expires_at': datetime.now() + timedelta(hours=expires_hours)
     }
 
-    return token
+    # Vollständige URL generieren
+    try:
+        # Versuche die aktuelle App-URL zu bekommen
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        ctx = get_script_run_ctx()
+        if ctx and hasattr(st, 'query_params'):
+            # Auf Streamlit Cloud
+            base_url = "https://privaten-datenmanagement.streamlit.app"
+        else:
+            base_url = "http://localhost:8501"
+    except:
+        base_url = "https://privaten-datenmanagement.streamlit.app"
+
+    return f"{base_url}/Teilen?token={token}"
 
 
 def verify_share_link(token: str) -> Optional[int]:
