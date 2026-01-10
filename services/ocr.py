@@ -15,6 +15,19 @@ from config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 
+def get_current_ram_mb() -> float:
+    """Gibt aktuelle RAM-Nutzung in MB zurück."""
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / (1024 * 1024)
+    except:
+        return 0.0
+
+
+# RAM-Schwelle ab der OCR übersprungen wird (OCR braucht ~100MB extra)
+OCR_RAM_LIMIT_MB = 350
+
+
 class OCRService:
     """Service für Optical Character Recognition"""
 
@@ -267,7 +280,7 @@ Der Text ist auf Deutsch."""
             except (PdfReadError, Exception) as pdf_err:
                 # PDF ist beschädigt oder unvollständig - versuche Bild-OCR
                 logger.warning(f"PDF-Lesefehler: {pdf_err}, versuche Bild-OCR...")
-                results = self._ocr_pdf_images(pdf_bytes)
+                results = self._ocr_pdf_images(pdf_bytes)  # Hat internen RAM-Check
                 if results:
                     return results
                 # Fallback: Leeres Ergebnis mit Fehlermeldung
@@ -325,8 +338,14 @@ Der Text ist auf Deutsch."""
             target_max_px: Maximale Kantenlänge in Pixeln (Standard: 3000)
 
         Returns:
-            Liste von (Text, Konfidenz) pro Seite
+            Liste von (Text, Konfidenz) pro Seite, oder leere Liste wenn RAM zu hoch
         """
+        # RAM-Check: OCR ist sehr speicherintensiv (~100MB extra)
+        current_ram = get_current_ram_mb()
+        if current_ram > OCR_RAM_LIMIT_MB:
+            logger.warning(f"[OCR-SKIP] RAM zu hoch ({current_ram:.0f}MB > {OCR_RAM_LIMIT_MB}MB) - überspringe Bild-OCR für Speicherschutz")
+            return []
+
         results = []
 
         # Versuche zuerst PyMuPDF (speichereffizienter)
