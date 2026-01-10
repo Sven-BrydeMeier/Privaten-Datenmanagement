@@ -2046,7 +2046,11 @@ with tab_cloud:
                         final_result = None
                         sync_error = None
                         try:
-                            for progress in cloud_service.sync_connection_with_progress(conn.id, enable_diagnostics=debug_mode):
+                            for progress in cloud_service.sync_connection_with_progress(
+                                conn.id,
+                                enable_diagnostics=debug_mode,
+                                batch_size=120  # Batch-Modus: 120 Dateien pro Durchlauf um Timeouts zu vermeiden
+                            ):
                                 final_result = progress
                                 phase = progress.get("phase", "")
 
