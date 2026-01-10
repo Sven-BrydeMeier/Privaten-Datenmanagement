@@ -16,7 +16,7 @@ from config.settings import DOCUMENT_CATEGORIES
 from services.encryption import get_encryption_service
 from services.document_classifier import get_classifier
 from services.search_service import get_search_service
-from utils.helpers import format_currency, format_date, generate_share_link, truncate_text
+from utils.helpers import format_currency, format_date, generate_share_link, truncate_text, get_document_file_content
 
 st.set_page_config(page_title="Dokumente", page_icon="📁", layout="wide")
 init_db()
@@ -694,6 +694,31 @@ with col_docs:
                             st.rerun()
                     with btn_cols[1]:
                         with st.popover("⋮"):
+                            # Download-Button
+                            if doc['file_path']:
+                                try:
+                                    success, file_result = get_document_file_content(doc['file_path'], user_id)
+                                    if success:
+                                        # Entschlüsseln wenn nötig
+                                        if doc.get('is_encrypted') and doc.get('encryption_iv'):
+                                            encryption = get_encryption_service()
+                                            try:
+                                                dl_data = encryption.decrypt_file(file_result, doc['encryption_iv'], doc['filename'])
+                                            except:
+                                                dl_data = file_result
+                                        else:
+                                            dl_data = file_result
+
+                                        st.download_button(
+                                            "⬇️ Herunterladen",
+                                            data=dl_data,
+                                            file_name=doc['filename'],
+                                            mime=doc.get('mime_type') or "application/octet-stream",
+                                            key=f"dl_menu_{doc['id']}"
+                                        )
+                                except Exception as e:
+                                    st.caption(f"Download nicht verfügbar")
+
                             if st.button("🔄 Erneut analysieren", key=f"reanalyze_{doc['id']}"):
                                 st.session_state.reanalyze_doc_id = doc['id']
                                 st.rerun()
