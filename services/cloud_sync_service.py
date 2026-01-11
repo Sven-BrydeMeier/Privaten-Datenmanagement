@@ -1088,7 +1088,7 @@ class CloudSyncService:
             return True
 
     def delete_connection(self, connection_id: int) -> bool:
-        """Löscht eine Verbindung"""
+        """Löscht eine Verbindung und alle verknüpften Datensätze"""
         with get_db() as session:
             connection = session.query(CloudSyncConnection).filter(
                 CloudSyncConnection.id == connection_id,
@@ -1097,8 +1097,21 @@ class CloudSyncService:
             if not connection:
                 return False
 
+            # Zuerst verknüpfte Datensätze löschen (Foreign Key Constraints)
+            # 1. CloudSyncLog Einträge
+            session.query(CloudSyncLog).filter(
+                CloudSyncLog.connection_id == connection_id
+            ).delete()
+
+            # 2. CloudSyncDiagnostic Einträge
+            session.query(CloudSyncDiagnostic).filter(
+                CloudSyncDiagnostic.connection_id == connection_id
+            ).delete()
+
+            # Dann die Verbindung selbst löschen
             session.delete(connection)
             session.commit()
+            logger.info(f"Cloud-Verbindung {connection_id} und verknüpfte Daten gelöscht")
             return True
 
     def get_diagnostic_reports(self, limit: int = 20, connection_id: int = None) -> List[Dict]:
