@@ -394,128 +394,20 @@ def get_current_page_path():
 def render_smart_navigation():
     """
     Rendert eine intelligente, gruppierte Navigation in der Sidebar.
-    Ersetzt die Standard-Streamlit-Navigation.
+    HINWEIS: Diese Funktion ist veraltet - verwenden Sie stattdessen
+    render_tree_sidebar() aus utils/ui_new.py für die neue Text-basierte Navigation.
     """
-    # Aktuelle Seite ermitteln für Highlighting
-    try:
-        current_page = st.session_state.get('_current_page', '')
-    except Exception:
-        current_page = ''
-
-    st.markdown("### 🗂️ Navigation")
-
-    for category_name, category_data in NAVIGATION_STRUCTURE.items():
-        # Session State Key für Expander-Status
-        expander_key = f"nav_exp_{category_name}"
-        if expander_key not in st.session_state:
-            st.session_state[expander_key] = category_data.get('expanded', False)
-
-        # Prüfen ob eine Seite dieser Kategorie aktiv ist
-        category_has_active = any(
-            page['path'] in current_page or current_page in page['path']
-            for page in category_data['pages']
-        )
-
-        # Kategorie automatisch öffnen wenn aktive Seite darin
-        if category_has_active:
-            st.session_state[expander_key] = True
-
-        with st.expander(category_name, expanded=st.session_state[expander_key]):
-            for page in category_data['pages']:
-                # Aktive Seite hervorheben
-                is_active = page['path'] in current_page or current_page in page['path']
-
-                # Button-Style je nach Status
-                button_type = "primary" if is_active else "secondary"
-
-                col1, col2 = st.columns([1, 6])
-                with col1:
-                    st.write(page['icon'])
-                with col2:
-                    if st.button(
-                        page['name'],
-                        key=f"nav_{page['path']}",
-                        use_container_width=True,
-                        type=button_type if is_active else "secondary",
-                        disabled=is_active
-                    ):
-                        st.session_state['_current_page'] = page['path']
-                        st.switch_page(page['path'])
+    # Importiere und verwende die neue Tree-Navigation
+    from utils.ui_new import render_tree_sidebar
+    # Die neue Funktion wird innerhalb der Sidebar aufgerufen
+    # Hier nur Fallback für Kompatibilität
 
 
 def render_sidebar_with_navigation():
     """
     Rendert die komplette Sidebar mit Navigation, Aktentasche und Status.
-    Sollte in jeder Seite aufgerufen werden.
+    Verwendet jetzt die neue Tree-Navigation ohne sichtbare Buttons.
     """
-    from database.db import get_db, get_current_user_id
-    from database.models import Document
-
-    with st.sidebar:
-        st.title("📁 Dokumentenmanagement")
-
-        # Smart Navigation
-        render_smart_navigation()
-
-        st.divider()
-
-        # API-Status mit Ampel
-        render_api_status()
-
-        st.divider()
-
-        # === AKTENTASCHE ===
-        st.markdown("### 💼 Aktentasche")
-
-        cart_items = st.session_state.get('active_cart_items', [])
-        cart_name = st.session_state.get('active_cart_name', 'Aktuelle Aktentasche')
-
-        with st.expander(f"**{cart_name}** ({len(cart_items)})", expanded=False):
-            if cart_items:
-                user_id = get_current_user_id()
-                with get_db() as session:
-                    docs = session.query(Document).filter(
-                        Document.id.in_(cart_items)
-                    ).all()
-
-                    for doc in docs:
-                        col_doc, col_remove = st.columns([4, 1])
-                        with col_doc:
-                            st.caption(f"📄 {(doc.title or doc.filename)[:25]}...")
-                        with col_remove:
-                            if st.button("✕", key=f"sb_remove_{doc.id}", help="Entfernen"):
-                                st.session_state.active_cart_items.remove(doc.id)
-                                st.rerun()
-
-                st.divider()
-
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    if st.button("🗑️", key="sb_clear_cart", help="Leeren"):
-                        st.session_state.active_cart_items = []
-                        st.rerun()
-                with col_b:
-                    if st.button("📂", key="sb_open_cart", help="Öffnen"):
-                        st.switch_page("pages/4_🔍_Intelligente_Ordner.py")
-                with col_c:
-                    if st.button("📤", key="sb_share_cart", help="Teilen"):
-                        st.session_state.show_cart_share = True
-                        st.rerun()
-
-                if st.session_state.get('show_cart_share'):
-                    from utils.helpers import create_share_text_for_documents
-                    share_text = create_share_text_for_documents(docs)
-                    _render_compact_share_buttons(
-                        f"💼 Aktentasche: {cart_name}",
-                        share_text,
-                        "cart"
-                    )
-                    if st.button("✕ Schließen", key="close_share"):
-                        st.session_state.show_cart_share = False
-                        st.rerun()
-            else:
-                st.caption("Leer - Dokumente hier ablegen")
-
-        st.divider()
-        st.caption(f"📌 {get_version_string()}")
-        st.caption("Privat & Sicher 🔒")
+    # Verwende die neue Tree-Navigation
+    from utils.ui_new import render_tree_sidebar
+    render_tree_sidebar()

@@ -1,265 +1,150 @@
 """
 Neue UI-Komponenten:
-- Globale Suchfunktion
-- Top-Menü mit Suche und Einstellungen
-- Baum-Navigation ohne Buttons
+- Top-Menü mit globaler Suchleiste
+- Baum-Navigation ohne sichtbare Buttons (nur Text)
 """
 import streamlit as st
 from pathlib import Path
 import sys
-from typing import Optional, List, Dict
-from datetime import datetime
+from typing import Optional, Dict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-def render_global_search():
+# =============================================================================
+# TOP-MENÜ MIT GLOBALER SUCHE
+# =============================================================================
+
+def render_top_search_bar():
     """
-    Rendert die globale Suchfunktion.
-    Zeigt Suchergebnisse mit Standort (Ordnerpfad) und Aktionen.
+    Rendert die globale Suchleiste im oberen Bereich.
+    Wird auf jeder Seite angezeigt.
     """
-    from database.db import get_db, get_current_user_id
-    from database.models import Document, Folder
-    from services.search_service import get_search_service
-    from utils.helpers import format_currency, format_date
-
-    user_id = get_current_user_id()
-
-    # Such-State initialisieren
-    if 'global_search_query' not in st.session_state:
-        st.session_state.global_search_query = ""
-    if 'global_search_results' not in st.session_state:
-        st.session_state.global_search_results = None
-
-    # Suchfeld
-    col_search, col_filters = st.columns([3, 1])
-
-    with col_search:
-        search_query = st.text_input(
-            "Suchen",
-            value=st.session_state.global_search_query,
-            placeholder="Begriff eingeben... (z.B. Rechnung, IBAN, Betrag)",
-            key="global_search_input",
-            label_visibility="collapsed"
-        )
-
-    with col_filters:
-        search_in = st.selectbox(
-            "Suchen in",
-            options=["Alles", "Titel", "Inhalt", "Absender", "Beträge"],
-            key="search_in_select",
-            label_visibility="collapsed"
-        )
-
-    # Suche ausführen wenn Query vorhanden
-    if search_query and search_query != st.session_state.global_search_query:
-        st.session_state.global_search_query = search_query
-
-        # Suchservice verwenden
-        search_service = get_search_service(user_id)
-        results = search_service.search(search_query, limit=50)
-
-        # Erweiterte Suche direkt in der Datenbank als Fallback
-        if not results['items']:
-            with get_db() as session:
-                query = session.query(Document).filter(
-                    Document.user_id == user_id,
-                    (Document.is_deleted == False) | (Document.is_deleted == None)
-                )
-
-                # Suche in verschiedenen Feldern
-                search_pattern = f'%{search_query}%'
-                query = query.filter(
-                    (Document.title.ilike(search_pattern)) |
-                    (Document.filename.ilike(search_pattern)) |
-                    (Document.sender.ilike(search_pattern)) |
-                    (Document.ocr_text.ilike(search_pattern)) |
-                    (Document.subject.ilike(search_pattern)) |
-                    (Document.reference_number.ilike(search_pattern)) |
-                    (Document.customer_number.ilike(search_pattern)) |
-                    (Document.iban.ilike(search_pattern))
-                )
-
-                docs = query.order_by(Document.created_at.desc()).limit(50).all()
-
-                results['items'] = []
-                for doc in docs:
-                    results['items'].append({
-                        'id': doc.id,
-                        'title': doc.title or doc.filename,
-                        'sender': doc.sender,
-                        'category': doc.category,
-                        'folder_id': doc.folder_id,
-                        'document_date': doc.document_date,
-                        'invoice_amount': doc.invoice_amount,
-                        'score': 1.0
-                    })
-                results['total'] = len(results['items'])
-
-        st.session_state.global_search_results = results
-
-    # Ergebnisse anzeigen
-    if st.session_state.global_search_results and st.session_state.global_search_query:
-        results = st.session_state.global_search_results
-
-        if results['total'] > 0:
-            st.success(f"**{results['total']} Treffer** für \"{st.session_state.global_search_query}\"")
-
-            # Ordnerpfade laden
-            folder_paths = {}
-            with get_db() as session:
-                folders = session.query(Folder).filter(Folder.user_id == user_id).all()
-                for folder in folders:
-                    # Pfad aufbauen
-                    path_parts = [folder.name]
-                    parent = session.get(Folder, folder.parent_id) if folder.parent_id else None
-                    while parent:
-                        path_parts.insert(0, parent.name)
-                        parent = session.get(Folder, parent.parent_id) if parent.parent_id else None
-                    folder_paths[folder.id] = " / ".join(path_parts)
-
-            # Ergebnisliste
-            for item in results['items']:
-                with st.container():
-                    # Ordnerpfad ermitteln
-                    folder_path = folder_paths.get(item.get('folder_id'), "Nicht zugeordnet")
-
-                    col_info, col_actions = st.columns([4, 1])
-
-                    with col_info:
-                        st.markdown(f"**{item['title']}**")
-
-                        meta_parts = []
-                        if item.get('sender'):
-                            meta_parts.append(f"Von: {item['sender']}")
-                        if item.get('category'):
-                            meta_parts.append(item['category'])
-                        if item.get('document_date'):
-                            meta_parts.append(format_date(item['document_date']))
-                        if item.get('invoice_amount'):
-                            meta_parts.append(format_currency(item['invoice_amount']))
-
-                        st.caption(" | ".join(meta_parts) if meta_parts else "")
-                        st.caption(f"**Standort:** {folder_path}")
-
-                    with col_actions:
-                        # Aktion-Buttons
-                        action_cols = st.columns(3)
-
-                        with action_cols[0]:
-                            if st.button("Ansehen", key=f"gs_view_{item['id']}", help="Dokument ansehen"):
-                                st.session_state.view_document_id = item['id']
-                                st.switch_page("pages/3_📁_Dokumente.py")
-
-                        with action_cols[1]:
-                            if st.button("Drucken", key=f"gs_print_{item['id']}", help="Drucken"):
-                                st.session_state.print_document_id = item['id']
-                                st.rerun()
-
-                        with action_cols[2]:
-                            if st.button("Senden", key=f"gs_send_{item['id']}", help="Per E-Mail senden"):
-                                st.session_state.email_document_id = item['id']
-                                st.switch_page("pages/6_📧_E-Mail.py")
-
-                    st.divider()
-        else:
-            st.info(f"Keine Treffer für \"{st.session_state.global_search_query}\"")
-
-    elif st.session_state.global_search_query:
-        st.info("Suche starten...")
-
-
-def render_top_menu():
-    """
-    Rendert das Top-Menü mit Suchleiste und Einstellungen.
-    Immer sichtbar oben auf jeder Seite.
-    """
-    from utils.components import APP_NAME, get_version_string
-
-    # CSS für Top-Menü
+    # CSS für die Suchleiste
     st.markdown("""
     <style>
-        .top-menu {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
+        /* Top-Bar Container */
+        .top-search-container {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 12px 20px;
+            margin: -1rem -1rem 1rem -1rem;
+            border-radius: 0 0 10px 10px;
+        }
+
+        /* Such-Input Styling */
+        .top-search-container input {
+            border-radius: 20px !important;
+            border: none !important;
+            padding: 10px 20px !important;
+        }
+
+        /* Suchergebnisse Dropdown */
+        .search-results-dropdown {
             background: white;
-            z-index: 999;
-            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            margin-top: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .search-result-item {
+            padding: 10px 15px;
             border-bottom: 1px solid #eee;
-            display: flex;
-            align-items: center;
-            gap: 20px;
+            cursor: pointer;
         }
-        .top-menu-search {
-            flex: 1;
-            max-width: 500px;
-        }
-        .top-menu-actions {
-            display: flex;
-            gap: 10px;
-        }
-        /* Inhalt unter dem Menü */
-        .main .block-container {
-            padding-top: 70px !important;
+
+        .search-result-item:hover {
+            background: #f8f9fa;
         }
     </style>
     """, unsafe_allow_html=True)
 
-    # Top-Menü Leiste
-    menu_cols = st.columns([1, 4, 1, 1])
+    # Suchleiste
+    col_logo, col_search, col_actions = st.columns([1, 4, 1])
 
-    with menu_cols[0]:
-        st.markdown(f"**{APP_NAME}**")
+    with col_logo:
+        st.markdown("**📁 DMS**")
 
-    with menu_cols[1]:
-        # Globale Suche
+    with col_search:
         search_query = st.text_input(
-            "Globale Suche",
-            placeholder="Dokumente durchsuchen...",
-            key="top_menu_search",
+            "Suche",
+            placeholder="🔍 Dokumente durchsuchen... (Begriff eingeben + Enter)",
+            key="global_top_search",
             label_visibility="collapsed"
         )
 
+        # Bei Eingabe zur Suchseite navigieren
         if search_query:
-            st.session_state.global_search_query = search_query
-            st.session_state.show_search_results = True
+            st.session_state.search_query_from_top = search_query
+            st.switch_page("pages/0_🔎_Suche.py")
 
-    with menu_cols[2]:
-        if st.button("Einstellungen", key="top_menu_settings", use_container_width=True):
+    with col_actions:
+        if st.button("⚙️", key="top_settings", help="Einstellungen"):
             st.switch_page("pages/8_⚙️_Einstellungen.py")
-
-    with menu_cols[3]:
-        if st.button("?", key="top_menu_help", help="Hilfe"):
-            st.session_state.show_help = not st.session_state.get('show_help', False)
 
     st.divider()
 
-    # Suchergebnisse anzeigen wenn aktiviert
-    if st.session_state.get('show_search_results') and st.session_state.get('global_search_query'):
-        with st.expander("Suchergebnisse", expanded=True):
-            render_global_search()
-            if st.button("Suche schließen"):
-                st.session_state.show_search_results = False
-                st.session_state.global_search_query = ""
-                st.rerun()
+
+def render_top_menu_full():
+    """
+    Vollständiges Top-Menü mit Suchleiste.
+    Immer oben auf jeder Seite sichtbar.
+    """
+    # CSS für fixiertes Top-Menü
+    st.markdown("""
+    <style>
+        /* Fixiertes Top-Menü */
+        .stApp > header {
+            background: transparent !important;
+        }
+
+        /* Haupt-Content nach unten verschieben */
+        .main .block-container {
+            padding-top: 0.5rem !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Suchzeile
+    search_cols = st.columns([1, 5, 1])
+
+    with search_cols[0]:
+        st.markdown("### 📁")
+
+    with search_cols[1]:
+        search = st.text_input(
+            "Suche",
+            placeholder="🔍 Dokumente, Beträge, IBAN suchen...",
+            key="topmenu_search",
+            label_visibility="collapsed"
+        )
+
+        if search:
+            st.session_state.search_query_from_top = search
+            st.switch_page("pages/0_🔎_Suche.py")
+
+    with search_cols[2]:
+        st.markdown("")  # Spacer
+
+    st.divider()
 
 
-# Baum-Navigation Struktur
+# =============================================================================
+# BAUM-NAVIGATION OHNE BUTTONS
+# =============================================================================
+
+# Navigationsstruktur
 TREE_NAVIGATION = {
-    "Suche": {
-        "Dokumentensuche": "pages/0_🔎_Suche.py",
-    },
     "Dokumente": {
-        "Dokumentenaufnahme": "pages/2_📄_Dokumentenaufnahme.py",
-        "Dokumentenverwaltung": "pages/3_📁_Dokumente.py",
+        "Aufnahme": "pages/2_📄_Dokumentenaufnahme.py",
+        "Verwaltung": "pages/3_📁_Dokumente.py",
         "Intelligente Ordner": "pages/4_🔍_Intelligente_Ordner.py",
         "Dokument-Chat": "pages/11_💬_Dokument_Chat.py",
     },
     "Finanzen": {
         "Übersicht": "pages/7_💰_Finanzen.py",
-        "Finanz-Dashboard": "pages/13_📈_Finanz_Dashboard.py",
+        "Dashboard": "pages/13_📈_Finanz_Dashboard.py",
         "Steuer-Report": "pages/21_📊_Steuer_Report.py",
         "Abonnements": "pages/17_💳_Abonnements.py",
     },
@@ -291,315 +176,158 @@ TREE_NAVIGATION = {
 }
 
 
-def render_tree_navigation():
+def render_tree_sidebar():
     """
-    Rendert die Baum-Navigation in der Sidebar.
-    Ohne sichtbare Buttons, nur Text der bei Klick Untermenüs öffnet.
-    """
-    # CSS für Baum-Navigation
-    st.markdown("""
-    <style>
-        /* Baum-Navigation Styling */
-        .tree-nav-category {
-            font-weight: 500;
-            padding: 8px 0;
-            cursor: pointer;
-            color: #333;
-            transition: color 0.2s;
-        }
-        .tree-nav-category:hover {
-            color: #0066cc;
-        }
-        .tree-nav-item {
-            padding: 4px 0 4px 16px;
-            color: #666;
-            cursor: pointer;
-            font-size: 0.9em;
-            transition: all 0.2s;
-        }
-        .tree-nav-item:hover {
-            color: #0066cc;
-            padding-left: 20px;
-        }
-        .tree-nav-item.active {
-            color: #0066cc;
-            font-weight: 500;
-        }
-
-        /* Standard-Navigation verstecken */
-        [data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-
-        /* Expander ohne Rahmen */
-        .tree-expander > div:first-child {
-            border: none !important;
-            background: transparent !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Aktuelle Seite ermitteln
-    current_page = st.session_state.get('_current_page', '')
-
-    st.markdown("### Navigation")
-
-    for category, items in TREE_NAVIGATION.items():
-        # State für geöffnete Kategorien
-        state_key = f"tree_nav_{category}"
-        if state_key not in st.session_state:
-            # Prüfen ob aktive Seite in dieser Kategorie
-            st.session_state[state_key] = any(
-                path in current_page or current_page in path
-                for path in items.values()
-            )
-
-        # Kategorie als klickbarer Text
-        col_cat, col_arrow = st.columns([5, 1])
-
-        with col_cat:
-            # Verwende st.markdown mit on_click Simulation durch Button mit Custom CSS
-            if st.button(
-                category,
-                key=f"tree_cat_{category}",
-                use_container_width=True,
-                type="secondary"
-            ):
-                st.session_state[state_key] = not st.session_state[state_key]
-                st.rerun()
-
-        with col_arrow:
-            arrow = "▼" if st.session_state[state_key] else "▶"
-            st.markdown(f"<span style='color: #666;'>{arrow}</span>", unsafe_allow_html=True)
-
-        # Untermenü-Items anzeigen wenn geöffnet
-        if st.session_state[state_key]:
-            for item_name, item_path in items.items():
-                is_active = item_path in current_page or current_page in item_path
-
-                # Eingerücktes Item
-                item_style = "font-weight: 500; color: #0066cc;" if is_active else "color: #666;"
-
-                col_space, col_item = st.columns([0.2, 4])
-                with col_item:
-                    if st.button(
-                        f"  {item_name}",
-                        key=f"tree_item_{item_path}",
-                        use_container_width=True,
-                        disabled=is_active
-                    ):
-                        st.session_state['_current_page'] = item_path
-                        st.switch_page(item_path)
-
-
-def render_tree_navigation_pure():
-    """
-    Reine Text-basierte Baum-Navigation ohne Streamlit-Buttons.
-    Verwendet HTML und JavaScript für die Interaktion.
-    """
-    current_page = st.session_state.get('_current_page', '')
-
-    # Navigation HTML generieren
-    nav_html = """
-    <style>
-        .tree-nav {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-        .tree-nav-cat {
-            font-weight: 500;
-            padding: 8px 0;
-            cursor: pointer;
-            color: #333;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .tree-nav-cat:hover {
-            color: #0066cc;
-        }
-        .tree-nav-items {
-            display: none;
-            margin-left: 12px;
-            border-left: 1px solid #e0e0e0;
-            padding-left: 12px;
-        }
-        .tree-nav-items.open {
-            display: block;
-        }
-        .tree-nav-item {
-            padding: 6px 0;
-            color: #666;
-            cursor: pointer;
-            font-size: 0.9em;
-        }
-        .tree-nav-item:hover {
-            color: #0066cc;
-        }
-        .tree-nav-item.active {
-            color: #0066cc;
-            font-weight: 500;
-        }
-        .tree-arrow {
-            font-size: 0.7em;
-            transition: transform 0.2s;
-        }
-        .tree-arrow.open {
-            transform: rotate(90deg);
-        }
-    </style>
-    <div class="tree-nav">
-    """
-
-    for category, items in TREE_NAVIGATION.items():
-        # Prüfen ob Kategorie aktive Seite enthält
-        has_active = any(
-            path in current_page or current_page in path
-            for path in items.values()
-        )
-
-        cat_id = category.replace(" ", "_").lower()
-        open_class = "open" if has_active else ""
-
-        nav_html += f"""
-        <div class="tree-nav-cat" onclick="toggleCategory('{cat_id}')">
-            <span>{category}</span>
-            <span class="tree-arrow {open_class}" id="arrow_{cat_id}">▶</span>
-        </div>
-        <div class="tree-nav-items {open_class}" id="items_{cat_id}">
-        """
-
-        for item_name, item_path in items.items():
-            is_active = item_path in current_page or current_page in item_path
-            active_class = "active" if is_active else ""
-            nav_html += f"""
-            <div class="tree-nav-item {active_class}" onclick="navigateTo('{item_path}')">{item_name}</div>
-            """
-
-        nav_html += "</div>"
-
-    nav_html += """
-    </div>
-    <script>
-        function toggleCategory(catId) {
-            var items = document.getElementById('items_' + catId);
-            var arrow = document.getElementById('arrow_' + catId);
-            items.classList.toggle('open');
-            arrow.classList.toggle('open');
-        }
-
-        function navigateTo(path) {
-            // Streamlit-Navigation über URL
-            window.parent.postMessage({type: 'streamlit:navigate', path: path}, '*');
-        }
-    </script>
-    """
-
-    st.markdown(nav_html, unsafe_allow_html=True)
-
-
-def render_compact_tree_navigation():
-    """
-    Kompakte Baum-Navigation mit reinem Text und st.markdown Links.
-    Verwendet Expander für Kategorien.
-    """
-    current_page = st.session_state.get('_current_page', '')
-
-    # CSS für kompakte Navigation
-    st.markdown("""
-    <style>
-        /* Verstecke Standard-Navigation */
-        [data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-
-        /* Kompakte Expander */
-        .stExpander {
-            border: none !important;
-            background: transparent !important;
-        }
-        .stExpander > div:first-child {
-            padding: 0 !important;
-        }
-        .stExpander > div:first-child > div {
-            background: transparent !important;
-            border: none !important;
-        }
-
-        /* Link-Styling */
-        .nav-link {
-            display: block;
-            padding: 4px 8px 4px 16px;
-            color: #666;
-            text-decoration: none;
-            font-size: 0.9em;
-            border-radius: 4px;
-            transition: all 0.2s;
-        }
-        .nav-link:hover {
-            background: #f0f2f6;
-            color: #0066cc;
-            padding-left: 20px;
-        }
-        .nav-link.active {
-            background: #e3e8ef;
-            color: #0066cc;
-            font-weight: 500;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown("**Navigation**")
-
-    for category, items in TREE_NAVIGATION.items():
-        # Prüfen ob Kategorie aktive Seite enthält
-        has_active = any(
-            path in current_page or current_page in path
-            for path in items.values()
-        )
-
-        with st.expander(category, expanded=has_active):
-            for item_name, item_path in items.items():
-                is_active = item_path in current_page or current_page in item_path
-
-                if is_active:
-                    st.markdown(f"**→ {item_name}**")
-                else:
-                    if st.button(
-                        item_name,
-                        key=f"nav_{item_path}",
-                        use_container_width=True
-                    ):
-                        st.session_state['_current_page'] = item_path
-                        st.switch_page(item_path)
-
-
-def render_new_sidebar():
-    """
-    Rendert die neue Sidebar mit Baum-Navigation und Aktentasche.
-    Ersetzt render_sidebar_with_navigation().
+    Rendert die komplette Sidebar mit:
+    - Baum-Navigation (klickbare Texte, keine Buttons)
+    - Aktentasche
+    - API-Status
     """
     from database.db import get_db, get_current_user_id
     from database.models import Document
     from utils.components import get_version_string, render_api_status
 
+    # CSS für Button-lose Navigation
+    st.markdown("""
+    <style>
+        /* Standard-Navigation ausblenden */
+        [data-testid="stSidebarNav"] {
+            display: none !important;
+        }
+
+        /* Sidebar schmaler */
+        section[data-testid="stSidebar"] {
+            width: 280px !important;
+        }
+
+        /* Navigation: Buttons wie Links aussehen lassen */
+        .nav-text-link button {
+            background: none !important;
+            border: none !important;
+            color: #444 !important;
+            text-align: left !important;
+            padding: 4px 0 !important;
+            font-size: 0.9rem !important;
+            cursor: pointer !important;
+            width: 100% !important;
+        }
+
+        .nav-text-link button:hover {
+            color: #0066cc !important;
+            background: none !important;
+        }
+
+        .nav-text-link button:focus {
+            box-shadow: none !important;
+            outline: none !important;
+        }
+
+        /* Aktive Seite */
+        .nav-text-link-active button {
+            background: none !important;
+            border: none !important;
+            color: #0066cc !important;
+            font-weight: 600 !important;
+            text-align: left !important;
+            padding: 4px 0 !important;
+        }
+
+        /* Kategorie-Header */
+        .nav-category-header button {
+            background: none !important;
+            border: none !important;
+            color: #222 !important;
+            font-weight: 600 !important;
+            font-size: 0.95rem !important;
+            padding: 8px 0 4px 0 !important;
+            cursor: pointer !important;
+        }
+
+        .nav-category-header button:hover {
+            color: #0066cc !important;
+        }
+
+        /* Untermenü Einrückung */
+        .nav-submenu {
+            padding-left: 12px;
+            border-left: 2px solid #e0e0e0;
+            margin-left: 8px;
+        }
+
+        /* Pfeil-Icons */
+        .nav-arrow {
+            font-size: 0.7em;
+            color: #666;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     with st.sidebar:
         # Logo/Titel
-        st.markdown("## Dokumentenmanagement")
+        st.markdown("## 📁 Dokumentenverwaltung")
 
-        st.divider()
+        # Globale Suche Button
+        st.markdown('<div class="nav-text-link">', unsafe_allow_html=True)
+        if st.button("🔍 Suche", key="nav_search", use_container_width=True):
+            st.switch_page("pages/0_🔎_Suche.py")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # Aktuelle Seite ermitteln
+        current_page = st.session_state.get('_current_page', '')
 
         # Baum-Navigation
-        render_compact_tree_navigation()
+        for category, items in TREE_NAVIGATION.items():
+            # State für geöffnete Kategorien
+            state_key = f"nav_open_{category}"
+            if state_key not in st.session_state:
+                # Automatisch öffnen wenn aktive Seite darin
+                st.session_state[state_key] = any(
+                    path in current_page for path in items.values()
+                )
 
-        st.divider()
+            # Kategorie-Header (klickbar zum Auf-/Zuklappen)
+            arrow = "▼" if st.session_state[state_key] else "▶"
+
+            st.markdown('<div class="nav-category-header">', unsafe_allow_html=True)
+            if st.button(f"{arrow} {category}", key=f"cat_{category}", use_container_width=True):
+                st.session_state[state_key] = not st.session_state[state_key]
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # Untermenü anzeigen wenn geöffnet
+            if st.session_state[state_key]:
+                st.markdown('<div class="nav-submenu">', unsafe_allow_html=True)
+
+                for item_name, item_path in items.items():
+                    is_active = item_path in current_page
+
+                    css_class = "nav-text-link-active" if is_active else "nav-text-link"
+                    prefix = "→ " if is_active else "  "
+
+                    st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+                    if st.button(
+                        f"{prefix}{item_name}",
+                        key=f"nav_{item_path}",
+                        use_container_width=True,
+                        disabled=is_active
+                    ):
+                        st.session_state['_current_page'] = item_path
+                        st.switch_page(item_path)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("---")
 
         # API-Status
         render_api_status()
 
-        st.divider()
+        st.markdown("---")
 
         # Aktentasche
-        st.markdown("### Aktentasche")
+        st.markdown("### 💼 Aktentasche")
 
         cart_items = st.session_state.get('active_cart_items', [])
 
@@ -612,27 +340,64 @@ def render_new_sidebar():
                     Document.id.in_(cart_items)
                 ).all()
 
-                for doc in docs:
-                    col_doc, col_rm = st.columns([4, 1])
+                for doc in docs[:5]:  # Nur erste 5 anzeigen
+                    title = (doc.title or doc.filename)[:20]
+                    col_doc, col_rm = st.columns([5, 1])
                     with col_doc:
-                        title = (doc.title or doc.filename)[:20]
                         st.caption(f"• {title}...")
                     with col_rm:
                         if st.button("×", key=f"rm_cart_{doc.id}"):
                             st.session_state.active_cart_items.remove(doc.id)
                             st.rerun()
 
-            if st.button("Aktentasche leeren", use_container_width=True):
+                if len(docs) > 5:
+                    st.caption(f"... und {len(docs) - 5} weitere")
+
+            if st.button("Aktentasche leeren", key="clear_cart_btn"):
                 st.session_state.active_cart_items = []
                 st.rerun()
         else:
             st.caption("Leer")
 
-        st.divider()
+        st.markdown("---")
 
         # Version
         st.caption(get_version_string())
 
+
+def apply_new_layout():
+    """
+    Wendet das neue Layout mit Top-Menü und Baum-Navigation an.
+    Sollte am Anfang jeder Seite aufgerufen werden.
+    """
+    # Aktuelle Seite ermitteln
+    import inspect
+    try:
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            caller_file = frame.f_back.f_globals.get('__file__', '')
+            if caller_file:
+                from pathlib import Path
+                caller_path = Path(caller_file)
+                if 'pages' in caller_path.parts:
+                    idx = caller_path.parts.index('pages')
+                    rel_path = '/'.join(caller_path.parts[idx:])
+                    st.session_state['_current_page'] = rel_path
+                else:
+                    st.session_state['_current_page'] = caller_path.name
+    except Exception:
+        pass
+
+    # Top-Suchleiste rendern
+    render_top_menu_full()
+
+    # Sidebar mit Baum-Navigation rendern
+    render_tree_sidebar()
+
+
+# =============================================================================
+# SUCHSEITEN-FUNKTIONEN
+# =============================================================================
 
 def render_search_page():
     """
@@ -641,29 +406,29 @@ def render_search_page():
     from database.db import get_db, get_current_user_id
     from database.models import Document, Folder
     from config.settings import DOCUMENT_CATEGORIES
-    from services.search_service import get_search_service
     from utils.helpers import format_currency, format_date, get_document_file_content
     from services.encryption import get_encryption_service
 
     user_id = get_current_user_id()
 
-    st.title("Dokumentensuche")
+    st.title("🔍 Dokumentensuche")
+
+    # Suchbegriff aus Top-Menü übernehmen wenn vorhanden
+    initial_search = st.session_state.get('search_query_from_top', '')
+    if initial_search:
+        # Einmalig übernehmen und dann löschen
+        del st.session_state['search_query_from_top']
 
     # Suchbereich
-    col_search, col_btn = st.columns([4, 1])
-
-    with col_search:
-        search_terms = st.text_input(
-            "Suchbegriffe",
-            placeholder="Mehrere Begriffe mit Leerzeichen trennen...",
-            key="search_terms_input"
-        )
-
-    with col_btn:
-        search_btn = st.button("Suchen", type="primary", use_container_width=True)
+    search_terms = st.text_input(
+        "Suchbegriffe",
+        value=initial_search,
+        placeholder="Mehrere Begriffe mit Leerzeichen trennen...",
+        key="search_terms_input"
+    )
 
     # Erweiterte Filter
-    with st.expander("Erweiterte Filter"):
+    with st.expander("Erweiterte Filter", expanded=False):
         filter_cols = st.columns(3)
 
         with filter_cols[0]:
@@ -687,30 +452,45 @@ def render_search_page():
                 key="search_filter_date_to"
             )
 
-        filter_cols2 = st.columns(2)
+        filter_cols2 = st.columns(3)
 
         with filter_cols2[0]:
+            filter_sender = st.text_input(
+                "Absender",
+                key="search_filter_sender"
+            )
+
+        with filter_cols2[1]:
             filter_amount_min = st.number_input(
-                "Betrag min",
+                "Betrag min (€)",
                 min_value=0.0,
                 value=0.0,
                 step=10.0,
                 key="search_filter_amount_min"
             )
 
-        with filter_cols2[1]:
+        with filter_cols2[2]:
             filter_amount_max = st.number_input(
-                "Betrag max",
+                "Betrag max (€)",
                 min_value=0.0,
                 value=0.0,
                 step=10.0,
                 key="search_filter_amount_max"
             )
 
-    # Suche ausführen
-    if search_btn and search_terms:
+    # Ansichtsmodus
+    view_mode = st.radio(
+        "Ansicht",
+        options=["Liste", "Kompakt", "Karten"],
+        horizontal=True,
+        key="search_view_mode",
+        label_visibility="collapsed"
+    )
+
+    # Automatisch suchen wenn Suchbegriff vorhanden
+    if search_terms:
         with st.spinner("Suche läuft..."):
-            # Alle Suchbegriffe extrahieren
+            # Alle Suchbegriffe extrahieren (AND-Logik)
             terms = search_terms.strip().split()
 
             with get_db() as session:
@@ -720,7 +500,7 @@ def render_search_page():
                     (Document.is_deleted == False) | (Document.is_deleted == None)
                 )
 
-                # Für jeden Begriff suchen
+                # Für jeden Begriff suchen (AND-Logik)
                 for term in terms:
                     search_pattern = f'%{term}%'
                     query = query.filter(
@@ -745,6 +525,9 @@ def render_search_page():
                 if filter_date_to:
                     query = query.filter(Document.document_date <= filter_date_to)
 
+                if st.session_state.get('search_filter_sender'):
+                    query = query.filter(Document.sender.ilike(f"%{filter_sender}%"))
+
                 if filter_amount_min > 0:
                     query = query.filter(Document.invoice_amount >= filter_amount_min)
 
@@ -765,7 +548,7 @@ def render_search_page():
                         parent = session.get(Folder, parent.parent_id) if parent.parent_id else None
                     folder_map[folder.id] = " / ".join(path_parts)
 
-                # Ergebnisse in Session speichern
+                # Ergebnisse vorbereiten
                 results_data = []
                 for doc in results:
                     results_data.append({
@@ -785,80 +568,107 @@ def render_search_page():
                         'iban': doc.iban,
                     })
 
-                st.session_state.search_results = results_data
+        # Ergebnisse anzeigen
+        if results_data:
+            st.success(f"**{len(results_data)} Treffer** für \"{search_terms}\"")
 
-    # Ergebnisse anzeigen
-    if 'search_results' in st.session_state and st.session_state.search_results:
-        results = st.session_state.search_results
+            if view_mode == "Liste":
+                _render_search_results_list(results_data)
+            elif view_mode == "Kompakt":
+                _render_search_results_compact(results_data)
+            else:
+                _render_search_results_cards(results_data)
+        else:
+            st.info("Keine Treffer gefunden. Versuchen Sie andere Suchbegriffe.")
+    else:
+        st.info("Geben Sie einen Suchbegriff ein, um Dokumente zu finden.")
 
-        st.success(f"**{len(results)} Treffer gefunden**")
 
-        # Ergebnistabelle
-        for doc in results:
+def _render_search_results_list(results: list):
+    """Rendert Suchergebnisse als Liste"""
+    from utils.helpers import format_currency, format_date
+
+    for doc in results:
+        with st.container():
+            col_info, col_actions = st.columns([4, 1])
+
+            with col_info:
+                st.markdown(f"**{doc['title']}**")
+
+                meta_parts = []
+                if doc['sender']:
+                    meta_parts.append(f"Von: {doc['sender']}")
+                if doc['category']:
+                    meta_parts.append(doc['category'])
+                if doc['document_date']:
+                    meta_parts.append(format_date(doc['document_date']))
+                if doc['invoice_amount']:
+                    meta_parts.append(format_currency(doc['invoice_amount']))
+
+                st.caption(" | ".join(meta_parts) if meta_parts else "—")
+                st.caption(f"📍 {doc['folder_path']}")
+
+            with col_actions:
+                # Ansehen
+                if st.button("Öffnen", key=f"sr_view_{doc['id']}"):
+                    st.session_state.view_document_id = doc['id']
+                    st.switch_page("pages/3_📁_Dokumente.py")
+
+            st.divider()
+
+
+def _render_search_results_compact(results: list):
+    """Rendert Suchergebnisse kompakt"""
+    from utils.helpers import format_currency, format_date
+
+    for doc in results:
+        col_title, col_sender, col_date, col_amount, col_action = st.columns([3, 2, 1, 1, 1])
+
+        with col_title:
+            st.markdown(f"**{doc['title'][:30]}**" + ("..." if len(doc['title']) > 30 else ""))
+
+        with col_sender:
+            st.caption(doc['sender'] or "—")
+
+        with col_date:
+            if doc['document_date']:
+                st.caption(format_date(doc['document_date']))
+
+        with col_amount:
+            if doc['invoice_amount']:
+                st.caption(format_currency(doc['invoice_amount']))
+
+        with col_action:
+            if st.button("→", key=f"sr_go_{doc['id']}", help="Öffnen"):
+                st.session_state.view_document_id = doc['id']
+                st.switch_page("pages/3_📁_Dokumente.py")
+
+
+def _render_search_results_cards(results: list):
+    """Rendert Suchergebnisse als Karten"""
+    from utils.helpers import format_currency, format_date
+
+    # 3 Karten pro Zeile
+    cols = st.columns(3)
+
+    for i, doc in enumerate(results):
+        with cols[i % 3]:
             with st.container():
-                col_info, col_meta, col_actions = st.columns([3, 2, 2])
+                st.markdown(f"**{doc['title'][:25]}**" + ("..." if len(doc['title']) > 25 else ""))
 
-                with col_info:
-                    st.markdown(f"**{doc['title']}**")
-                    st.caption(f"Standort: {doc['folder_path']}")
+                if doc['sender']:
+                    st.caption(f"Von: {doc['sender']}")
 
-                with col_meta:
-                    meta_parts = []
-                    if doc['sender']:
-                        meta_parts.append(doc['sender'])
-                    if doc['document_date']:
-                        meta_parts.append(format_date(doc['document_date']))
-                    if doc['invoice_amount']:
-                        meta_parts.append(format_currency(doc['invoice_amount']))
-                    st.caption(" | ".join(meta_parts) if meta_parts else "—")
+                if doc['document_date']:
+                    st.caption(f"📅 {format_date(doc['document_date'])}")
 
-                with col_actions:
-                    btn_cols = st.columns(4)
+                if doc['invoice_amount']:
+                    st.caption(f"💰 {format_currency(doc['invoice_amount'])}")
 
-                    # Ansehen
-                    with btn_cols[0]:
-                        if st.button("Ansehen", key=f"sr_view_{doc['id']}"):
-                            st.session_state.view_document_id = doc['id']
-                            st.switch_page("pages/3_📁_Dokumente.py")
+                st.caption(f"📍 {doc['folder_path']}")
 
-                    # Download
-                    with btn_cols[1]:
-                        if doc['file_path']:
-                            try:
-                                success, file_result = get_document_file_content(doc['file_path'], user_id)
-                                if success:
-                                    if doc.get('is_encrypted') and doc.get('encryption_iv'):
-                                        encryption = get_encryption_service()
-                                        try:
-                                            file_data = encryption.decrypt_file(file_result, doc['encryption_iv'], doc['filename'])
-                                        except:
-                                            file_data = file_result
-                                    else:
-                                        file_data = file_result
+                if st.button("Öffnen", key=f"sr_card_{doc['id']}", use_container_width=True):
+                    st.session_state.view_document_id = doc['id']
+                    st.switch_page("pages/3_📁_Dokumente.py")
 
-                                    st.download_button(
-                                        "Download",
-                                        data=file_data,
-                                        file_name=doc['filename'],
-                                        mime=doc.get('mime_type') or "application/octet-stream",
-                                        key=f"sr_dl_{doc['id']}"
-                                    )
-                            except:
-                                st.button("Download", disabled=True, key=f"sr_dl_{doc['id']}")
-
-                    # Drucken (öffnet Druckdialog)
-                    with btn_cols[2]:
-                        if st.button("Drucken", key=f"sr_print_{doc['id']}"):
-                            st.session_state.print_document_id = doc['id']
-                            st.info("Druckfunktion: Dokument wird geladen...")
-
-                    # E-Mail senden
-                    with btn_cols[3]:
-                        if st.button("Senden", key=f"sr_send_{doc['id']}"):
-                            st.session_state.email_document_id = doc['id']
-                            st.switch_page("pages/6_📧_E-Mail.py")
-
-                st.divider()
-
-    elif 'search_results' in st.session_state:
-        st.info("Keine Treffer gefunden. Versuchen Sie andere Suchbegriffe.")
+                st.markdown("---")

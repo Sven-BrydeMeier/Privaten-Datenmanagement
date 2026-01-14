@@ -12,42 +12,39 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database.db import init_db, get_db, get_current_user_id
 from database.models import Document, Folder
 from config.settings import DOCUMENT_CATEGORIES
-from services.search_service import get_search_service
 from utils.helpers import format_currency, format_date, get_document_file_content
 from services.encryption import get_encryption_service
 
 st.set_page_config(page_title="Suche", page_icon="🔎", layout="wide")
 init_db()
 
-# Sidebar mit Navigation
-from utils.components import render_sidebar_cart
-render_sidebar_cart()
+# Neues Layout: Tree-Navigation in Sidebar
+from utils.ui_new import render_tree_sidebar
+st.session_state['_current_page'] = 'pages/0_🔎_Suche.py'
+render_tree_sidebar()
 
 user_id = get_current_user_id()
 
 st.title("🔎 Dokumentensuche")
-st.caption("Durchsuchen Sie alle Ihre Dokumente nach Begriffen, Beträgen, Absender und mehr.")
+
+# Suchbegriff aus Top-Menü übernehmen
+initial_search = st.session_state.pop('search_query_from_top', '')
 
 # ============================================================
 # SUCHBEREICH
 # ============================================================
 
 # Hauptsuchfeld
-search_col, btn_col = st.columns([5, 1])
-
-with search_col:
-    search_terms = st.text_input(
-        "Suchbegriffe",
-        placeholder="Suchbegriffe eingeben (mehrere mit Leerzeichen trennen)...",
-        key="main_search_input",
-        label_visibility="collapsed"
-    )
-
-with btn_col:
-    search_clicked = st.button("🔍 Suchen", type="primary", use_container_width=True)
+search_terms = st.text_input(
+    "Suchbegriffe",
+    value=initial_search,
+    placeholder="Suchbegriffe eingeben (mehrere mit Leerzeichen trennen)...",
+    key="main_search_input",
+    label_visibility="collapsed"
+)
 
 # Erweiterte Filter in Expander
-with st.expander("🎯 Erweiterte Filter", expanded=False):
+with st.expander("Erweiterte Filter", expanded=False):
     filter_row1 = st.columns(4)
 
     with filter_row1[0]:
@@ -112,15 +109,22 @@ with st.expander("🎯 Erweiterte Filter", expanded=False):
             key="filter_ref"
         )
 
+# Ansichtsmodus
+view_mode = st.radio(
+    "Ansicht",
+    options=["Liste", "Kompakt", "Karten"],
+    horizontal=True,
+    key="view_mode",
+    label_visibility="collapsed"
+)
+
 st.divider()
 
 # ============================================================
 # SUCHE AUSFÜHREN
 # ============================================================
 
-if search_clicked or (search_terms and st.session_state.get('last_search') != search_terms):
-    st.session_state.last_search = search_terms
-
+if search_terms:
     with st.spinner("Suche läuft..."):
         with get_db() as session:
             # Basis-Query
@@ -130,23 +134,22 @@ if search_clicked or (search_terms and st.session_state.get('last_search') != se
             )
 
             # Suchbegriffe anwenden (UND-Verknüpfung)
-            if search_terms:
-                terms = search_terms.strip().split()
-                for term in terms:
-                    search_pattern = f'%{term}%'
-                    query = query.filter(
-                        (Document.title.ilike(search_pattern)) |
-                        (Document.filename.ilike(search_pattern)) |
-                        (Document.sender.ilike(search_pattern)) |
-                        (Document.ocr_text.ilike(search_pattern)) |
-                        (Document.subject.ilike(search_pattern)) |
-                        (Document.reference_number.ilike(search_pattern)) |
-                        (Document.customer_number.ilike(search_pattern)) |
-                        (Document.invoice_number.ilike(search_pattern)) |
-                        (Document.iban.ilike(search_pattern)) |
-                        (Document.category.ilike(search_pattern)) |
-                        (Document.ai_summary.ilike(search_pattern))
-                    )
+            terms = search_terms.strip().split()
+            for term in terms:
+                search_pattern = f'%{term}%'
+                query = query.filter(
+                    (Document.title.ilike(search_pattern)) |
+                    (Document.filename.ilike(search_pattern)) |
+                    (Document.sender.ilike(search_pattern)) |
+                    (Document.ocr_text.ilike(search_pattern)) |
+                    (Document.subject.ilike(search_pattern)) |
+                    (Document.reference_number.ilike(search_pattern)) |
+                    (Document.customer_number.ilike(search_pattern)) |
+                    (Document.invoice_number.ilike(search_pattern)) |
+                    (Document.iban.ilike(search_pattern)) |
+                    (Document.category.ilike(search_pattern)) |
+                    (Document.ai_summary.ilike(search_pattern))
+                )
 
             # Filter anwenden
             if filter_category != "Alle Kategorien":
@@ -205,7 +208,7 @@ if search_clicked or (search_terms and st.session_state.get('last_search') != se
                     'sender': doc.sender,
                     'category': doc.category,
                     'folder_id': doc.folder_id,
-                    'folder_path': folder_paths.get(doc.folder_id, "📥 Nicht zugeordnet"),
+                    'folder_path': folder_paths.get(doc.folder_id, "Nicht zugeordnet"),
                     'document_date': doc.document_date,
                     'invoice_amount': doc.invoice_amount,
                     'iban': doc.iban,
@@ -213,60 +216,23 @@ if search_clicked or (search_terms and st.session_state.get('last_search') != se
                     'ai_summary': doc.ai_summary,
                 })
 
-            st.session_state.search_results = results_data
-            st.session_state.search_query = search_terms
+    # ============================================================
+    # ERGEBNISSE ANZEIGEN
+    # ============================================================
 
-# ============================================================
-# ERGEBNISSE ANZEIGEN
-# ============================================================
+    if results_data:
+        st.success(f"**{len(results_data)} Treffer** für \"{search_terms}\"")
 
-if 'search_results' in st.session_state:
-    results = st.session_state.search_results
-    query = st.session_state.get('search_query', '')
-
-    if results:
-        # Ergebnis-Header
-        result_header = st.columns([3, 1, 1])
-
-        with result_header[0]:
-            st.success(f"**{len(results)} Treffer** gefunden" + (f" für \"{query}\"" if query else ""))
-
-        with result_header[1]:
-            sort_by = st.selectbox(
-                "Sortieren",
-                options=["Datum (neu)", "Datum (alt)", "Betrag", "Absender"],
-                key="sort_results",
-                label_visibility="collapsed"
-            )
-
-        with result_header[2]:
-            view_mode = st.selectbox(
-                "Ansicht",
-                options=["Liste", "Kompakt", "Karten"],
-                key="view_mode",
-                label_visibility="collapsed"
-            )
-
-        # Sortierung anwenden
-        if sort_by == "Datum (alt)":
-            results = sorted(results, key=lambda x: x['document_date'] or datetime.min)
-        elif sort_by == "Betrag":
-            results = sorted(results, key=lambda x: x['invoice_amount'] or 0, reverse=True)
-        elif sort_by == "Absender":
-            results = sorted(results, key=lambda x: x['sender'] or "")
-        # Default: Datum (neu) - bereits so sortiert
-
-        st.divider()
-
-        # Ergebnisliste
-        for i, doc in enumerate(results):
+        # Ergebnisse nach Ansichtsmodus anzeigen
+        for doc in results_data:
             with st.container():
                 if view_mode == "Kompakt":
                     # Kompakte einzeilige Ansicht
-                    cols = st.columns([3, 2, 2, 1, 2])
+                    cols = st.columns([3, 2, 2, 1, 1])
 
                     with cols[0]:
-                        st.markdown(f"**{doc['title'][:40]}**{'...' if len(doc['title']) > 40 else ''}")
+                        title_display = doc['title'][:40] + ('...' if len(doc['title']) > 40 else '')
+                        st.markdown(f"**{title_display}**")
 
                     with cols[1]:
                         st.caption(doc['folder_path'])
@@ -281,186 +247,91 @@ if 'search_results' in st.session_state:
 
                     with cols[3]:
                         if doc['invoice_amount']:
-                            st.markdown(f"**{format_currency(doc['invoice_amount'])}**")
+                            st.caption(format_currency(doc['invoice_amount']))
 
                     with cols[4]:
-                        action_cols = st.columns(3)
-                        with action_cols[0]:
-                            if st.button("👁️", key=f"c_view_{doc['id']}", help="Ansehen"):
-                                st.session_state.view_document_id = doc['id']
-                                st.switch_page("pages/3_📁_Dokumente.py")
-                        with action_cols[1]:
-                            if st.button("📥", key=f"c_cart_{doc['id']}", help="Aktentasche"):
-                                if 'active_cart_items' not in st.session_state:
-                                    st.session_state.active_cart_items = []
-                                if doc['id'] not in st.session_state.active_cart_items:
-                                    st.session_state.active_cart_items.append(doc['id'])
-                                    st.toast("✅ Zur Aktentasche hinzugefügt")
-                        with action_cols[2]:
-                            if st.button("📧", key=f"c_send_{doc['id']}", help="E-Mail"):
-                                st.session_state.email_document_id = doc['id']
-                                st.switch_page("pages/6_📧_E-Mail.py")
+                        if st.button("Öffnen", key=f"c_view_{doc['id']}"):
+                            st.session_state.view_document_id = doc['id']
+                            st.switch_page("pages/3_📁_Dokumente.py")
 
                 elif view_mode == "Karten":
-                    # Karten-Ansicht mit mehr Details
-                    with st.container():
-                        st.markdown(f"""
-                        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #007bff;">
-                            <h4 style="margin: 0 0 8px 0;">{doc['title']}</h4>
-                            <p style="color: #666; margin: 0 0 5px 0;"><strong>Standort:</strong> {doc['folder_path']}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    # Karten-Ansicht
+                    st.markdown(f"### {doc['title']}")
+                    st.caption(f"Standort: {doc['folder_path']}")
 
-                        card_cols = st.columns([2, 2, 1])
+                    card_cols = st.columns([2, 2, 1])
 
-                        with card_cols[0]:
-                            if doc['sender']:
-                                st.caption(f"**Absender:** {doc['sender']}")
-                            if doc['category']:
-                                st.caption(f"**Kategorie:** {doc['category']}")
-                            if doc['document_date']:
-                                st.caption(f"**Datum:** {format_date(doc['document_date'])}")
+                    with card_cols[0]:
+                        if doc['sender']:
+                            st.write(f"**Absender:** {doc['sender']}")
+                        if doc['category']:
+                            st.write(f"**Kategorie:** {doc['category']}")
 
-                        with card_cols[1]:
-                            if doc['invoice_amount']:
-                                st.markdown(f"**Betrag: {format_currency(doc['invoice_amount'])}**")
-                            if doc['iban']:
-                                st.code(doc['iban'][:20] + "..." if len(doc['iban'] or "") > 20 else doc['iban'])
-                            if doc['reference_number']:
-                                st.caption(f"Ref: {doc['reference_number']}")
+                    with card_cols[1]:
+                        if doc['document_date']:
+                            st.write(f"**Datum:** {format_date(doc['document_date'])}")
+                        if doc['invoice_amount']:
+                            st.write(f"**Betrag:** {format_currency(doc['invoice_amount'])}")
 
-                        with card_cols[2]:
-                            if st.button("👁️ Ansehen", key=f"k_view_{doc['id']}", use_container_width=True):
-                                st.session_state.view_document_id = doc['id']
-                                st.switch_page("pages/3_📁_Dokumente.py")
+                    with card_cols[2]:
+                        if st.button("Öffnen", key=f"k_view_{doc['id']}", use_container_width=True):
+                            st.session_state.view_document_id = doc['id']
+                            st.switch_page("pages/3_📁_Dokumente.py")
 
-                            # Download
-                            if doc['file_path']:
-                                try:
-                                    success, file_result = get_document_file_content(doc['file_path'], user_id)
-                                    if success:
-                                        if doc.get('is_encrypted') and doc.get('encryption_iv'):
-                                            encryption = get_encryption_service()
-                                            try:
-                                                file_data = encryption.decrypt_file(file_result, doc['encryption_iv'], doc['filename'])
-                                            except:
-                                                file_data = file_result
-                                        else:
-                                            file_data = file_result
+                        if st.button("Senden", key=f"k_send_{doc['id']}", use_container_width=True):
+                            st.session_state.email_document_id = doc['id']
+                            st.switch_page("pages/6_📧_E-Mail.py")
 
-                                        st.download_button(
-                                            "⬇️ Download",
-                                            data=file_data,
-                                            file_name=doc['filename'],
-                                            mime=doc.get('mime_type') or "application/octet-stream",
-                                            key=f"k_dl_{doc['id']}",
-                                            use_container_width=True
-                                        )
-                                except:
-                                    pass
-
-                            if st.button("📧 Senden", key=f"k_send_{doc['id']}", use_container_width=True):
-                                st.session_state.email_document_id = doc['id']
-                                st.switch_page("pages/6_📧_E-Mail.py")
+                    st.divider()
 
                 else:
                     # Standard Listen-Ansicht
-                    main_cols = st.columns([4, 2, 2])
+                    main_cols = st.columns([4, 2, 1])
 
                     with main_cols[0]:
                         st.markdown(f"**{doc['title']}**")
 
                         # Zusammenfassung anzeigen wenn vorhanden
                         if doc['ai_summary']:
-                            st.caption(f"_{doc['ai_summary'][:100]}{'...' if len(doc['ai_summary'] or '') > 100 else ''}_")
+                            summary = doc['ai_summary'][:100] + ('...' if len(doc['ai_summary'] or '') > 100 else '')
+                            st.caption(f"_{summary}_")
 
                         # Standort hervorheben
-                        st.markdown(f"📍 **Standort:** {doc['folder_path']}")
+                        st.caption(f"Standort: {doc['folder_path']}")
 
                     with main_cols[1]:
                         meta_items = []
                         if doc['sender']:
-                            meta_items.append(f"**Von:** {doc['sender']}")
+                            meta_items.append(f"Von: {doc['sender']}")
                         if doc['category']:
-                            meta_items.append(f"**Kategorie:** {doc['category']}")
+                            meta_items.append(doc['category'])
                         if doc['document_date']:
-                            meta_items.append(f"**Datum:** {format_date(doc['document_date'])}")
-
-                        for item in meta_items:
-                            st.caption(item)
-
+                            meta_items.append(format_date(doc['document_date']))
                         if doc['invoice_amount']:
-                            st.markdown(f"**{format_currency(doc['invoice_amount'])}**")
+                            meta_items.append(format_currency(doc['invoice_amount']))
+
+                        st.caption(" | ".join(meta_items) if meta_items else "—")
 
                     with main_cols[2]:
-                        # Aktions-Buttons
-                        st.markdown("**Aktionen:**")
+                        if st.button("Öffnen", key=f"l_view_{doc['id']}"):
+                            st.session_state.view_document_id = doc['id']
+                            st.switch_page("pages/3_📁_Dokumente.py")
 
-                        btn_row1 = st.columns(2)
+                    st.divider()
 
-                        with btn_row1[0]:
-                            if st.button("👁️ Ansehen", key=f"l_view_{doc['id']}", use_container_width=True):
-                                st.session_state.view_document_id = doc['id']
-                                st.switch_page("pages/3_📁_Dokumente.py")
-
-                        with btn_row1[1]:
-                            if st.button("📥 Aktentasche", key=f"l_cart_{doc['id']}", use_container_width=True):
-                                if 'active_cart_items' not in st.session_state:
-                                    st.session_state.active_cart_items = []
-                                if doc['id'] not in st.session_state.active_cart_items:
-                                    st.session_state.active_cart_items.append(doc['id'])
-                                    st.toast("✅ Zur Aktentasche hinzugefügt")
-
-                        btn_row2 = st.columns(2)
-
-                        # Download
-                        with btn_row2[0]:
-                            if doc['file_path']:
-                                try:
-                                    success, file_result = get_document_file_content(doc['file_path'], user_id)
-                                    if success:
-                                        if doc.get('is_encrypted') and doc.get('encryption_iv'):
-                                            encryption = get_encryption_service()
-                                            try:
-                                                file_data = encryption.decrypt_file(file_result, doc['encryption_iv'], doc['filename'])
-                                            except:
-                                                file_data = file_result
-                                        else:
-                                            file_data = file_result
-
-                                        st.download_button(
-                                            "⬇️ Download",
-                                            data=file_data,
-                                            file_name=doc['filename'],
-                                            mime=doc.get('mime_type') or "application/octet-stream",
-                                            key=f"l_dl_{doc['id']}",
-                                            use_container_width=True
-                                        )
-                                except:
-                                    st.button("⬇️ Download", disabled=True, key=f"l_dl_{doc['id']}", use_container_width=True)
-
-                        with btn_row2[1]:
-                            if st.button("📧 Senden", key=f"l_send_{doc['id']}", use_container_width=True):
-                                st.session_state.email_document_id = doc['id']
-                                st.switch_page("pages/6_📧_E-Mail.py")
-
-                st.divider()
-
-        # Pagination Info
-        st.caption(f"Zeige {len(results)} von maximal 200 Ergebnissen")
+        st.caption(f"Zeige {len(results_data)} Ergebnisse (max. 200)")
 
     else:
-        st.info("🔍 Keine Treffer gefunden. Versuchen Sie andere Suchbegriffe oder passen Sie die Filter an.")
+        st.info("Keine Treffer gefunden. Versuchen Sie andere Suchbegriffe.")
 
 else:
-    # Willkommens-Info wenn noch nicht gesucht
+    # Info wenn noch nicht gesucht
     st.info("""
     **So funktioniert die Suche:**
 
     - Geben Sie einen oder mehrere Suchbegriffe ein
-    - Mehrere Begriffe werden mit UND verknüpft (alle müssen vorkommen)
-    - Die Suche durchsucht: Titel, Inhalt (OCR), Absender, Betreff, IBAN, Referenznummern
-    - Nutzen Sie die erweiterten Filter für genauere Ergebnisse
+    - Mehrere Begriffe werden mit UND verknüpft
+    - Die Suche durchsucht: Titel, Inhalt (OCR), Absender, IBAN, Referenznummern
 
     **Beispiele:**
     - `Telekom Rechnung` - Findet Telekom-Rechnungen
