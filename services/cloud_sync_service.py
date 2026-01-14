@@ -589,6 +589,7 @@ def aggressive_memory_cleanup(light_mode: bool = False, force_cache_clear: bool 
         force_cache_clear: Wenn True, Cache leeren auch in light_mode (für wenn GC nichts bringt)
     """
     import gc
+    import ctypes
 
     if light_mode and not force_cache_clear:
         # Nur GC, keine weiteren Operationen die RAM brauchen
@@ -598,7 +599,10 @@ def aggressive_memory_cleanup(light_mode: bool = False, force_cache_clear: bool 
         return
 
     # Volle Bereinigung (oder light_mode mit force_cache_clear)
-    # 1. Garbage Collection
+    # 1. Garbage Collection - alle Generationen mehrfach
+    gc.collect(generation=0)
+    gc.collect(generation=1)
+    gc.collect(generation=2)
     gc.collect()
     gc.collect()
 
@@ -612,8 +616,16 @@ def aggressive_memory_cleanup(light_mode: bool = False, force_cache_clear: bool 
     except:
         pass
 
-    # ENTFERNT: gc.get_objects() Iteration - verbraucht selbst viel RAM!
-    # ENTFERNT: cleanup_temp_files - verbraucht RAM für Dateisystem-Operationen
+    # 4. malloc_trim auf Linux - gibt freien Heap-Speicher ans OS zurück
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+        logger.debug("[CLEANUP] malloc_trim ausgeführt")
+    except:
+        pass  # Windows oder andere Plattform
+
+    # 5. Nochmal GC nach Cache-Clear
+    gc.collect()
 
     logger.info("[CLEANUP] Speicherbereinigung durchgeführt (cache_clear=%s)", force_cache_clear)
 
@@ -3327,8 +3339,21 @@ class CloudSyncService:
             # Dies verhindert Speicherakkumulation bei großen Syncs
             if file_content is not None:
                 del file_content
-            # Garbage Collection für diese einzelne Datei
+                file_content = None
+
+            # Garbage Collection für diese einzelne Datei - alle Generationen
+            gc.collect(generation=0)
+            gc.collect(generation=1)
+            gc.collect(generation=2)
             gc.collect()
+
+            # malloc_trim um Speicher ans OS zurückzugeben
+            try:
+                import ctypes
+                libc = ctypes.CDLL("libc.so.6")
+                libc.malloc_trim(0)
+            except:
+                pass
 
     def _sync_dropbox(self, connection: CloudSyncConnection,
                       session, process_documents: bool) -> Dict:
@@ -3772,11 +3797,22 @@ class CloudSyncService:
 
         session.flush()
 
+        # WICHTIG: Content-Hash für Cache speichern, dann content freigeben
+        saved_content_hash = content_hash
+        saved_file_path = str(file_path)
+
+        # Content explizit freigeben - ab hier von Disk lesen!
+        del content
+        content = None
+        import gc
+        gc.collect()
+
         # Intelligente Dokumentenverarbeitung wenn aktiviert
+        # WICHTIG: Liest jetzt von Disk statt aus Memory!
         if process_documents:
             try:
                 intelligent_steps = self._process_document_intelligent_with_status(
-                    session, doc, content, remote_path, filename
+                    session, doc, saved_file_path, saved_content_hash, remote_path, filename
                 )
                 processing_steps.extend(intelligent_steps)
             except Exception as e:
@@ -3789,15 +3825,21 @@ class CloudSyncService:
         return doc, processing_steps
 
     def _process_document_intelligent_with_status(self, session, doc: Document,
-                                                   content: bytes, remote_path: str,
-                                                   filename: str) -> List[Dict]:
+                                                   file_path: str, content_hash: str,
+                                                   remote_path: str, filename: str) -> List[Dict]:
         """
         Führt intelligente Dokumentenverarbeitung mit Status-Updates durch.
         Verwendet Cache-Service für OCR-Ergebnisse.
+        WICHTIG: Liest Datei von Disk statt aus Memory für bessere RAM-Nutzung!
+
+        Args:
+            file_path: Pfad zur gespeicherten Datei (lokal oder cloud://)
+            content_hash: Bereits berechneter Hash für Cache-Lookup
 
         Returns:
             Liste von Status-Updates für Fortschrittsanzeige
         """
+        import gc
         processing_steps = []
         ocr_text = ""
 
@@ -3805,10 +3847,8 @@ class CloudSyncService:
         try:
             from services.cache_service import get_cache_service
             cache = get_cache_service()
-            content_hash = cache._hash_content(content)
         except ImportError:
             cache = None
-            content_hash = None
 
         # 1. OCR durchführen (mit Cache-Prüfung)
         processing_steps.append({
@@ -3838,58 +3878,85 @@ class CloudSyncService:
 
                 mime_type = doc.mime_type or self._get_mime_type(filename)
 
-                if mime_type == "application/pdf":
-                    processing_steps.append({
-                        "step": "ocr_pdf",
-                        "detail": f"📄 Verarbeite PDF mit OCR..."
-                    })
-                    # extract_text_from_pdf erwartet bytes und gibt List[Tuple[str, float]] zurück
-                    ocr_results = ocr_service.extract_text_from_pdf(content)
-                    if ocr_results:
-                        # Texte aller Seiten zusammenfügen
-                        ocr_text = "\n\n".join([text for text, conf in ocr_results if text])
-                        avg_confidence = sum([conf for text, conf in ocr_results]) / len(ocr_results) if ocr_results else 0
-                        doc.ocr_text = ocr_text
-                        doc.ocr_confidence = avg_confidence
+                # WICHTIG: Datei von Disk lesen statt aus Memory
+                # Dies reduziert RAM-Verbrauch erheblich
+                file_content = None
+                try:
+                    if file_path.startswith("cloud://"):
+                        # Cloud-Datei herunterladen
+                        from services.storage_service import get_storage_service
+                        storage = get_storage_service()
+                        success, file_content = storage.download_file(file_path)
+                        if not success:
+                            raise Exception(f"Cloud-Download fehlgeschlagen: {file_path}")
                     else:
-                        ocr_text = ""
-                        doc.ocr_confidence = 0
+                        # Lokale Datei lesen
+                        with open(file_path, "rb") as f:
+                            file_content = f.read()
 
-                    # Cache OCR-Ergebnis
-                    if cache and content_hash and ocr_text:
-                        cache.set_ocr_result(content_hash, ocr_text)
+                    if mime_type == "application/pdf":
+                        processing_steps.append({
+                            "step": "ocr_pdf",
+                            "detail": f"📄 Verarbeite PDF mit OCR..."
+                        })
+                        # extract_text_from_pdf erwartet bytes und gibt List[Tuple[str, float]] zurück
+                        ocr_results = ocr_service.extract_text_from_pdf(file_content)
+                        if ocr_results:
+                            # Texte aller Seiten zusammenfügen
+                            ocr_text = "\n\n".join([text for text, conf in ocr_results if text])
+                            avg_confidence = sum([conf for text, conf in ocr_results]) / len(ocr_results) if ocr_results else 0
+                            doc.ocr_text = ocr_text
+                            doc.ocr_confidence = avg_confidence
+                        else:
+                            ocr_text = ""
+                            doc.ocr_confidence = 0
 
-                    text_length = len(ocr_text)
-                    processing_steps.append({
-                        "step": "ocr_complete",
-                        "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
-                    })
+                        # Cache OCR-Ergebnis
+                        if cache and content_hash and ocr_text:
+                            cache.set_ocr_result(content_hash, ocr_text)
 
-                elif mime_type.startswith("image/"):
-                    processing_steps.append({
-                        "step": "ocr_image",
-                        "detail": f"🖼️ Verarbeite Bild mit OCR..."
-                    })
-                    # Bild aus Bytes laden
-                    image = Image.open(io.BytesIO(content))
-                    ocr_text, confidence = ocr_service.extract_text_from_image(image)
-                    doc.ocr_text = ocr_text
-                    doc.ocr_confidence = confidence
+                        text_length = len(ocr_text)
+                        processing_steps.append({
+                            "step": "ocr_complete",
+                            "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
+                        })
 
-                    # Cache OCR-Ergebnis
-                    if cache and content_hash and ocr_text:
-                        cache.set_ocr_result(content_hash, ocr_text)
+                    elif mime_type.startswith("image/"):
+                        processing_steps.append({
+                            "step": "ocr_image",
+                            "detail": f"🖼️ Verarbeite Bild mit OCR..."
+                        })
+                        # Bild aus Bytes laden
+                        image = Image.open(io.BytesIO(file_content))
+                        ocr_text, confidence = ocr_service.extract_text_from_image(image)
+                        doc.ocr_text = ocr_text
+                        doc.ocr_confidence = confidence
+                        # Bild explizit freigeben
+                        del image
+                        image = None
 
-                    text_length = len(ocr_text)
-                    processing_steps.append({
-                        "step": "ocr_complete",
-                        "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
-                    })
-                else:
-                    processing_steps.append({
-                        "step": "ocr_skipped",
-                        "detail": f"⏭️ OCR übersprungen (kein PDF/Bild)"
-                    })
+                        # Cache OCR-Ergebnis
+                        if cache and content_hash and ocr_text:
+                            cache.set_ocr_result(content_hash, ocr_text)
+
+                        text_length = len(ocr_text)
+                        processing_steps.append({
+                            "step": "ocr_complete",
+                            "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
+                        })
+
+                    else:
+                        processing_steps.append({
+                            "step": "ocr_skipped",
+                            "detail": f"⏭️ OCR übersprungen (kein PDF/Bild)"
+                        })
+
+                finally:
+                    # WICHTIG: File content sofort freigeben nach OCR!
+                    if file_content is not None:
+                        del file_content
+                        file_content = None
+                    gc.collect()
 
             except ImportError:
                 logger.warning("OCR Service nicht verfügbar")
