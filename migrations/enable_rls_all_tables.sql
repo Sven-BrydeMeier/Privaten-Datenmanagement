@@ -88,6 +88,7 @@ ALTER TABLE public.voice_commands ENABLE ROW LEVEL SECURITY;
 -- Immobilien & Fahrzeuge
 ALTER TABLE public.properties ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vehicles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mileage_trips ENABLE ROW LEVEL SECURITY;
 
 -- Versicherungen & Garantien
 ALTER TABLE public.insurances ENABLE ROW LEVEL SECURITY;
@@ -358,6 +359,12 @@ CREATE POLICY "Users can manage own voice commands" ON public.voice_commands
 
 -- -------- PROPERTIES --------
 CREATE POLICY "Users can manage own properties" ON public.properties
+    FOR ALL TO authenticated
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
+
+-- -------- MILEAGE_TRIPS (Fahrtenlogbuch) --------
+CREATE POLICY "Users can manage own mileage trips" ON public.mileage_trips
     FOR ALL TO authenticated
     USING (user_id = public.get_current_user_id())
     WITH CHECK (user_id = public.get_current_user_id());
