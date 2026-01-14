@@ -300,6 +300,13 @@ def apply_custom_css():
 
 # Navigationsstruktur: Kategorien mit Seiten
 NAVIGATION_STRUCTURE = {
+    "🔎 Suche": {
+        "icon": "🔎",
+        "expanded": True,  # Immer sichtbar
+        "pages": [
+            {"name": "Dokumentensuche", "icon": "🔎", "path": "pages/0_🔎_Suche.py"},
+        ]
+    },
     "📊 Übersicht": {
         "icon": "📊",
         "pages": [
