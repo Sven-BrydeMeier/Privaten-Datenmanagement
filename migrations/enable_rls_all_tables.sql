@@ -109,7 +109,24 @@ ALTER TABLE public.family_members ENABLE ROW LEVEL SECURITY;
 
 
 -- ============================================================
--- SCHRITT 2: Policies erstellen
+-- SCHRITT 2: Hilfsfunktion für User-ID Lookup
+-- ============================================================
+
+-- Funktion die die user_id des aktuellen Auth-Users zurückgibt
+CREATE OR REPLACE FUNCTION public.get_current_user_id()
+RETURNS INTEGER
+LANGUAGE SQL
+SECURITY DEFINER
+STABLE
+AS $$
+    SELECT id FROM public.users WHERE email = auth.email() LIMIT 1;
+$$;
+
+-- Funktion für alle nutzbar machen
+GRANT EXECUTE ON FUNCTION public.get_current_user_id() TO authenticated;
+
+-- ============================================================
+-- SCHRITT 3: Policies erstellen
 -- ============================================================
 --
 -- Da die App SQLAlchemy mit Service Role verwendet, wird RLS
@@ -120,71 +137,72 @@ ALTER TABLE public.family_members ENABLE ROW LEVEL SECURITY;
 -- ============================================================
 
 -- -------- USERS --------
+-- Verbindung über E-Mail-Adresse (auth.email() = users.email)
 CREATE POLICY "Users can view own profile" ON public.users
     FOR SELECT TO authenticated
-    USING (id = (SELECT id FROM auth.users WHERE auth.uid() = auth.users.id LIMIT 1)::int);
+    USING (email = auth.email());
 
 CREATE POLICY "Users can update own profile" ON public.users
     FOR UPDATE TO authenticated
-    USING (id = (SELECT id FROM auth.users WHERE auth.uid() = auth.users.id LIMIT 1)::int);
+    USING (email = auth.email());
 
 -- -------- DOCUMENTS --------
 CREATE POLICY "Users can view own documents" ON public.documents
     FOR SELECT TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id());
 
 CREATE POLICY "Users can insert own documents" ON public.documents
     FOR INSERT TO authenticated
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    WITH CHECK (user_id = public.get_current_user_id());
 
 CREATE POLICY "Users can update own documents" ON public.documents
     FOR UPDATE TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id());
 
 CREATE POLICY "Users can delete own documents" ON public.documents
     FOR DELETE TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id());
 
 -- -------- FOLDERS --------
 CREATE POLICY "Users can view own folders" ON public.folders
     FOR SELECT TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id());
 
 CREATE POLICY "Users can manage own folders" ON public.folders
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- BANK_ACCOUNTS --------
 CREATE POLICY "Users can manage own bank accounts" ON public.bank_accounts
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- BANK_CONNECTIONS --------
 CREATE POLICY "Users can manage own bank connections" ON public.bank_connections
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- BANK_TRANSACTIONS --------
 CREATE POLICY "Users can manage own transactions" ON public.bank_transactions
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- CLOUD_SYNC_CONNECTIONS --------
 CREATE POLICY "Users can manage own cloud connections" ON public.cloud_sync_connections
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- CLOUD_SYNC_LOGS --------
 CREATE POLICY "Users can view own sync logs" ON public.cloud_sync_logs
     FOR SELECT TO authenticated
     USING (connection_id IN (
         SELECT id FROM public.cloud_sync_connections
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- CLOUD_SYNC_DIAGNOSTICS --------
@@ -192,186 +210,186 @@ CREATE POLICY "Users can view own sync diagnostics" ON public.cloud_sync_diagnos
     FOR SELECT TO authenticated
     USING (connection_id IN (
         SELECT id FROM public.cloud_sync_connections
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- EMAILS --------
 CREATE POLICY "Users can manage own emails" ON public.emails
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- EMAIL_ATTACHMENTS --------
 CREATE POLICY "Users can view own email attachments" ON public.email_attachments
     FOR SELECT TO authenticated
     USING (email_id IN (
         SELECT id FROM public.emails
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- EMAIL_SIGNATURES --------
 CREATE POLICY "Users can manage own email signatures" ON public.email_signatures
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- EMAIL_DISPOSITIONS --------
 CREATE POLICY "Users can manage own email dispositions" ON public.email_dispositions
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- EMAIL_CLASSIFICATION_RULES --------
 CREATE POLICY "Users can manage own email rules" ON public.email_classification_rules
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- EMAIL_PROCESSING_LOGS --------
 CREATE POLICY "Users can view own email logs" ON public.email_processing_logs
     FOR SELECT TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id());
 
 -- -------- CALENDAR_EVENTS --------
 CREATE POLICY "Users can manage own calendar events" ON public.calendar_events
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- CONTACTS --------
 CREATE POLICY "Users can manage own contacts" ON public.contacts
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- CARTS --------
 CREATE POLICY "Users can manage own carts" ON public.carts
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- CART_ITEMS --------
 CREATE POLICY "Users can manage own cart items" ON public.cart_items
     FOR ALL TO authenticated
     USING (cart_id IN (
         SELECT id FROM public.carts
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- RECEIPTS --------
 CREATE POLICY "Users can manage own receipts" ON public.receipts
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- RECEIPT_GROUPS --------
 CREATE POLICY "Users can manage own receipt groups" ON public.receipt_groups
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- RECEIPT_GROUP_MEMBERS --------
 CREATE POLICY "Users can view own group members" ON public.receipt_group_members
     FOR SELECT TO authenticated
     USING (group_id IN (
         SELECT id FROM public.receipt_groups
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- CLASSIFICATION_RULES --------
 CREATE POLICY "Users can manage own classification rules" ON public.classification_rules
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- FOLDER_KEYWORDS --------
 CREATE POLICY "Users can manage own folder keywords" ON public.folder_keywords
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- SMART_FOLDERS --------
 CREATE POLICY "Users can manage own smart folders" ON public.smart_folders
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- ENTITIES --------
 CREATE POLICY "Users can manage own entities" ON public.entities
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- FEEDBACK_EVENTS --------
 CREATE POLICY "Users can manage own feedback events" ON public.feedback_events
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- FIELD_ANNOTATIONS --------
 CREATE POLICY "Users can manage own field annotations" ON public.field_annotations
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- LAYOUT_TEMPLATES --------
 CREATE POLICY "Users can manage own layout templates" ON public.layout_templates
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- TODOS --------
 CREATE POLICY "Users can manage own todos" ON public.todos
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- ALARMS --------
 CREATE POLICY "Users can manage own alarms" ON public.alarms
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- VOICE_COMMANDS --------
 CREATE POLICY "Users can manage own voice commands" ON public.voice_commands
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- PROPERTIES --------
 CREATE POLICY "Users can manage own properties" ON public.properties
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- NOTIFICATIONS --------
 CREATE POLICY "Users can manage own notifications" ON public.notifications
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- AUDIT_LOGS --------
 CREATE POLICY "Users can view own audit logs" ON public.audit_logs
     FOR SELECT TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id());
 
 -- -------- RECURRING_PATTERNS --------
 CREATE POLICY "Users can manage own recurring patterns" ON public.recurring_patterns
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- DOCUMENT_NOTES --------
 CREATE POLICY "Users can manage own document notes" ON public.document_notes
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- DOCUMENT_SHARES --------
 CREATE POLICY "Users can manage own document shares" ON public.document_shares
     FOR ALL TO authenticated
-    USING (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1))
-    WITH CHECK (user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1));
+    USING (user_id = public.get_current_user_id())
+    WITH CHECK (user_id = public.get_current_user_id());
 
 -- -------- TAGS (Global, Read-Only für alle) --------
 CREATE POLICY "All users can view tags" ON public.tags
@@ -383,7 +401,7 @@ CREATE POLICY "Users can manage own document tags" ON public.document_tags
     FOR ALL TO authenticated
     USING (document_id IN (
         SELECT id FROM public.documents
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- DOCUMENT_VIRTUAL_FOLDERS (Join-Table) --------
@@ -391,7 +409,7 @@ CREATE POLICY "Users can manage own virtual folder links" ON public.document_vir
     FOR ALL TO authenticated
     USING (document_id IN (
         SELECT id FROM public.documents
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- DOCUMENT_ENTITIES (Join-Table) --------
@@ -399,7 +417,7 @@ CREATE POLICY "Users can manage own document entity links" ON public.document_en
     FOR ALL TO authenticated
     USING (document_id IN (
         SELECT id FROM public.documents
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- SEARCH_INDEX --------
@@ -407,7 +425,7 @@ CREATE POLICY "Users can view own search index" ON public.search_index
     FOR SELECT TO authenticated
     USING (document_id IN (
         SELECT id FROM public.documents
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- CLASSIFICATION_EXPLANATIONS --------
@@ -415,7 +433,7 @@ CREATE POLICY "Users can view own classification explanations" ON public.classif
     FOR SELECT TO authenticated
     USING (document_id IN (
         SELECT id FROM public.documents
-        WHERE user_id = (SELECT id FROM public.users WHERE email = auth.email() LIMIT 1)
+        WHERE user_id = public.get_current_user_id()
     ));
 
 -- -------- Tabellen ohne user_id (Service-Only oder Global) --------
@@ -434,7 +452,7 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon;
 
 -- ============================================================
--- SCHRITT 3: Verifikation
+-- SCHRITT 4: Verifikation
 -- ============================================================
 
 -- Zeige alle Tabellen mit RLS-Status
