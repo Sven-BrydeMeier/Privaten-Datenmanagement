@@ -151,31 +151,10 @@ def render_api_status():
 def render_sidebar_cart():
     """
     Rendert die Sidebar mit Navigation und Aktentasche.
-    Diese Funktion ist jetzt ein Alias für render_sidebar_with_navigation()
-    für Rückwärtskompatibilität.
+    Verwendet jetzt das neue Layout mit Top-Suche und Tree-Navigation.
     """
-    # Versuche den Dateinamen der aufrufenden Seite zu ermitteln
-    import inspect
-    try:
-        frame = inspect.currentframe()
-        if frame and frame.f_back:
-            caller_file = frame.f_back.f_globals.get('__file__', '')
-            if caller_file:
-                # Pfad normalisieren
-                from pathlib import Path
-                caller_path = Path(caller_file)
-                if 'pages' in caller_path.parts:
-                    # Relativer Pfad ab pages/
-                    idx = caller_path.parts.index('pages')
-                    rel_path = '/'.join(caller_path.parts[idx:])
-                    st.session_state['_current_page'] = rel_path
-                else:
-                    st.session_state['_current_page'] = caller_path.name
-    except Exception:
-        pass
-
-    # Neue Navigation rendern
-    render_sidebar_with_navigation()
+    from utils.ui_new import apply_new_layout
+    apply_new_layout()
 
 
 def add_to_cart(document_id: int):

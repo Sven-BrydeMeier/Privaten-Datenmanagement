@@ -18,10 +18,9 @@ from services.encryption import get_encryption_service
 st.set_page_config(page_title="Suche", page_icon="🔎", layout="wide")
 init_db()
 
-# Neues Layout: Tree-Navigation in Sidebar
-from utils.ui_new import render_tree_sidebar
-st.session_state['_current_page'] = 'pages/0_🔎_Suche.py'
-render_tree_sidebar()
+# Neues Layout anwenden
+from utils.ui_new import apply_new_layout
+apply_new_layout()
 
 user_id = get_current_user_id()
 
