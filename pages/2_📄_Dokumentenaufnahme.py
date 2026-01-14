@@ -774,7 +774,6 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                             new_folder = Folder(
                                 user_id=user_id,
                                 name=sender_name,
-                                description=f"Automatisch erstellt für Dokumente von {sender_name}",
                                 color="#607D8B"  # Grau-Blau für auto-erstellte Ordner
                             )
                             session.add(new_folder)
