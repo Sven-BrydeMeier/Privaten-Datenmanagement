@@ -2543,79 +2543,204 @@ with tab_process:
         pending_docs = session.query(Document).filter(
             Document.user_id == user_id,
             Document.status.in_([DocumentStatus.PENDING, DocumentStatus.ERROR])
-        ).all()
+        ).order_by(Document.created_at.desc()).all()
 
         if pending_docs:
-            st.info(f"{len(pending_docs)} Dokumente warten auf Verarbeitung")
+            # Header mit Statistik
+            pending_count = sum(1 for d in pending_docs if d.status == DocumentStatus.PENDING)
+            error_count = sum(1 for d in pending_docs if d.status == DocumentStatus.ERROR)
 
-            for doc in pending_docs:
-                col1, col2, col3 = st.columns([3, 1, 1])
-                with col1:
-                    status_icon = "⏳" if doc.status == DocumentStatus.PENDING else "❌"
-                    st.write(f"{status_icon} {doc.filename}")
-                    if doc.processing_error:
-                        st.caption(f"Fehler: {doc.processing_error}")
-                with col2:
-                    st.caption(format_date(doc.created_at))
-                with col3:
-                    if st.button("Verarbeiten", key=f"process_{doc.id}"):
-                        from utils.helpers import get_document_file_content
-                        success, result = get_document_file_content(doc.file_path, user_id)
-                        if not success:
-                            st.error(f"Datei nicht gefunden: {result}")
-                        else:
-                            # Nur entschlüsseln wenn verschlüsselt UND IV vorhanden
-                            if doc.is_encrypted and doc.encryption_iv:
-                                try:
-                                    encryption = get_encryption_service()
-                                    file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
-                                except Exception as decrypt_err:
-                                    file_data = result  # Fallback
-                            else:
-                                file_data = result
+            st.markdown(f"""
+            ### 📋 Ausstehende Dokumente
 
-                            with st.spinner("Verarbeite..."):
-                                try:
-                                    process_document(doc.id, file_data, user_id)
-                                    st.success("Erfolgreich!")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Fehler: {e}")
+            | Status | Anzahl |
+            |--------|--------|
+            | ⏳ Wartend | **{pending_count}** |
+            | ❌ Fehler | **{error_count}** |
+            | **Gesamt** | **{len(pending_docs)}** |
+            """)
 
-            if st.button("Alle verarbeiten", type="primary"):
+            # Verarbeitungs-Button mit Live-Fortschritt
+            col_btn, col_space = st.columns([1, 3])
+            with col_btn:
+                start_processing = st.button("▶️ Alle verarbeiten", type="primary", use_container_width=True)
+
+            if start_processing:
                 from utils.helpers import get_document_file_content
-                progress = st.progress(0)
+                import time
+
+                # Live-Fortschritts-Container
+                progress_container = st.container()
+                with progress_container:
+                    st.markdown("---")
+                    st.markdown("### 🔄 Verarbeitung läuft...")
+
+                    # Statistik-Anzeige
+                    stats_cols = st.columns(4)
+                    with stats_cols[0]:
+                        stat_total = st.empty()
+                        stat_total.metric("Gesamt", len(pending_docs))
+                    with stats_cols[1]:
+                        stat_done = st.empty()
+                        stat_done.metric("Erledigt", "0", delta=None)
+                    with stats_cols[2]:
+                        stat_errors = st.empty()
+                        stat_errors.metric("Fehler", "0")
+                    with stats_cols[3]:
+                        stat_remaining = st.empty()
+                        stat_remaining.metric("Verbleibend", len(pending_docs))
+
+                    # Fortschrittsbalken
+                    progress_bar = st.progress(0, text="Starte Verarbeitung...")
+
+                    # Aktuelles Dokument
+                    current_doc_display = st.empty()
+
+                    # Verarbeitungslog
+                    log_expander = st.expander("📜 Verarbeitungslog", expanded=True)
+                    log_container = log_expander.empty()
+                    log_entries = []
+
+                # Verarbeitung starten
                 processed = 0
                 errors = 0
+                start_time = time.time()
+
                 for i, doc in enumerate(pending_docs):
-                    progress.progress((i + 1) / len(pending_docs))
+                    # Fortschritt aktualisieren
+                    percent = (i + 1) / len(pending_docs)
+                    elapsed = time.time() - start_time
+                    if i > 0:
+                        avg_time = elapsed / i
+                        remaining = avg_time * (len(pending_docs) - i)
+                        time_text = f"~{int(remaining)}s verbleibend"
+                    else:
+                        time_text = "Berechne Zeit..."
+
+                    progress_bar.progress(percent, text=f"Dokument {i+1}/{len(pending_docs)} ({time_text})")
+
+                    # Aktuelles Dokument anzeigen
+                    current_doc_display.info(f"📄 Verarbeite: **{doc.filename}**")
+
                     try:
                         encryption = get_encryption_service()
                         success, result = get_document_file_content(doc.file_path, user_id)
+
                         if success:
                             # Nur entschlüsseln wenn verschlüsselt UND IV vorhanden
                             if doc.is_encrypted and doc.encryption_iv:
                                 try:
                                     file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
-                                except Exception as decrypt_err:
-                                    # Entschlüsselung fehlgeschlagen - versuche unverschlüsselt
+                                except Exception:
                                     file_data = result
                             else:
-                                # Nicht verschlüsselt oder kein IV
                                 file_data = result
 
                             process_document(doc.id, file_data, user_id)
                             processed += 1
+                            log_entries.append(f"✅ {doc.filename}")
+
+                            # Statistiken aktualisieren
+                            stat_done.metric("Erledigt", processed, delta=f"+1")
+                            stat_remaining.metric("Verbleibend", len(pending_docs) - i - 1)
                         else:
                             errors += 1
+                            log_entries.append(f"❌ {doc.filename} - Datei nicht gefunden")
+                            stat_errors.metric("Fehler", errors)
                     except Exception as e:
                         errors += 1
+                        log_entries.append(f"❌ {doc.filename} - {str(e)[:50]}")
+                        stat_errors.metric("Fehler", errors)
                         continue
 
+                    # Log aktualisieren (letzte 10 Einträge)
+                    log_text = "\n".join(log_entries[-10:])
+                    if len(log_entries) > 10:
+                        log_text = f"... {len(log_entries) - 10} weitere ...\n" + log_text
+                    log_container.code(log_text)
+
+                # Fertig!
+                total_time = time.time() - start_time
+                progress_bar.progress(1.0, text="✅ Verarbeitung abgeschlossen!")
+                current_doc_display.empty()
+
+                # Abschluss-Meldung
+                st.markdown("---")
                 if processed > 0:
-                    st.success(f"✅ {processed} Dokumente verarbeitet!")
+                    st.success(f"✅ **{processed} Dokumente** erfolgreich verarbeitet in {int(total_time)}s")
                 if errors > 0:
-                    st.warning(f"⚠️ {errors} Dokumente konnten nicht verarbeitet werden")
-                st.rerun()
+                    st.warning(f"⚠️ **{errors} Dokumente** konnten nicht verarbeitet werden")
+
+                # Button zum Neu laden
+                if st.button("🔄 Liste aktualisieren"):
+                    st.rerun()
+
+            else:
+                # Dokumentenliste anzeigen (wenn nicht gerade verarbeitet wird)
+                st.markdown("---")
+
+                # Tabellen-Header
+                header_cols = st.columns([0.5, 3, 1.5, 1, 1])
+                with header_cols[0]:
+                    st.markdown("**#**")
+                with header_cols[1]:
+                    st.markdown("**Dokument**")
+                with header_cols[2]:
+                    st.markdown("**Status**")
+                with header_cols[3]:
+                    st.markdown("**Datum**")
+                with header_cols[4]:
+                    st.markdown("**Aktion**")
+
+                st.markdown("---")
+
+                # Dokumentenliste (max 20 anzeigen)
+                for idx, doc in enumerate(pending_docs[:20]):
+                    col1, col2, col3, col4, col5 = st.columns([0.5, 3, 1.5, 1, 1])
+
+                    with col1:
+                        st.caption(f"{idx + 1}")
+
+                    with col2:
+                        filename_display = doc.filename[:35] + "..." if len(doc.filename) > 35 else doc.filename
+                        st.markdown(f"📄 {filename_display}")
+                        if doc.processing_error:
+                            st.caption(f"⚠️ {doc.processing_error[:50]}...")
+
+                    with col3:
+                        if doc.status == DocumentStatus.PENDING:
+                            st.markdown("⏳ Wartend")
+                        else:
+                            st.markdown("❌ Fehler")
+
+                    with col4:
+                        st.caption(format_date(doc.created_at))
+
+                    with col5:
+                        if st.button("▶️", key=f"process_{doc.id}", help="Einzeln verarbeiten"):
+                            from utils.helpers import get_document_file_content
+                            success, result = get_document_file_content(doc.file_path, user_id)
+                            if not success:
+                                st.error(f"Datei nicht gefunden")
+                            else:
+                                if doc.is_encrypted and doc.encryption_iv:
+                                    try:
+                                        encryption = get_encryption_service()
+                                        file_data = encryption.decrypt_file(result, doc.encryption_iv, doc.filename)
+                                    except:
+                                        file_data = result
+                                else:
+                                    file_data = result
+
+                                with st.spinner("Verarbeite..."):
+                                    try:
+                                        process_document(doc.id, file_data, user_id)
+                                        st.success("✅")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Fehler: {e}")
+
+                if len(pending_docs) > 20:
+                    st.caption(f"... und {len(pending_docs) - 20} weitere Dokumente")
         else:
             st.success("Keine unverarbeiteten Dokumente")
