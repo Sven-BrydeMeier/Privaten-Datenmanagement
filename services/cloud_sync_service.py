@@ -40,6 +40,43 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Flag für Heartbeat-Spalten-Verfügbarkeit (None = ungeprüft, True/False = Ergebnis)
+# Ermöglicht graceful degradation wenn Migration nicht angewendet wurde
+_HEARTBEAT_COLUMNS_AVAILABLE = None
+
+
+def _check_heartbeat_columns_available() -> bool:
+    """
+    Prüft einmalig ob die Heartbeat-Spalten in der Datenbank existieren.
+    Cached das Ergebnis im Modul-Level Flag.
+    """
+    global _HEARTBEAT_COLUMNS_AVAILABLE
+
+    if _HEARTBEAT_COLUMNS_AVAILABLE is not None:
+        return _HEARTBEAT_COLUMNS_AVAILABLE
+
+    try:
+        from sqlalchemy import text
+        with get_db() as session:
+            # Prüfe ob heartbeat_at Spalte existiert
+            result = session.execute(text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'cloud_sync_diagnostics'
+                AND column_name = 'heartbeat_at'
+            """))
+            exists = result.fetchone() is not None
+            _HEARTBEAT_COLUMNS_AVAILABLE = exists
+            if not exists:
+                logger.info("[HEARTBEAT] Spalten nicht verfügbar - Migration migrations/add_heartbeat_to_diagnostics.sql noch nicht angewendet")
+            else:
+                logger.info("[HEARTBEAT] Spalten verfügbar - Heartbeat-Monitoring aktiv")
+            return exists
+    except Exception as e:
+        logger.warning(f"[HEARTBEAT] Spalten-Check fehlgeschlagen, deaktiviere Heartbeat: {e}")
+        _HEARTBEAT_COLUMNS_AVAILABLE = False
+        return False
+
 
 # ==================== SYNC DIAGNOSTICS ====================
 class SyncDiagnostics:
@@ -647,8 +684,12 @@ def update_heartbeat(user_id: int, connection_id: int, current_file: str = None,
         step_detail: Details zum aktuellen Schritt
 
     Returns:
-        True wenn erfolgreich, False bei Fehler
+        True wenn erfolgreich, False bei Fehler (oder wenn Spalten nicht verfügbar)
     """
+    # Prüfe ob Heartbeat-Spalten verfügbar sind (graceful degradation)
+    if not _check_heartbeat_columns_available():
+        return False  # Stille Rückkehr wenn Spalten nicht existieren
+
     try:
         with get_db() as session:
             # Finde laufenden Diagnose-Eintrag
@@ -694,13 +735,38 @@ def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnosti
         ID des erstellten/aktualisierten Diagnose-Eintrags
     """
     try:
+        from sqlalchemy.orm import load_only
+
         with get_db() as session:
             summary = diag.get_summary()
             analysis = diag.get_failure_analysis()
             full_report = diag.get_full_report()
 
+            # Heartbeat-Verfügbarkeit prüfen
+            heartbeat_available = _check_heartbeat_columns_available()
+
+            # Basis-Spalten für load_only (alle außer Heartbeat)
+            base_column_names = [
+                'id', 'user_id', 'connection_id', 'sync_started_at', 'sync_ended_at',
+                'sync_status', 'total_files', 'files_processed', 'files_successful',
+                'files_skipped', 'files_failed', 'duration_seconds', 'last_successful_file',
+                'last_successful_index', 'last_successful_at', 'api_calls_total',
+                'api_calls_failed', 'api_avg_duration_ms', 'api_max_duration_ms',
+                'memory_start_mb', 'memory_end_mb', 'memory_max_mb', 'memory_growth_mb',
+                'possible_causes', 'recommendations', 'error_message', 'error_traceback',
+                'events_log', 'api_calls_log', 'file_operations_log', 'errors_log',
+                'memory_snapshots'
+            ]
+            if heartbeat_available:
+                base_column_names.extend([
+                    'heartbeat_at', 'current_file_name', 'current_file_index',
+                    'current_step', 'current_step_detail'
+                ])
+
             # Prüfen ob bereits ein laufender Eintrag existiert
-            existing = session.query(CloudSyncDiagnostic).filter(
+            existing = session.query(CloudSyncDiagnostic).options(
+                load_only(*base_column_names)
+            ).filter(
                 CloudSyncDiagnostic.user_id == user_id,
                 CloudSyncDiagnostic.connection_id == connection_id,
                 CloudSyncDiagnostic.sync_status == "running"
@@ -737,10 +803,11 @@ def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnosti
             if diag.last_successful_time:
                 diag_entry.last_successful_at = diag.last_successful_time
 
-            # Heartbeat und aktueller Status
-            diag_entry.heartbeat_at = datetime.now()
-            diag_entry.current_file_index = diag.current_file_index
-            # current_file_name und current_step werden über update_heartbeat separat gesetzt
+            # Heartbeat und aktueller Status (nur wenn Spalten verfügbar)
+            if _check_heartbeat_columns_available():
+                diag_entry.heartbeat_at = datetime.now()
+                diag_entry.current_file_index = diag.current_file_index
+                # current_file_name und current_step werden über update_heartbeat separat gesetzt
 
             # API-Statistiken
             diag_entry.api_calls_total = summary.get("api_calls_total", 0)
@@ -1187,8 +1254,41 @@ class CloudSyncService:
         Returns:
             Liste von Diagnose-Berichten
         """
+        from sqlalchemy.orm import load_only
+
+        # Basis-Spalten die immer existieren
+        base_columns = [
+            CloudSyncDiagnostic.id, CloudSyncDiagnostic.user_id,
+            CloudSyncDiagnostic.connection_id, CloudSyncDiagnostic.sync_started_at,
+            CloudSyncDiagnostic.sync_ended_at, CloudSyncDiagnostic.sync_status,
+            CloudSyncDiagnostic.total_files, CloudSyncDiagnostic.files_processed,
+            CloudSyncDiagnostic.files_successful, CloudSyncDiagnostic.files_skipped,
+            CloudSyncDiagnostic.files_failed, CloudSyncDiagnostic.duration_seconds,
+            CloudSyncDiagnostic.last_successful_file, CloudSyncDiagnostic.last_successful_index,
+            CloudSyncDiagnostic.last_successful_at, CloudSyncDiagnostic.api_calls_total,
+            CloudSyncDiagnostic.api_calls_failed, CloudSyncDiagnostic.api_avg_duration_ms,
+            CloudSyncDiagnostic.api_max_duration_ms, CloudSyncDiagnostic.memory_start_mb,
+            CloudSyncDiagnostic.memory_end_mb, CloudSyncDiagnostic.memory_max_mb,
+            CloudSyncDiagnostic.memory_growth_mb, CloudSyncDiagnostic.possible_causes,
+            CloudSyncDiagnostic.recommendations, CloudSyncDiagnostic.error_message,
+            CloudSyncDiagnostic.error_traceback, CloudSyncDiagnostic.events_log,
+            CloudSyncDiagnostic.api_calls_log, CloudSyncDiagnostic.file_operations_log,
+            CloudSyncDiagnostic.errors_log, CloudSyncDiagnostic.memory_snapshots,
+        ]
+
+        # Heartbeat-Spalten nur wenn verfügbar hinzufügen
+        heartbeat_available = _check_heartbeat_columns_available()
+        if heartbeat_available:
+            base_columns.extend([
+                CloudSyncDiagnostic.heartbeat_at, CloudSyncDiagnostic.current_file_name,
+                CloudSyncDiagnostic.current_file_index, CloudSyncDiagnostic.current_step,
+                CloudSyncDiagnostic.current_step_detail
+            ])
+
         with get_db() as session:
-            query = session.query(CloudSyncDiagnostic).filter(
+            query = session.query(CloudSyncDiagnostic).options(
+                load_only(*[c.key for c in base_columns])
+            ).filter(
                 CloudSyncDiagnostic.user_id == self.user_id
             )
 
@@ -1199,7 +1299,7 @@ class CloudSyncService:
 
             result = []
             for report in reports:
-                result.append({
+                report_dict = {
                     "id": report.id,
                     "connection_id": report.connection_id,
                     "sync_started_at": report.sync_started_at,
@@ -1231,7 +1331,19 @@ class CloudSyncService:
                     "file_operations_log": report.file_operations_log,
                     "errors_log": report.errors_log,
                     "memory_snapshots": report.memory_snapshots,
-                })
+                }
+
+                # Heartbeat-Felder nur hinzufügen wenn verfügbar
+                if heartbeat_available:
+                    report_dict.update({
+                        "heartbeat_at": getattr(report, 'heartbeat_at', None),
+                        "current_file_name": getattr(report, 'current_file_name', None),
+                        "current_file_index": getattr(report, 'current_file_index', None),
+                        "current_step": getattr(report, 'current_step', None),
+                        "current_step_detail": getattr(report, 'current_step_detail', None),
+                    })
+
+                result.append(report_dict)
 
             return result
 
