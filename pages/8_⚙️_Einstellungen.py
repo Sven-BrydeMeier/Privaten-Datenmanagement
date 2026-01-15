@@ -881,18 +881,18 @@ with tab_cloud:
                             st.caption(f"Letzte Sync: {conn.last_sync.strftime('%d.%m.%Y %H:%M')}")
 
                     with col_actions:
-                        # Batch-Modus Option - kleinere Batches für Stabilität
+                        # Batch-Modus Option - unbegrenzt ist jetzt sicher durch Subprocess-OCR
                         batch_mode = st.selectbox(
                             "Modus",
-                            options=["batch10", "batch25", "batch50", "all"],
+                            options=["all", "batch50", "batch25", "batch10"],
                             format_func=lambda x: {
-                                "batch10": "⭐ Batch (10 Dateien)",
-                                "batch25": "Batch (25 Dateien)",
+                                "all": "⭐ Alle Dateien (empfohlen)",
                                 "batch50": "Batch (50 Dateien)",
-                                "all": "⚠️ Alle (RAM-Risiko!)"
+                                "batch25": "Batch (25 Dateien)",
+                                "batch10": "Batch (10 Dateien)"
                             }.get(x, x),
                             key=f"batch_mode_{conn.id}",
-                            help="Kleinere Batches vermeiden RAM-Probleme. Empfohlen: 10-25 Dateien."
+                            help="Unbegrenzter Import ist jetzt sicher durch RAM-isolierten Subprocess-OCR."
                         )
 
                         # Option: Schnell-Import ohne Verarbeitung
@@ -943,9 +943,9 @@ with tab_cloud:
                         batch_info_display = st.empty()
 
                         # Batch-Parameter ermitteln
-                        active_batch_mode = st.session_state.get(f"batch_mode_{conn.id}_active", "batch10")
+                        active_batch_mode = st.session_state.get(f"batch_mode_{conn.id}_active", "all")
                         batch_sizes = {"batch10": 10, "batch25": 25, "batch50": 50, "all": 0}
-                        batch_size = batch_sizes.get(active_batch_mode, 10)
+                        batch_size = batch_sizes.get(active_batch_mode, 0)  # 0 = unbegrenzt
 
                         # Schnell-Import = keine Verarbeitung während Sync
                         fast_import = st.session_state.get(f"fast_import_{conn.id}_active", True)

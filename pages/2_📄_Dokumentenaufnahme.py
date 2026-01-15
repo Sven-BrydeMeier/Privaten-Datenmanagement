@@ -2048,7 +2048,7 @@ with tab_cloud:
                             for progress in cloud_service.sync_connection_with_progress(
                                 conn.id,
                                 enable_diagnostics=debug_mode,
-                                batch_size=120  # Batch-Modus: 120 Dateien pro Durchlauf um Timeouts zu vermeiden
+                                batch_size=0  # 0 = unbegrenzt (RAM-Isolation durch Subprocess-OCR)
                             ):
                                 final_result = progress
                                 phase = progress.get("phase", "")
