@@ -119,6 +119,7 @@ RETURNS INTEGER
 LANGUAGE SQL
 SECURITY DEFINER
 STABLE
+SET search_path = public
 AS $$
     SELECT id FROM public.users WHERE email = auth.email() LIMIT 1;
 $$;
