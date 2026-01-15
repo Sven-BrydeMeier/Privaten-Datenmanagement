@@ -93,6 +93,10 @@ class StorageService:
             self._bucket_name = os.environ.get('SUPABASE_STORAGE_BUCKET', 'documents')
 
         if supabase_url and supabase_key:
+            # Sicherstellen dass URL mit / endet (Supabase Storage Anforderung)
+            if not supabase_url.endswith('/'):
+                supabase_url = supabase_url + '/'
+
             try:
                 # Client erstellen - mit Timeout-Optionen wenn verfügbar
                 if CLIENT_OPTIONS_AVAILABLE:
