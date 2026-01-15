@@ -713,6 +713,10 @@ with tab_invoices:
     with col_status:
         inv_status_filter = st.selectbox("Status", ["Alle", "Offen", "Bezahlt"], key="inv_status")
 
+    # Bulk-Auswahl State initialisieren
+    if 'selected_invoices' not in st.session_state:
+        st.session_state.selected_invoices = set()
+
     with get_db() as session:
         query = session.query(Document).filter(
             Document.user_id == user_id,
@@ -747,6 +751,72 @@ with tab_invoices:
             st.metric("📊 Gesamt", format_currency(total_all))
 
         st.markdown("---")
+
+        # Bulk-Aktionen für offene Rechnungen
+        open_invoices = [inv for inv in invoices if inv.invoice_status == InvoiceStatus.OPEN]
+        if open_invoices and inv_status_filter != "Bezahlt":
+            with st.expander("⚡ Bulk-Aktionen", expanded=len(st.session_state.selected_invoices) > 0):
+                # Bankkonten für Bulk-Aktion laden
+                bulk_bank_accounts = session.query(BankAccount).filter(
+                    BankAccount.user_id == user_id,
+                    BankAccount.is_active == True
+                ).order_by(BankAccount.is_default.desc()).all()
+
+                bulk_account_options = {acc.id: f"{acc.icon} {acc.bank_name} - {acc.account_name}" for acc in bulk_bank_accounts}
+                bulk_default_id = next((acc.id for acc in bulk_bank_accounts if acc.is_default), None)
+
+                if bulk_account_options:
+                    col_sel, col_bank, col_action = st.columns([2, 2, 2])
+
+                    with col_sel:
+                        st.markdown(f"**{len(st.session_state.selected_invoices)} von {len(open_invoices)} ausgewählt**")
+                        col_sel_all, col_desel = st.columns(2)
+                        with col_sel_all:
+                            if st.button("☑️ Alle auswählen", use_container_width=True):
+                                st.session_state.selected_invoices = {inv.id for inv in open_invoices}
+                                st.rerun()
+                        with col_desel:
+                            if st.button("☐ Keine", use_container_width=True):
+                                st.session_state.selected_invoices = set()
+                                st.rerun()
+
+                    with col_bank:
+                        bulk_account_ids = list(bulk_account_options.keys())
+                        bulk_default_idx = bulk_account_ids.index(bulk_default_id) if bulk_default_id in bulk_account_ids else 0
+                        bulk_pay_account = st.selectbox(
+                            "Bezahlt mit Konto",
+                            options=bulk_account_ids,
+                            format_func=lambda x: bulk_account_options.get(x, "Unbekannt"),
+                            index=bulk_default_idx,
+                            key="bulk_pay_account"
+                        )
+
+                    with col_action:
+                        selected_count = len(st.session_state.selected_invoices)
+                        selected_total = sum(inv.invoice_amount for inv in open_invoices if inv.id in st.session_state.selected_invoices)
+                        if selected_count > 0:
+                            st.markdown(f"**Summe: {format_currency(selected_total)}**")
+                            if st.button(f"✅ {selected_count} Rechnungen als bezahlt markieren", type="primary", use_container_width=True):
+                                payment_date = datetime.now()
+                                account_name = bulk_account_options.get(bulk_pay_account, "Unbekannt")
+                                success_count = 0
+                                for inv in open_invoices:
+                                    if inv.id in st.session_state.selected_invoices:
+                                        inv.invoice_status = InvoiceStatus.PAID
+                                        inv.invoice_paid_date = payment_date
+                                        inv.paid_with_bank_account = account_name
+                                        stamp_invoice_pdf(inv, payment_date, account_name)
+                                        success_count += 1
+                                session.commit()
+                                st.success(f"✅ {success_count} Rechnungen als bezahlt markiert!")
+                                st.session_state.selected_invoices = set()
+                                st.rerun()
+                        else:
+                            st.info("Wählen Sie Rechnungen aus der Liste unten")
+                else:
+                    st.warning("⚠️ Bitte hinterlegen Sie Bankkonten in den Einstellungen")
+
+            st.markdown("---")
 
         # Bankkonten aus Datenbank laden
         db_accounts = session.query(BankAccount).filter(
@@ -797,9 +867,21 @@ with tab_invoices:
                 }
 
                 with st.container():
-                    # Hauptzeile mit Status
-                    status_icon = "🔴" if inv_data['status'] == InvoiceStatus.OPEN else "✅" if inv_data['status'] == InvoiceStatus.PAID else "⚪"
-                    st.markdown(f"### {status_icon} {inv_data['title']}")
+                    # Checkbox für Bulk-Auswahl (nur bei offenen Rechnungen)
+                    if inv_data['status'] == InvoiceStatus.OPEN:
+                        col_check, col_main = st.columns([0.3, 5.7])
+                        with col_check:
+                            is_selected = inv_data['id'] in st.session_state.selected_invoices
+                            if st.checkbox("", key=f"sel_inv_{inv_data['id']}", value=is_selected, label_visibility="collapsed"):
+                                st.session_state.selected_invoices.add(inv_data['id'])
+                            else:
+                                st.session_state.selected_invoices.discard(inv_data['id'])
+                        with col_main:
+                            status_icon = "🔴"
+                            st.markdown(f"### {status_icon} {inv_data['title']}")
+                    else:
+                        status_icon = "✅" if inv_data['status'] == InvoiceStatus.PAID else "⚪"
+                        st.markdown(f"### {status_icon} {inv_data['title']}")
 
                     col_info, col_actions = st.columns([3, 1])
 

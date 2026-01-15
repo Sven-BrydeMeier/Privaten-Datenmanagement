@@ -61,6 +61,7 @@ TREE_NAVIGATION = {
         "items": {
             "Diktierfunktion": "pages/9_🎤_Diktierfunktion.py",
             "Automatisierung": "pages/12_🤖_Automatisierung.py",
+            "Duplikate": "pages/25_🔄_Duplikate.py",
             "Backup": "pages/22_💾_Backup.py",
         }
     },
