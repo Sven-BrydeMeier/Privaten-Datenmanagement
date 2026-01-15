@@ -735,8 +735,6 @@ def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnosti
         ID des erstellten/aktualisierten Diagnose-Eintrags
     """
     try:
-        from sqlalchemy.orm import load_only
-
         with get_db() as session:
             summary = diag.get_summary()
             analysis = diag.get_failure_analysis()
@@ -745,28 +743,8 @@ def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnosti
             # Heartbeat-Verfügbarkeit prüfen
             heartbeat_available = _check_heartbeat_columns_available()
 
-            # Basis-Spalten für load_only (alle außer Heartbeat)
-            base_column_names = [
-                'id', 'user_id', 'connection_id', 'sync_started_at', 'sync_ended_at',
-                'sync_status', 'total_files', 'files_processed', 'files_successful',
-                'files_skipped', 'files_failed', 'duration_seconds', 'last_successful_file',
-                'last_successful_index', 'last_successful_at', 'api_calls_total',
-                'api_calls_failed', 'api_avg_duration_ms', 'api_max_duration_ms',
-                'memory_start_mb', 'memory_end_mb', 'memory_max_mb', 'memory_growth_mb',
-                'possible_causes', 'recommendations', 'error_message', 'error_traceback',
-                'events_log', 'api_calls_log', 'file_operations_log', 'errors_log',
-                'memory_snapshots'
-            ]
-            if heartbeat_available:
-                base_column_names.extend([
-                    'heartbeat_at', 'current_file_name', 'current_file_index',
-                    'current_step', 'current_step_detail'
-                ])
-
             # Prüfen ob bereits ein laufender Eintrag existiert
-            existing = session.query(CloudSyncDiagnostic).options(
-                load_only(*base_column_names)
-            ).filter(
+            existing = session.query(CloudSyncDiagnostic).filter(
                 CloudSyncDiagnostic.user_id == user_id,
                 CloudSyncDiagnostic.connection_id == connection_id,
                 CloudSyncDiagnostic.sync_status == "running"
@@ -1254,41 +1232,11 @@ class CloudSyncService:
         Returns:
             Liste von Diagnose-Berichten
         """
-        from sqlalchemy.orm import load_only
-
-        # Basis-Spalten die immer existieren
-        base_columns = [
-            CloudSyncDiagnostic.id, CloudSyncDiagnostic.user_id,
-            CloudSyncDiagnostic.connection_id, CloudSyncDiagnostic.sync_started_at,
-            CloudSyncDiagnostic.sync_ended_at, CloudSyncDiagnostic.sync_status,
-            CloudSyncDiagnostic.total_files, CloudSyncDiagnostic.files_processed,
-            CloudSyncDiagnostic.files_successful, CloudSyncDiagnostic.files_skipped,
-            CloudSyncDiagnostic.files_failed, CloudSyncDiagnostic.duration_seconds,
-            CloudSyncDiagnostic.last_successful_file, CloudSyncDiagnostic.last_successful_index,
-            CloudSyncDiagnostic.last_successful_at, CloudSyncDiagnostic.api_calls_total,
-            CloudSyncDiagnostic.api_calls_failed, CloudSyncDiagnostic.api_avg_duration_ms,
-            CloudSyncDiagnostic.api_max_duration_ms, CloudSyncDiagnostic.memory_start_mb,
-            CloudSyncDiagnostic.memory_end_mb, CloudSyncDiagnostic.memory_max_mb,
-            CloudSyncDiagnostic.memory_growth_mb, CloudSyncDiagnostic.possible_causes,
-            CloudSyncDiagnostic.recommendations, CloudSyncDiagnostic.error_message,
-            CloudSyncDiagnostic.error_traceback, CloudSyncDiagnostic.events_log,
-            CloudSyncDiagnostic.api_calls_log, CloudSyncDiagnostic.file_operations_log,
-            CloudSyncDiagnostic.errors_log, CloudSyncDiagnostic.memory_snapshots,
-        ]
-
         # Heartbeat-Spalten nur wenn verfügbar hinzufügen
         heartbeat_available = _check_heartbeat_columns_available()
-        if heartbeat_available:
-            base_columns.extend([
-                CloudSyncDiagnostic.heartbeat_at, CloudSyncDiagnostic.current_file_name,
-                CloudSyncDiagnostic.current_file_index, CloudSyncDiagnostic.current_step,
-                CloudSyncDiagnostic.current_step_detail
-            ])
 
         with get_db() as session:
-            query = session.query(CloudSyncDiagnostic).options(
-                load_only(*[c.key for c in base_columns])
-            ).filter(
+            query = session.query(CloudSyncDiagnostic).filter(
                 CloudSyncDiagnostic.user_id == self.user_id
             )
 
