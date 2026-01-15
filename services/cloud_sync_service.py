@@ -631,6 +631,51 @@ def aggressive_memory_cleanup(light_mode: bool = False, force_cache_clear: bool 
 
 
 
+def update_heartbeat(user_id: int, connection_id: int, current_file: str = None,
+                     current_index: int = None, current_step: str = None,
+                     step_detail: str = None) -> bool:
+    """
+    Schnelles Heartbeat-Update für laufende Syncs.
+    Wird alle 5-10 Sekunden aufgerufen um zu zeigen, dass der Prozess noch läuft.
+
+    Args:
+        user_id: Benutzer-ID
+        connection_id: Cloud-Verbindungs-ID
+        current_file: Name der aktuell verarbeiteten Datei
+        current_index: Index der aktuellen Datei
+        current_step: Aktueller Schritt (downloading, ocr, analyzing, etc.)
+        step_detail: Details zum aktuellen Schritt
+
+    Returns:
+        True wenn erfolgreich, False bei Fehler
+    """
+    try:
+        with get_db() as session:
+            # Finde laufenden Diagnose-Eintrag
+            diag_entry = session.query(CloudSyncDiagnostic).filter(
+                CloudSyncDiagnostic.user_id == user_id,
+                CloudSyncDiagnostic.connection_id == connection_id,
+                CloudSyncDiagnostic.sync_status == "running"
+            ).first()
+
+            if diag_entry:
+                diag_entry.heartbeat_at = datetime.now()
+                if current_file:
+                    diag_entry.current_file_name = current_file[:500]
+                if current_index is not None:
+                    diag_entry.current_file_index = current_index
+                if current_step:
+                    diag_entry.current_step = current_step[:100]
+                if step_detail:
+                    diag_entry.current_step_detail = step_detail[:1000]
+                session.commit()
+                return True
+        return False
+    except Exception as e:
+        logger.warning(f"[HEARTBEAT] Update fehlgeschlagen: {e}")
+        return False
+
+
 def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnostics',
                           status: str = "running", error_message: str = None,
                           error_traceback: str = None) -> Optional[int]:
@@ -691,6 +736,11 @@ def save_diagnostic_to_db(user_id: int, connection_id: int, diag: 'SyncDiagnosti
             diag_entry.last_successful_index = diag.current_file_index - 1 if diag.current_file_index > 0 else None
             if diag.last_successful_time:
                 diag_entry.last_successful_at = diag.last_successful_time
+
+            # Heartbeat und aktueller Status
+            diag_entry.heartbeat_at = datetime.now()
+            diag_entry.current_file_index = diag.current_file_index
+            # current_file_name und current_step werden über update_heartbeat separat gesetzt
 
             # API-Statistiken
             diag_entry.api_calls_total = summary.get("api_calls_total", 0)
@@ -2469,6 +2519,9 @@ class CloudSyncService:
         import time
         start_time = time.time()
 
+        # Speichere connection_id für Heartbeat-Updates in Unterfunktionen
+        self._current_connection_id = connection_id
+
         # Diagnose-System initialisieren
         diag = None
         if enable_diagnostics:
@@ -2823,6 +2876,16 @@ class CloudSyncService:
                     # Status: Download startet
                     result["current_step"] = "downloading"
                     result["current_step_detail"] = f"Lade {file_info.get('name')} herunter..."
+
+                    # HEARTBEAT: Aktuellen Verarbeitungsstand in DB speichern
+                    update_heartbeat(
+                        self.user_id, connection_id,
+                        current_file=file_info.get('name'),
+                        current_index=idx,
+                        current_step="downloading",
+                        step_detail=f"Lade herunter: {file_info.get('name')} ({file_info.get('size', 0)} Bytes)"
+                    )
+
                     if diag:
                         diag.log_event("file_start",
                                        f"Starte Datei {idx+1}/{result['files_total']}: {file_info.get('name')}",
@@ -3856,6 +3919,18 @@ class CloudSyncService:
             "detail": f"🔍 Starte Texterkennung (OCR)..."
         })
 
+        # HEARTBEAT: OCR-Start in DB vermerken
+        try:
+            from services.cloud_sync_service import update_heartbeat
+            update_heartbeat(
+                self.user_id, getattr(self, '_current_connection_id', None),
+                current_file=filename,
+                current_step="ocr",
+                step_detail=f"OCR startet für: {filename}"
+            )
+        except:
+            pass  # Heartbeat ist optional
+
         # Prüfe Cache für OCR-Ergebnis
         cached_ocr = None
         if cache and content_hash:
@@ -3920,6 +3995,16 @@ class CloudSyncService:
                             "step": "ocr_complete",
                             "detail": f"✅ OCR abgeschlossen: {text_length:,} Zeichen extrahiert"
                         })
+
+                        # HEARTBEAT: PDF-OCR fertig
+                        try:
+                            update_heartbeat(
+                                self.user_id, getattr(self, '_current_connection_id', None),
+                                current_step="ocr_complete",
+                                step_detail=f"PDF-OCR fertig: {text_length:,} Zeichen aus {filename}"
+                            )
+                        except:
+                            pass
 
                     elif mime_type.startswith("image/"):
                         processing_steps.append({

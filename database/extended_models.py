@@ -839,6 +839,13 @@ class CloudSyncDiagnostic(Base):
     last_successful_index = Column(Integer)
     last_successful_at = Column(DateTime)
 
+    # Heartbeat und aktueller Status (für Hänger-Erkennung)
+    heartbeat_at = Column(DateTime)  # Letztes Lebenszeichen
+    current_file_name = Column(String(500))  # Aktuell verarbeitete Datei
+    current_file_index = Column(Integer)  # Index der aktuellen Datei
+    current_step = Column(String(100))  # Aktueller Schritt (downloading, ocr, analyzing)
+    current_step_detail = Column(Text)  # Detail zum aktuellen Schritt
+
     # API-Statistiken
     api_calls_total = Column(Integer, default=0)
     api_calls_failed = Column(Integer, default=0)

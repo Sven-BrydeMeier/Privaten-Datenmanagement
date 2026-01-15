@@ -164,12 +164,49 @@ with tab_name:
 
                 duplicates = {k: v for k, v in name_groups.items() if len(v) > 1}
                 st.session_state.name_duplicates = duplicates
+                # Reset selection when searching
+                st.session_state.name_selected_for_delete = set()
+
+    # Initialisiere Selection State
+    if 'name_selected_for_delete' not in st.session_state:
+        st.session_state.name_selected_for_delete = set()
 
     if 'name_duplicates' in st.session_state:
         duplicates = st.session_state.name_duplicates
 
         if duplicates:
-            st.warning(f"**{len(duplicates)} Dateinamen** kommen mehrfach vor")
+            total_dups = sum(len(v) - 1 for v in duplicates.values())
+            st.warning(f"**{len(duplicates)} Dateinamen** kommen mehrfach vor ({total_dups} überschüssige Dateien)")
+
+            # Bulk-Aktionen oben
+            col_select, col_delete = st.columns([1, 1])
+            with col_select:
+                if st.button("☑️ Alle Duplikate auswählen", key="select_all_name", use_container_width=True):
+                    for name, docs in duplicates.items():
+                        for doc in docs[1:]:  # Alle außer dem ersten (Original)
+                            st.session_state.name_selected_for_delete.add(doc['id'])
+                    st.rerun()
+
+            with col_delete:
+                selected_count = len(st.session_state.name_selected_for_delete)
+                if selected_count > 0:
+                    if st.button(f"🗑️ {selected_count} Duplikate löschen", key="bulk_del_name", type="primary", use_container_width=True):
+                        with get_db() as session:
+                            deleted = 0
+                            for doc_id in st.session_state.name_selected_for_delete:
+                                doc = session.get(Document, doc_id)
+                                if doc:
+                                    doc.is_deleted = True
+                                    deleted += 1
+                            session.commit()
+                        st.success(f"✅ {deleted} Duplikate gelöscht!")
+                        st.session_state.name_selected_for_delete = set()
+                        del st.session_state.name_duplicates
+                        st.rerun()
+                else:
+                    st.button("🗑️ Keine ausgewählt", key="no_sel_name", disabled=True, use_container_width=True)
+
+            st.markdown("---")
 
             for name, docs in list(duplicates.items())[:30]:
                 with st.expander(f"📄 '{name}' ({len(docs)}x)", expanded=False):
@@ -182,11 +219,22 @@ with tab_name:
                     else:
                         st.info("ℹ️ Kein Hash verfügbar")
 
-                    for doc in docs:
-                        col_info, col_hash, col_action = st.columns([4, 2, 1])
+                    for i, doc in enumerate(docs):
+                        col_check, col_info, col_hash = st.columns([0.5, 4, 2])
+
+                        with col_check:
+                            if i == 0:
+                                st.markdown("✅")  # Original behalten
+                            else:
+                                is_selected = doc['id'] in st.session_state.name_selected_for_delete
+                                if st.checkbox("", key=f"sel_name_{doc['id']}", value=is_selected, label_visibility="collapsed"):
+                                    st.session_state.name_selected_for_delete.add(doc['id'])
+                                else:
+                                    st.session_state.name_selected_for_delete.discard(doc['id'])
 
                         with col_info:
-                            st.markdown(f"**{doc['filename']}**")
+                            label = "🏆 **Original behalten**" if i == 0 else "📄 Duplikat"
+                            st.markdown(f"{label}: {doc['filename'][:50]}{'...' if len(doc['filename']) > 50 else ''}")
                             st.caption(f"ID: {doc['id']}")
 
                         with col_hash:
@@ -195,18 +243,8 @@ with tab_name:
                             else:
                                 st.caption("Kein Hash")
 
-                        with col_action:
-                            if st.button("🗑️", key=f"del_name_{doc['id']}", help="Löschen"):
-                                with get_db() as session:
-                                    d = session.get(Document, doc['id'])
-                                    if d:
-                                        d.is_deleted = True
-                                        session.commit()
-                                del st.session_state.name_duplicates
-                                st.rerun()
-
             if len(duplicates) > 30:
-                st.caption(f"... und {len(duplicates) - 30} weitere")
+                st.info(f"Zeige 30 von {len(duplicates)} Gruppen")
         else:
             st.success("✅ Keine Dateinamen-Duplikate gefunden!")
 
