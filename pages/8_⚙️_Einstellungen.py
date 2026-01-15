@@ -884,14 +884,23 @@ with tab_cloud:
                         # Batch-Modus Option - kleinere Batches für Stabilität
                         batch_mode = st.selectbox(
                             "Modus",
-                            options=["batch10", "batch25", "all"],
+                            options=["batch10", "batch25", "batch50", "all"],
                             format_func=lambda x: {
                                 "batch10": "⭐ Batch (10 Dateien)",
                                 "batch25": "Batch (25 Dateien)",
-                                "all": "Alle (kann Timeout verursachen)"
+                                "batch50": "Batch (50 Dateien)",
+                                "all": "⚠️ Alle (RAM-Risiko!)"
                             }.get(x, x),
                             key=f"batch_mode_{conn.id}",
-                            help="Kleinere Batches vermeiden Timeouts bei OCR. Empfohlen: 10 Dateien."
+                            help="Kleinere Batches vermeiden RAM-Probleme. Empfohlen: 10-25 Dateien."
+                        )
+
+                        # Option: Schnell-Import ohne Verarbeitung
+                        fast_import = st.checkbox(
+                            "⚡ Schnell-Import",
+                            value=True,
+                            key=f"fast_import_{conn.id}",
+                            help="Nur importieren, OHNE OCR/KI. Verarbeitung später in 'Dokumentenaufnahme'."
                         )
 
                         action_cols = st.columns(2)
@@ -899,6 +908,7 @@ with tab_cloud:
                             if st.button("🔄", key=f"sync_cloud_{conn.id}", help="Jetzt synchronisieren"):
                                 st.session_state[f"syncing_{conn.id}"] = True
                                 st.session_state[f"batch_mode_{conn.id}_active"] = batch_mode
+                                st.session_state[f"fast_import_{conn.id}_active"] = fast_import
                                 st.rerun()
 
                         with action_cols[1]:
@@ -934,12 +944,20 @@ with tab_cloud:
 
                         # Batch-Parameter ermitteln
                         active_batch_mode = st.session_state.get(f"batch_mode_{conn.id}_active", "batch10")
-                        batch_sizes = {"batch10": 10, "batch25": 25, "all": 0}
+                        batch_sizes = {"batch10": 10, "batch25": 25, "batch50": 50, "all": 0}
                         batch_size = batch_sizes.get(active_batch_mode, 10)
+
+                        # Schnell-Import = keine Verarbeitung während Sync
+                        fast_import = st.session_state.get(f"fast_import_{conn.id}_active", True)
+                        process_docs = not fast_import  # False = nur importieren
+
+                        if fast_import:
+                            st.info("⚡ **Schnell-Import aktiv**: Dateien werden importiert OHNE OCR/KI. Verarbeitung später unter 'Dokumentenaufnahme'.")
 
                         final_result = None
                         for progress in cloud_service.sync_connection_with_progress(
                             conn.id,
+                            process_documents=process_docs,
                             batch_size=batch_size
                         ):
                             final_result = progress
@@ -1235,8 +1253,11 @@ with tab_cloud:
                             prog_status = st.empty()
                             prog_file = st.empty()
 
+                            st.info("⚡ **Schnell-Import**: Dateien werden importiert OHNE OCR/KI. Verarbeitung später unter 'Dokumentenaufnahme'.")
+
                             final = None
-                            for p in cloud_service.sync_connection_with_progress(conn.id):
+                            # Schnell-Import: process_documents=False für stabileren Import
+                            for p in cloud_service.sync_connection_with_progress(conn.id, process_documents=False, batch_size=25):
                                 final = p
                                 phase = p.get("phase", "")
                                 pct = p.get("progress_percent", 0)
