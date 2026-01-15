@@ -171,6 +171,145 @@ def ocr_pdf_in_subprocess(pdf_bytes: bytes, timeout_s: int = 180, target_max_px:
             pass
 
 
+@dataclass
+class PdfTextAnalysis:
+    """Ergebnis der PDF-Textanalyse."""
+    has_embedded_text: bool
+    text_quality: str  # 'excellent', 'good', 'poor', 'none'
+    total_chars: int
+    pages_with_text: int
+    total_pages: int
+    is_searchable: bool  # PDF/A oder searchable PDF
+    texts: List[str] = None  # Extrahierter Text pro Seite
+    recommendation: str = ""  # 'use_embedded', 'ocr_needed', 'ocr_optional'
+
+    def __post_init__(self):
+        if self.texts is None:
+            self.texts = []
+
+
+def analyze_pdf_text_quality(pdf_bytes: bytes) -> PdfTextAnalysis:
+    """
+    Analysiert ob ein PDF bereits eingebetteten Text hat (PDF/A, searchable PDF).
+
+    Prüft:
+    - Ob Text eingebettet ist
+    - Qualität des Textes (Länge, lesbare Zeichen)
+    - Ob OCR nötig ist oder übersprungen werden kann
+
+    Args:
+        pdf_bytes: PDF als Bytes
+
+    Returns:
+        PdfTextAnalysis mit Empfehlung
+    """
+    try:
+        from PyPDF2 import PdfReader
+        from PyPDF2.errors import PdfReadError
+
+        try:
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+        except (PdfReadError, Exception) as e:
+            logger.warning(f"PDF-Analyse fehlgeschlagen: {e}")
+            return PdfTextAnalysis(
+                has_embedded_text=False,
+                text_quality='none',
+                total_chars=0,
+                pages_with_text=0,
+                total_pages=0,
+                is_searchable=False,
+                recommendation='ocr_needed'
+            )
+
+        # Verschlüsseltes PDF
+        if reader.is_encrypted:
+            try:
+                reader.decrypt("")
+            except Exception:
+                return PdfTextAnalysis(
+                    has_embedded_text=False,
+                    text_quality='none',
+                    total_chars=0,
+                    pages_with_text=0,
+                    total_pages=len(reader.pages) if reader.pages else 0,
+                    is_searchable=False,
+                    recommendation='ocr_needed'
+                )
+
+        total_pages = len(reader.pages)
+        texts = []
+        pages_with_good_text = 0
+        total_chars = 0
+
+        for page in reader.pages:
+            try:
+                text = page.extract_text() or ""
+                texts.append(text)
+
+                # Textqualität bewerten
+                char_count = len(text.strip())
+                total_chars += char_count
+
+                # Prüfe ob Text "echt" ist (nicht nur Sonderzeichen/Müll)
+                # Echte Texte haben meist >70% Buchstaben/Zahlen/Leerzeichen
+                if char_count > 50:
+                    readable_chars = sum(1 for c in text if c.isalnum() or c.isspace() or c in '.,;:!?-()[]{}"\'/€$%&@')
+                    readable_ratio = readable_chars / len(text) if text else 0
+
+                    if readable_ratio > 0.7:
+                        pages_with_good_text += 1
+
+            except Exception:
+                texts.append("")
+
+        # Qualitätsbewertung
+        if total_pages == 0:
+            quality = 'none'
+            recommendation = 'ocr_needed'
+        elif pages_with_good_text == total_pages and total_chars > 100:
+            quality = 'excellent'
+            recommendation = 'use_embedded'
+        elif pages_with_good_text >= total_pages * 0.8 and total_chars > 50:
+            quality = 'good'
+            recommendation = 'use_embedded'
+        elif pages_with_good_text > 0:
+            quality = 'poor'
+            recommendation = 'ocr_optional'  # Einige Seiten haben Text
+        else:
+            quality = 'none'
+            recommendation = 'ocr_needed'
+
+        is_searchable = quality in ('excellent', 'good')
+
+        logger.info(
+            f"[PDF-ANALYSE] {total_pages} Seiten, {pages_with_good_text} mit gutem Text, "
+            f"{total_chars} Zeichen, Qualität: {quality}, Empfehlung: {recommendation}"
+        )
+
+        return PdfTextAnalysis(
+            has_embedded_text=pages_with_good_text > 0,
+            text_quality=quality,
+            total_chars=total_chars,
+            pages_with_text=pages_with_good_text,
+            total_pages=total_pages,
+            is_searchable=is_searchable,
+            texts=texts,
+            recommendation=recommendation
+        )
+
+    except Exception as e:
+        logger.error(f"PDF-Analyse Fehler: {e}")
+        return PdfTextAnalysis(
+            has_embedded_text=False,
+            text_quality='none',
+            total_chars=0,
+            pages_with_text=0,
+            total_pages=0,
+            is_searchable=False,
+            recommendation='ocr_needed'
+        )
+
+
 class OCRService:
     """Service für Optical Character Recognition"""
 
@@ -401,74 +540,62 @@ Der Text ist auf Deutsch."""
 
         return response.content[0].text
 
-    def extract_text_from_pdf(self, pdf_bytes: bytes, use_subprocess: bool = True) -> List[Tuple[str, float]]:
+    def extract_text_from_pdf(self, pdf_bytes: bytes, use_subprocess: bool = True,
+                               force_ocr: bool = False) -> List[Tuple[str, float]]:
         """
         Extrahiert Text aus allen Seiten eines PDFs.
 
+        SMART: Prüft zuerst ob PDF bereits eingebetteten Text hat (PDF/A, searchable).
+        Nur wenn nötig wird OCR ausgeführt - spart Zeit und erhält Textqualität.
+
         Args:
             pdf_bytes: PDF als Bytes
-            use_subprocess: OCR in separatem Prozess ausführen für RAM-Isolation (Standard: True)
+            use_subprocess: OCR in separatem Prozess für RAM-Isolation (Standard: True)
+            force_ocr: OCR erzwingen auch bei vorhandenem Text (Standard: False)
 
         Returns:
             Liste von (Text, Konfidenz) pro Seite
         """
-        results = []
+        # 1. SMART-CHECK: Analysiere PDF-Textqualität VOR OCR
+        if not force_ocr:
+            analysis = analyze_pdf_text_quality(pdf_bytes)
 
-        try:
-            from PyPDF2 import PdfReader
-            from PyPDF2.errors import PdfReadError
+            if analysis.recommendation == 'use_embedded':
+                # PDF/A oder searchable PDF - eingebetteter Text ist hochwertig
+                logger.info(
+                    f"[PDF-SMART] ✓ Überspringe OCR - PDF hat bereits {analysis.text_quality} "
+                    f"eingebetteten Text ({analysis.total_chars} Zeichen, {analysis.pages_with_text}/{analysis.total_pages} Seiten)"
+                )
+                # Rückgabe mit Konfidenz 1.0 (eingebetteter Text ist perfekt)
+                return [(text, 1.0) for text in analysis.texts]
 
-            # Erst versuchen, eingebetteten Text zu extrahieren
-            try:
-                reader = PdfReader(io.BytesIO(pdf_bytes))
-            except (PdfReadError, Exception) as pdf_err:
-                # PDF ist beschädigt oder unvollständig - versuche Bild-OCR
-                logger.warning(f"PDF-Lesefehler: {pdf_err}, versuche Bild-OCR...")
-                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
-                if results:
-                    return results
-                # Fallback: Leeres Ergebnis mit Fehlermeldung
-                return [("", 0.0)]
+            elif analysis.recommendation == 'ocr_optional':
+                # Teilweise Text vorhanden - entscheide basierend auf Abdeckung
+                coverage = analysis.pages_with_text / analysis.total_pages if analysis.total_pages > 0 else 0
+                if coverage >= 0.5:
+                    logger.info(
+                        f"[PDF-SMART] ✓ Verwende teilweisen eingebetteten Text "
+                        f"({analysis.pages_with_text}/{analysis.total_pages} Seiten)"
+                    )
+                    # Seiten ohne Text bekommen leeren String - später kann bei Bedarf OCR laufen
+                    return [(text if text.strip() else "", 1.0 if text.strip() else 0.0)
+                            for text in analysis.texts]
+                else:
+                    logger.info(f"[PDF-SMART] → OCR nötig - nur {coverage:.0%} Textabdeckung")
 
-            # Prüfen ob PDF verschlüsselt ist
-            if reader.is_encrypted:
-                try:
-                    # Versuche mit leerem Passwort zu entschlüsseln
-                    reader.decrypt("")
-                except Exception:
-                    # Verschlüsseltes PDF - versuche OCR auf Bilder
-                    logger.info("Verschlüsseltes PDF - verwende Bildverarbeitung...")
-                    results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
-                    return results if results else []
-
-            for page in reader.pages:
-                try:
-                    text = page.extract_text()
-                    if text and len(text.strip()) > 50:
-                        # Eingebetteter Text gefunden
-                        results.append((text, 1.0))
-                    else:
-                        # Kein Text - OCR nötig
-                        results.append(("", 0.0))
-                except Exception:
-                    results.append(("", 0.0))
-
-            # Wenn zu wenig Text gefunden, OCR auf Bilder anwenden
-            if all(conf < 0.5 for _, conf in results) or not results:
-                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
-
-        except Exception as e:
-            # Bei jedem Fehler versuche OCR auf Bilder
-            error_msg = str(e).lower()
-            if "pycryptodome" in error_msg or "aes" in error_msg or "encrypt" in error_msg:
-                st.info("📄 PDF erfordert spezielle Verarbeitung - verwende Bildverarbeitung...")
-                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
             else:
-                st.warning(f"PDF-Verarbeitungsfehler: {e}")
-                # Fallback: Versuche trotzdem OCR
-                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
+                logger.info(f"[PDF-SMART] → OCR nötig - {analysis.recommendation}")
 
-        return results
+        # 2. OCR erforderlich
+        try:
+            results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
+            if results:
+                return results
+        except Exception as e:
+            logger.error(f"OCR fehlgeschlagen: {e}")
+
+        # 3. Fallback: Leere Ergebnisse
+        return [("", 0.0)]
 
     def _safe_ocr_pdf(self, pdf_bytes: bytes, use_subprocess: bool = True) -> List[Tuple[str, float]]:
         """
