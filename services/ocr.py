@@ -5,6 +5,11 @@ import io
 import re
 import base64
 import logging
+import multiprocessing as mp
+import traceback
+import tempfile
+import os
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from PIL import Image
@@ -26,6 +31,144 @@ def get_current_ram_mb() -> float:
 
 # RAM-Schwelle ab der OCR übersprungen wird (OCR braucht ~100MB extra)
 OCR_RAM_LIMIT_MB = 350
+
+
+@dataclass
+class OcrResult:
+    """Ergebnis einer OCR-Operation im Subprocess."""
+    ok: bool
+    results: List[Tuple[str, float]] = None
+    error: str = None
+    tb: str = None
+
+    def __post_init__(self):
+        if self.results is None:
+            self.results = []
+
+
+def _ocr_worker(pdf_path: str, target_max_px: int, out_q: mp.Queue):
+    """
+    Worker-Funktion für OCR in separatem Prozess.
+    Läuft isoliert - wenn der Prozess endet, wird aller RAM freigegeben.
+    """
+    try:
+        results = []
+
+        # PyMuPDF für speichereffiziente PDF-zu-Bild Konvertierung
+        import fitz
+
+        doc = fitz.open(pdf_path)
+
+        for page_num in range(len(doc)):
+            try:
+                page = doc[page_num]
+                rect = page.rect
+
+                # Dynamische Skalierung
+                zoom = target_max_px / max(rect.width, rect.height)
+                zoom = min(zoom, 6.0)
+                zoom = max(zoom, 1.0)
+
+                mat = fitz.Matrix(zoom, zoom).prerotate(page.rotation)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+
+                # Zu PIL Image
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                img_gray = img.convert("L")
+
+                # OCR mit Tesseract (direkt, ohne Service-Wrapper)
+                text, confidence = _tesseract_ocr(img_gray)
+                results.append((text, confidence))
+
+                # Speicher freigeben
+                del pix, img, img_gray
+
+            except Exception as page_error:
+                results.append((f"[Seite {page_num + 1} Fehler: {str(page_error)[:100]}]", 0.0))
+
+        doc.close()
+        out_q.put(OcrResult(ok=True, results=results))
+
+    except Exception as e:
+        out_q.put(OcrResult(ok=False, error=str(e), tb=traceback.format_exc()))
+
+
+def _tesseract_ocr(image: Image.Image, lang: str = 'deu+eng') -> Tuple[str, float]:
+    """Direkte Tesseract-OCR ohne Service-Wrapper (für Subprocess)."""
+    try:
+        import pytesseract
+
+        data = pytesseract.image_to_data(image, lang=lang, output_type=pytesseract.Output.DICT)
+
+        text_parts = []
+        confidences = []
+
+        for i, conf in enumerate(data['conf']):
+            if int(conf) > 0:
+                text_parts.append(data['text'][i])
+                confidences.append(int(conf))
+
+        text = ' '.join(text_parts)
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+
+        return text, avg_confidence / 100.0
+    except Exception:
+        return "", 0.0
+
+
+def ocr_pdf_in_subprocess(pdf_bytes: bytes, timeout_s: int = 180, target_max_px: int = 3000) -> OcrResult:
+    """
+    Führt OCR in einem separaten Subprocess aus.
+
+    Vorteile:
+    - Vollständige RAM-Isolation
+    - Wenn der Prozess endet, gibt das OS allen Speicher frei
+    - Timeout-Schutz gegen hängende OCR-Jobs
+
+    Args:
+        pdf_bytes: PDF als Bytes
+        timeout_s: Timeout in Sekunden (Standard: 180 = 3 Minuten)
+        target_max_px: Maximale Bildgröße
+
+    Returns:
+        OcrResult mit Ergebnissen oder Fehler
+    """
+    # PDF temporär speichern (für Subprocess-Zugriff)
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+        tmp_file.write(pdf_bytes)
+        tmp_path = tmp_file.name
+
+    try:
+        # Spawn-Kontext wichtig für Streamlit (fork kann Probleme machen)
+        ctx = mp.get_context("spawn")
+        q = ctx.Queue()
+        p = ctx.Process(target=_ocr_worker, args=(tmp_path, target_max_px, q), daemon=True)
+
+        logger.info(f"[OCR-SUBPROCESS] Starte OCR-Worker für {len(pdf_bytes)/1024:.1f}KB PDF...")
+        p.start()
+        p.join(timeout_s)
+
+        if p.is_alive():
+            logger.warning(f"[OCR-SUBPROCESS] Timeout nach {timeout_s}s - terminiere Worker")
+            p.terminate()
+            p.join(5)
+            if p.is_alive():
+                p.kill()
+            return OcrResult(ok=False, error=f"OCR Timeout nach {timeout_s}s")
+
+        if q.empty():
+            return OcrResult(ok=False, error="OCR Worker gab kein Ergebnis zurück")
+
+        result = q.get()
+        logger.info(f"[OCR-SUBPROCESS] Fertig - {len(result.results)} Seiten verarbeitet")
+        return result
+
+    finally:
+        # Temporäre Datei aufräumen
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
 
 
 class OCRService:
@@ -258,12 +401,13 @@ Der Text ist auf Deutsch."""
 
         return response.content[0].text
 
-    def extract_text_from_pdf(self, pdf_bytes: bytes) -> List[Tuple[str, float]]:
+    def extract_text_from_pdf(self, pdf_bytes: bytes, use_subprocess: bool = True) -> List[Tuple[str, float]]:
         """
         Extrahiert Text aus allen Seiten eines PDFs.
 
         Args:
             pdf_bytes: PDF als Bytes
+            use_subprocess: OCR in separatem Prozess ausführen für RAM-Isolation (Standard: True)
 
         Returns:
             Liste von (Text, Konfidenz) pro Seite
@@ -280,7 +424,7 @@ Der Text ist auf Deutsch."""
             except (PdfReadError, Exception) as pdf_err:
                 # PDF ist beschädigt oder unvollständig - versuche Bild-OCR
                 logger.warning(f"PDF-Lesefehler: {pdf_err}, versuche Bild-OCR...")
-                results = self._ocr_pdf_images(pdf_bytes)  # Hat internen RAM-Check
+                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
                 if results:
                     return results
                 # Fallback: Leeres Ergebnis mit Fehlermeldung
@@ -294,7 +438,7 @@ Der Text ist auf Deutsch."""
                 except Exception:
                     # Verschlüsseltes PDF - versuche OCR auf Bilder
                     logger.info("Verschlüsseltes PDF - verwende Bildverarbeitung...")
-                    results = self._ocr_pdf_images(pdf_bytes)
+                    results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
                     return results if results else []
 
             for page in reader.pages:
@@ -311,20 +455,55 @@ Der Text ist auf Deutsch."""
 
             # Wenn zu wenig Text gefunden, OCR auf Bilder anwenden
             if all(conf < 0.5 for _, conf in results) or not results:
-                results = self._ocr_pdf_images(pdf_bytes)
+                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
 
         except Exception as e:
             # Bei jedem Fehler versuche OCR auf Bilder
             error_msg = str(e).lower()
             if "pycryptodome" in error_msg or "aes" in error_msg or "encrypt" in error_msg:
                 st.info("📄 PDF erfordert spezielle Verarbeitung - verwende Bildverarbeitung...")
-                results = self._ocr_pdf_images(pdf_bytes)
+                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
             else:
                 st.warning(f"PDF-Verarbeitungsfehler: {e}")
                 # Fallback: Versuche trotzdem OCR
-                results = self._ocr_pdf_images(pdf_bytes)
+                results = self._safe_ocr_pdf(pdf_bytes, use_subprocess)
 
         return results
+
+    def _safe_ocr_pdf(self, pdf_bytes: bytes, use_subprocess: bool = True) -> List[Tuple[str, float]]:
+        """
+        Wrapper für OCR mit Subprocess-Option für RAM-Isolation.
+
+        Bei use_subprocess=True wird OCR in separatem Prozess ausgeführt.
+        Der gesamte RAM wird automatisch freigegeben wenn der Prozess endet.
+
+        Args:
+            pdf_bytes: PDF als Bytes
+            use_subprocess: Subprocess für RAM-Isolation verwenden
+
+        Returns:
+            Liste von (Text, Konfidenz) pro Seite
+        """
+        if use_subprocess:
+            try:
+                logger.info(f"[OCR] Verwende Subprocess für RAM-Isolation ({len(pdf_bytes)/1024:.1f}KB PDF)")
+                result = ocr_pdf_in_subprocess(pdf_bytes)
+
+                if result.ok:
+                    return result.results
+                else:
+                    logger.warning(f"[OCR-SUBPROCESS] Fehler: {result.error}")
+                    if result.tb:
+                        logger.debug(f"Traceback: {result.tb}")
+                    # Fallback auf direkten OCR wenn Subprocess fehlschlägt
+                    logger.info("[OCR] Fallback auf direkten OCR...")
+                    return self._ocr_pdf_images(pdf_bytes)
+
+            except Exception as e:
+                logger.warning(f"[OCR-SUBPROCESS] Exception: {e}, Fallback auf direkten OCR")
+                return self._ocr_pdf_images(pdf_bytes)
+        else:
+            return self._ocr_pdf_images(pdf_bytes)
 
     def _ocr_pdf_images(self, pdf_bytes: bytes, target_max_px: int = 3000) -> List[Tuple[str, float]]:
         """
