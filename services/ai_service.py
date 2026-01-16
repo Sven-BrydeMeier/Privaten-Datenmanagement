@@ -3,12 +3,15 @@ KI-Service für intelligente Dokumentenverarbeitung
 Unterstützt OpenAI (GPT) und Anthropic (Claude)
 """
 import json
+import logging
 import re
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import streamlit as st
 
 from config.settings import get_settings, get_api_key
+
+logger = logging.getLogger(__name__)
 
 
 class AIService:
