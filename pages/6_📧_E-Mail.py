@@ -372,12 +372,12 @@ else:
                 if st.button(
                     f"{icon} {sig['name']} {enabled}",
                     key=f"sig_{sig['id']}",
-                    use_container_width=True
+                    width="stretch"
                 ):
                     st.session_state.edit_signature_id = sig['id']
 
             st.divider()
-            if st.button("➕ Neue Signatur", use_container_width=True):
+            if st.button("➕ Neue Signatur", width="stretch"):
                 st.session_state.edit_signature_id = "new"
 
         with col_edit:
@@ -489,12 +489,12 @@ else:
                     if st.button(
                         f"{enabled} {rule.name} (P:{rule.priority})",
                         key=f"rule_{rule.id}",
-                        use_container_width=True
+                        width="stretch"
                     ):
                         st.session_state.edit_rule_id = rule.id
 
             st.divider()
-            if st.button("➕ Neue Regel", use_container_width=True):
+            if st.button("➕ Neue Regel", width="stretch"):
                 st.session_state.edit_rule_id = "new"
 
         with col_edit:

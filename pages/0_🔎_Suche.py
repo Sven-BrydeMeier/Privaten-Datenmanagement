@@ -273,11 +273,11 @@ if search_terms:
                             st.write(f"**Betrag:** {format_currency(doc['invoice_amount'])}")
 
                     with card_cols[2]:
-                        if st.button("Öffnen", key=f"k_view_{doc['id']}", use_container_width=True):
+                        if st.button("Öffnen", key=f"k_view_{doc['id']}", width="stretch"):
                             st.session_state.view_document_id = doc['id']
                             st.switch_page("pages/3_📁_Dokumente.py")
 
-                        if st.button("Senden", key=f"k_send_{doc['id']}", use_container_width=True):
+                        if st.button("Senden", key=f"k_send_{doc['id']}", width="stretch"):
                             st.session_state.email_document_id = doc['id']
                             st.switch_page("pages/6_📧_E-Mail.py")
 

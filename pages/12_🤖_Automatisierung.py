@@ -79,7 +79,7 @@ with tab_overview:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button("🔄 Geplante Aufgaben ausführen", type="primary", use_container_width=True):
+        if st.button("🔄 Geplante Aufgaben ausführen", type="primary", width="stretch"):
             with st.spinner("Führe geplante Aufgaben aus..."):
                 result = automation_service.run_scheduled_tasks(user_id)
                 if result.get("success"):
@@ -94,7 +94,7 @@ with tab_overview:
                     st.error(f"❌ {result.get('error')}")
 
     with col2:
-        if st.button("📊 Alle neuen Dokumente verarbeiten", use_container_width=True):
+        if st.button("📊 Alle neuen Dokumente verarbeiten", width="stretch"):
             with st.spinner("Verarbeite neue Dokumente..."):
                 # Unverarbeitete Dokumente laden
                 with get_db() as session:
@@ -116,7 +116,7 @@ with tab_overview:
                 st.rerun()
 
     with col3:
-        if st.button("🔔 Alle Benachrichtigungen als gelesen markieren", use_container_width=True):
+        if st.button("🔔 Alle Benachrichtigungen als gelesen markieren", width="stretch"):
             with get_db() as session:
                 notifications = session.query(Notification).filter(
                     Notification.user_id == user_id,

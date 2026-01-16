@@ -69,7 +69,7 @@ def render_inline_preview(doc: dict, user_id: int):
                                 import pandas as pd
                                 excel_file = io.BytesIO(file_data)
                                 df = pd.read_excel(excel_file)
-                                st.dataframe(df.head(20), use_container_width=True, height=300)
+                                st.dataframe(df.head(20), width="stretch", height=300)
                                 st.caption(f"📊 {len(df)} Zeilen (Vorschau: erste 20)")
                             except Exception as e:
                                 st.warning(f"Excel-Vorschau nicht möglich: {e}")
@@ -91,7 +91,7 @@ def render_inline_preview(doc: dict, user_id: int):
                         elif mime_type.startswith('image/') or filename_lower.endswith((".jpg", ".jpeg", ".png", ".gif")):
                             from PIL import Image
                             img = Image.open(io.BytesIO(file_data))
-                            st.image(img, use_container_width=True)
+                            st.image(img, width="stretch")
 
                         else:
                             st.info(f"Vorschau für {mime_type or 'dieses Format'} nicht verfügbar")
@@ -388,7 +388,7 @@ with col_folders:
             })
 
     # "Alle Dokumente" Option
-    if st.button("📄 Alle Dokumente", use_container_width=True,
+    if st.button("📄 Alle Dokumente", width="stretch",
                  type="primary" if current_folder_id is None else "secondary"):
         st.session_state.current_folder_id = None
         st.rerun()
@@ -413,7 +413,7 @@ with col_folders:
 
         is_selected = current_folder_id == folder['id']
         if st.button(f"{icon} {folder['name']} ({folder['count']})",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary" if is_selected else "secondary",
                     key=f"folder_{folder['id']}"):
             st.session_state.current_folder_id = folder['id']
@@ -424,7 +424,7 @@ with col_folders:
             if sub['count'] == 0:
                 continue  # Leere Unterordner überspringen
             if st.button(f"  └ {sub['name']} ({sub['count']})",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"folder_{sub['id']}"):
                 st.session_state.current_folder_id = sub['id']
                 st.rerun()
@@ -1040,7 +1040,7 @@ if 'view_document_id' in st.session_state:
                                 selected_sheet = sheet_names[0]
 
                             df = pd.read_excel(excel_file, sheet_name=selected_sheet)
-                            st.dataframe(df, use_container_width=True, height=500)
+                            st.dataframe(df, width="stretch", height=500)
                             st.caption(f"📊 {len(df)} Zeilen × {len(df.columns)} Spalten")
                         except Exception as excel_err:
                             st.warning(f"Excel-Vorschau nicht möglich: {excel_err}")
@@ -1092,7 +1092,7 @@ if 'view_document_id' in st.session_state:
                     elif mime_type.startswith('image/') or filename_lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
                         from PIL import Image
                         img = Image.open(io.BytesIO(file_data))
-                        st.image(img, use_container_width=True)
+                        st.image(img, width="stretch")
 
                     # Textdateien
                     elif mime_type.startswith("text/") or filename_lower.endswith((".txt", ".csv", ".json", ".xml")):
@@ -1101,7 +1101,7 @@ if 'view_document_id' in st.session_state:
                             if filename_lower.endswith('.csv'):
                                 import pandas as pd
                                 df = pd.read_csv(io.StringIO(text_content))
-                                st.dataframe(df, use_container_width=True, height=500)
+                                st.dataframe(df, width="stretch", height=500)
                             else:
                                 st.code(text_content, language=None)
                         except:
@@ -1275,7 +1275,7 @@ if 'view_document_id' in st.session_state:
         with tts_col2:
             tts_speed = st.slider("Tempo", 0.5, 2.0, tts_settings.tts_speed, 0.1, key="tts_speed_select")
 
-        if st.button("🔊 Dokument vorlesen", use_container_width=True, type="primary"):
+        if st.button("🔊 Dokument vorlesen", width="stretch", type="primary"):
             if not tts_settings.openai_api_key:
                 if tts_settings.tts_use_browser:
                     # Browser-TTS als Fallback
@@ -1302,7 +1302,7 @@ if 'view_document_id' in st.session_state:
         with col_act1:
             # In Aktentasche
             st.markdown("**📋 Aktentasche**")
-            if st.button("📋 In Aktentasche legen", use_container_width=True):
+            if st.button("📋 In Aktentasche legen", width="stretch"):
                 if 'active_cart_items' not in st.session_state:
                     st.session_state.active_cart_items = []
                 if doc_id not in st.session_state.active_cart_items:
@@ -1330,7 +1330,7 @@ if 'view_document_id' in st.session_state:
 
             col_mv, col_cp = st.columns(2)
             with col_mv:
-                if st.button("📂 Verschieben", use_container_width=True):
+                if st.button("📂 Verschieben", width="stretch"):
                     with get_db() as session:
                         doc = session.get(Document, doc_id)
                         if doc:
@@ -1343,7 +1343,7 @@ if 'view_document_id' in st.session_state:
                             st.success(f"✅ Verschoben nach '{target_name}'!")
                             st.rerun()
             with col_cp:
-                if st.button("📄 Kopieren", use_container_width=True):
+                if st.button("📄 Kopieren", width="stretch"):
                     st.info("Dokument wird in Zielordner kopiert (Referenz)")
 
         with col_act2:

@@ -282,7 +282,7 @@ with st.sidebar:
         # Für Einzeldokument: spezifische Aktionen
         if selected_scope == "single" and st.session_state.selected_doc_id:
             with col1:
-                if st.button("📝 Zusammenfassung", use_container_width=True):
+                if st.button("📝 Zusammenfassung", width="stretch"):
                     with st.spinner("Erstelle Zusammenfassung..."):
                         result = chat_service.get_quick_summary(st.session_state.selected_doc_id, user_id)
                         if result.get("success"):
@@ -292,7 +292,7 @@ with st.sidebar:
                             st.error(result.get("error"))
 
             with col2:
-                if st.button("✅ Aktionen", use_container_width=True):
+                if st.button("✅ Aktionen", width="stretch"):
                     with st.spinner("Analysiere Handlungsbedarf..."):
                         result = chat_service.extract_action_items(st.session_state.selected_doc_id, user_id)
                         if result.get("success"):
@@ -307,14 +307,14 @@ with st.sidebar:
 
             act_col1, act_col2 = st.columns(2)
             with act_col1:
-                if st.button("📝 Kündigung", use_container_width=True, help="Kündigungsschreiben vorbereiten"):
+                if st.button("📝 Kündigung", width="stretch", help="Kündigungsschreiben vorbereiten"):
                     st.session_state.pending_action = {
                         "type": "cancellation",
                         "doc_id": st.session_state.selected_doc_id
                     }
                     st.rerun()
             with act_col2:
-                if st.button("⚖️ Widerspruch", use_container_width=True, help="Widerspruchsschreiben erstellen"):
+                if st.button("⚖️ Widerspruch", width="stretch", help="Widerspruchsschreiben erstellen"):
                     st.session_state.pending_action = {
                         "type": "objection",
                         "doc_id": st.session_state.selected_doc_id
@@ -323,14 +323,14 @@ with st.sidebar:
 
             act_col3, act_col4 = st.columns(2)
             with act_col3:
-                if st.button("📋 Reklamation", use_container_width=True, help="Reklamation verfassen"):
+                if st.button("📋 Reklamation", width="stretch", help="Reklamation verfassen"):
                     st.session_state.pending_action = {
                         "type": "complaint",
                         "doc_id": st.session_state.selected_doc_id
                     }
                     st.rerun()
             with act_col4:
-                if st.button("🏦 SEPA-Widerruf", use_container_width=True, help="Lastschrift widerrufen"):
+                if st.button("🏦 SEPA-Widerruf", width="stretch", help="Lastschrift widerrufen"):
                     st.session_state.pending_action = {
                         "type": "sepa_revoke",
                         "doc_id": st.session_state.selected_doc_id
@@ -456,7 +456,7 @@ if st.session_state.chat_scope_ids:
     col_send, col_clear = st.columns([3, 1])
 
     with col_send:
-        if st.button("📤 Senden", type="primary", use_container_width=True, disabled=not user_input):
+        if st.button("📤 Senden", type="primary", width="stretch", disabled=not user_input):
             if user_input:
                 with st.spinner("Analysiere..." if scope == "single" else f"Analysiere {len(scope_ids)} Dokumente..."):
                     # Für Multi-Dokument: document_ids übergeben
@@ -483,7 +483,7 @@ if st.session_state.chat_scope_ids:
                         st.error(f"❌ {result.get('error')}")
 
     with col_clear:
-        if st.button("🗑️ Chat leeren", use_container_width=True):
+        if st.button("🗑️ Chat leeren", width="stretch"):
             st.session_state.chat_history = []
             st.rerun()
 
@@ -504,7 +504,7 @@ if st.session_state.chat_scope_ids:
         q3 = ("📅 Fristen", "Welche wichtigen Fristen oder Termine muss ich beachten?")
 
     with col1:
-        if st.button(q1[0], use_container_width=True):
+        if st.button(q1[0], width="stretch"):
             with st.spinner("..."):
                 if scope == "single":
                     result = chat_service.chat(
@@ -521,7 +521,7 @@ if st.session_state.chat_scope_ids:
                     st.rerun()
 
     with col2:
-        if st.button(q2[0], use_container_width=True):
+        if st.button(q2[0], width="stretch"):
             with st.spinner("..."):
                 if scope == "single":
                     result = chat_service.chat(
@@ -538,7 +538,7 @@ if st.session_state.chat_scope_ids:
                     st.rerun()
 
     with col3:
-        if st.button(q3[0], use_container_width=True):
+        if st.button(q3[0], width="stretch"):
             with st.spinner("..."):
                 if scope == "single":
                     result = chat_service.chat(
@@ -586,7 +586,7 @@ if st.session_state.pending_action:
     col_gen, col_cancel = st.columns(2)
 
     with col_gen:
-        if st.button("📝 Schreiben generieren", type="primary", use_container_width=True):
+        if st.button("📝 Schreiben generieren", type="primary", width="stretch"):
             user_data = {
                 "absender_name": absender_name,
                 "absender_adresse": absender_adresse,
@@ -604,7 +604,7 @@ if st.session_state.pending_action:
                     st.error(f"❌ Fehler: {result.get('error')}")
 
     with col_cancel:
-        if st.button("❌ Abbrechen", use_container_width=True):
+        if st.button("❌ Abbrechen", width="stretch"):
             st.session_state.pending_action = None
             st.rerun()
 
@@ -645,24 +645,24 @@ if st.session_state.generated_letter:
             data=letter_content,
             file_name=f"{letter.get('template_name', 'Schreiben').replace(' ', '_')}.txt",
             mime="text/plain",
-            use_container_width=True
+            width="stretch"
         )
 
     with action_col2:
         # Per E-Mail senden
-        if st.button("📧 Per E-Mail senden", use_container_width=True):
+        if st.button("📧 Per E-Mail senden", width="stretch"):
             st.session_state.show_email_dialog = True
             st.rerun()
 
     with action_col3:
         # In Dokumente speichern
-        if st.button("💾 Als Dokument speichern", use_container_width=True):
+        if st.button("💾 Als Dokument speichern", width="stretch"):
             # Hier könnte man das Schreiben als neues Dokument speichern
             st.info("Diese Funktion wird noch implementiert.")
 
     with action_col4:
         # Schließen
-        if st.button("✖️ Schließen", use_container_width=True):
+        if st.button("✖️ Schließen", width="stretch"):
             st.session_state.generated_letter = None
             st.session_state.pending_action = None
             st.rerun()
@@ -682,7 +682,7 @@ if st.session_state.generated_letter:
         email_col1, email_col2 = st.columns(2)
 
         with email_col1:
-            if st.button("📤 Senden", type="primary", use_container_width=True):
+            if st.button("📤 Senden", type="primary", width="stretch"):
                 if email_to:
                     try:
                         from utils.helpers import send_email
@@ -711,7 +711,7 @@ if st.session_state.generated_letter:
                     st.warning("Bitte Empfänger-E-Mail eingeben.")
 
         with email_col2:
-            if st.button("❌ Abbrechen", key="cancel_email", use_container_width=True):
+            if st.button("❌ Abbrechen", key="cancel_email", width="stretch"):
                 st.session_state.show_email_dialog = False
                 st.rerun()
 

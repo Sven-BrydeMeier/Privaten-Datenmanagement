@@ -308,7 +308,7 @@ with tab_add:
         )
 
         submit_label = "💾 Änderungen speichern" if edit_mode else "➕ Immobilie hinzufügen"
-        submitted = st.form_submit_button(submit_label, type="primary", use_container_width=True)
+        submitted = st.form_submit_button(submit_label, type="primary", width="stretch")
 
         if submitted:
             if not name or not street or not postal_code or not city:
@@ -553,7 +553,7 @@ with tab_docs:
                                                     excel_file = io.BytesIO(file_data)
                                                     xl = pd.ExcelFile(excel_file)
                                                     df = pd.read_excel(excel_file, sheet_name=xl.sheet_names[0])
-                                                    st.dataframe(df, use_container_width=True, height=350)
+                                                    st.dataframe(df, width="stretch", height=350)
                                                     st.caption(f"📊 {len(df)} Zeilen × {len(df.columns)} Spalten | Blatt: {xl.sheet_names[0]}")
                                                 except Exception as e:
                                                     st.warning(f"Excel-Vorschau nicht möglich: {e}")
@@ -583,7 +583,7 @@ with tab_docs:
                                                 from PIL import Image
                                                 import io
                                                 img = Image.open(io.BytesIO(file_data))
-                                                st.image(img, use_container_width=True)
+                                                st.image(img, width="stretch")
 
                                             # Textdateien
                                             elif filename_lower.endswith((".txt", ".csv", ".json", ".xml")):
@@ -627,14 +627,14 @@ with tab_docs:
                                                 data=dl_data,
                                                 file_name=doc.filename,
                                                 mime=doc.mime_type or "application/octet-stream",
-                                                use_container_width=True,
+                                                width="stretch",
                                                 key=f"dl_{doc.id}"
                                             )
                                     except:
                                         pass
 
                                 # Aktentasche
-                                if st.button("📋 Aktentasche", key=f"cart2_{doc.id}", use_container_width=True):
+                                if st.button("📋 Aktentasche", key=f"cart2_{doc.id}", width="stretch"):
                                     if 'active_cart_items' not in st.session_state:
                                         st.session_state.active_cart_items = []
                                     if doc.id not in st.session_state.active_cart_items:
@@ -647,7 +647,7 @@ with tab_docs:
                                 render_share_buttons(doc.title or doc.filename, share_text, key_prefix=f"share_{doc.id}")
 
                                 # Drucken
-                                if st.button("🖨️ Drucken", key=f"print_{doc.id}", use_container_width=True):
+                                if st.button("🖨️ Drucken", key=f"print_{doc.id}", width="stretch"):
                                     st.markdown("<script>window.print();</script>", unsafe_allow_html=True)
 
                     st.divider()
@@ -668,7 +668,7 @@ if st.session_state.get('delete_property_id'):
             col_confirm, col_cancel = st.columns(2)
 
             with col_confirm:
-                if st.button("🗑️ Ja, löschen", type="primary", use_container_width=True):
+                if st.button("🗑️ Ja, löschen", type="primary", width="stretch"):
                     # Dokumente von Immobilie trennen
                     session.query(Document).filter(
                         Document.property_id == prop.id
@@ -682,6 +682,6 @@ if st.session_state.get('delete_property_id'):
                     st.rerun()
 
             with col_cancel:
-                if st.button("❌ Abbrechen", use_container_width=True):
+                if st.button("❌ Abbrechen", width="stretch"):
                     del st.session_state.delete_property_id
                     st.rerun()

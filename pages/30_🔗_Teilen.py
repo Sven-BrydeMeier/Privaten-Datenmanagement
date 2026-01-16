@@ -94,7 +94,7 @@ else:
                             file_name=doc.filename,
                             mime=doc.mime_type or "application/octet-stream",
                             type="primary",
-                            use_container_width=True
+                            width="stretch"
                         )
 
                         # Vorschau für PDFs und Bilder
@@ -114,7 +114,7 @@ else:
                             from PIL import Image
                             import io
                             img = Image.open(io.BytesIO(file_data))
-                            st.image(img, use_container_width=True)
+                            st.image(img, width="stretch")
                         else:
                             st.info(f"Vorschau für {mime_type or 'dieses Format'} nicht verfügbar. Bitte herunterladen.")
                     else:

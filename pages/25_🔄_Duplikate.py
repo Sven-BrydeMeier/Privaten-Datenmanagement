@@ -75,7 +75,7 @@ with tab_hash:
             # Bulk-Aktionen oben
             col_select, col_delete = st.columns([1, 1])
             with col_select:
-                if st.button("☑️ Alle Duplikate auswählen", use_container_width=True):
+                if st.button("☑️ Alle Duplikate auswählen", width="stretch"):
                     for hash_val, docs in duplicates.items():
                         for doc in docs[1:]:  # Alle außer dem ersten (Original)
                             st.session_state.selected_for_delete.add(doc['id'])
@@ -84,7 +84,7 @@ with tab_hash:
             with col_delete:
                 selected_count = len(st.session_state.selected_for_delete)
                 if selected_count > 0:
-                    if st.button(f"🗑️ {selected_count} Duplikate löschen", type="primary", use_container_width=True):
+                    if st.button(f"🗑️ {selected_count} Duplikate löschen", type="primary", width="stretch"):
                         with get_db() as session:
                             deleted = 0
                             for doc_id in st.session_state.selected_for_delete:
@@ -98,7 +98,7 @@ with tab_hash:
                         del st.session_state.hash_duplicates
                         st.rerun()
                 else:
-                    st.button("🗑️ Keine ausgewählt", disabled=True, use_container_width=True)
+                    st.button("🗑️ Keine ausgewählt", disabled=True, width="stretch")
 
             st.markdown("---")
 
@@ -181,7 +181,7 @@ with tab_name:
             # Bulk-Aktionen oben
             col_select, col_delete = st.columns([1, 1])
             with col_select:
-                if st.button("☑️ Alle Duplikate auswählen", key="select_all_name", use_container_width=True):
+                if st.button("☑️ Alle Duplikate auswählen", key="select_all_name", width="stretch"):
                     for name, docs in duplicates.items():
                         for doc in docs[1:]:  # Alle außer dem ersten (Original)
                             st.session_state.name_selected_for_delete.add(doc['id'])
@@ -190,7 +190,7 @@ with tab_name:
             with col_delete:
                 selected_count = len(st.session_state.name_selected_for_delete)
                 if selected_count > 0:
-                    if st.button(f"🗑️ {selected_count} Duplikate löschen", key="bulk_del_name", type="primary", use_container_width=True):
+                    if st.button(f"🗑️ {selected_count} Duplikate löschen", key="bulk_del_name", type="primary", width="stretch"):
                         with get_db() as session:
                             deleted = 0
                             for doc_id in st.session_state.name_selected_for_delete:
@@ -204,7 +204,7 @@ with tab_name:
                         del st.session_state.name_duplicates
                         st.rerun()
                 else:
-                    st.button("🗑️ Keine ausgewählt", key="no_sel_name", disabled=True, use_container_width=True)
+                    st.button("🗑️ Keine ausgewählt", key="no_sel_name", disabled=True, width="stretch")
 
             st.markdown("---")
 

@@ -667,19 +667,19 @@ def render_dashboard():
         # Schnellaktionen
         st.subheader("⚡ Schnellaktionen")
 
-        if st.button("📄 Dokument scannen", use_container_width=True, type="primary"):
+        if st.button("📄 Dokument scannen", width="stretch", type="primary"):
             st.switch_page("pages/2_📄_Dokumentenaufnahme.py")
 
-        if st.button("🧾 Bon erfassen", use_container_width=True):
+        if st.button("🧾 Bon erfassen", width="stretch"):
             st.switch_page("pages/7_💰_Finanzen.py")
 
-        if st.button("📅 Kalender", use_container_width=True):
+        if st.button("📅 Kalender", width="stretch"):
             st.switch_page("pages/5_📅_Kalender.py")
 
-        if st.button("🔍 Suchen", use_container_width=True):
+        if st.button("🔍 Suchen", width="stretch"):
             st.switch_page("pages/4_🔍_Intelligente_Ordner.py")
 
-        if st.button("⚙️ Einstellungen", use_container_width=True):
+        if st.button("⚙️ Einstellungen", width="stretch"):
             st.switch_page("pages/8_⚙️_Einstellungen.py")
 
 

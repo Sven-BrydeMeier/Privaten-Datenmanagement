@@ -356,7 +356,7 @@ def render_yearly_report(service: MileageService):
                 hole=0.4
             )
             fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=300)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             for purpose, data in purpose_data.items():
                 if data["trips"] > 0:
@@ -375,7 +375,7 @@ def render_yearly_report(service: MileageService):
             labels={"x": "Monat", "y": "Kilometer"}
         )
         fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=300)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # Export
     st.divider()

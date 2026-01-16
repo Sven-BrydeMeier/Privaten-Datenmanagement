@@ -198,7 +198,7 @@ def render_tree_sidebar():
         st.markdown("### 📁 Dokumentenverwaltung")
 
         # Suche-Button (als echter Streamlit-Button für Funktionalität)
-        if st.button("🔍 Suche", key="nav_search_btn", use_container_width=True, type="secondary"):
+        if st.button("🔍 Suche", key="nav_search_btn", width="stretch", type="secondary"):
             st.switch_page("pages/0_🔎_Suche.py")
 
         st.markdown("---")
@@ -221,7 +221,7 @@ def render_tree_sidebar():
                     if st.button(
                         label,
                         key=f"nav_{item_path}",
-                        use_container_width=True,
+                        width="stretch",
                         disabled=is_active
                     ):
                         st.session_state['_current_page'] = item_path

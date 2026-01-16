@@ -88,7 +88,7 @@ def render_overview(service: SubscriptionService):
                 hole=0.4
             )
             fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=300)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("Keine Daten vorhanden")
 

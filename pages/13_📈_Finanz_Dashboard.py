@@ -135,7 +135,7 @@ if services_available:
                     legend=dict(orientation="h", yanchor="bottom", y=1.02)
                 )
 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             except ImportError:
                 st.warning("Plotly nicht installiert - Diagramme nicht verfügbar")
 
@@ -196,7 +196,7 @@ if services_available:
                     annotation_text=f"Ø {trends['average_monthly']:.2f} €"
                 )
                 fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             except ImportError:
                 st.info("Plotly für Diagramme benötigt")
 

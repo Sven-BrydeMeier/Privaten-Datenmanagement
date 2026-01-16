@@ -139,7 +139,7 @@ def render_api_status():
             st.caption("Nicht konfiguriert")
 
     # Button zum erneuten Testen
-    if st.button("🔄 Verbindung testen", key="sb_test_api", use_container_width=True):
+    if st.button("🔄 Verbindung testen", key="sb_test_api", width="stretch"):
         # Cache löschen und neu testen
         if 'api_status' in st.session_state:
             del st.session_state.api_status

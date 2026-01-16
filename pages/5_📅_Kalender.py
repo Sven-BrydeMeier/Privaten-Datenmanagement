@@ -106,7 +106,7 @@ with col_nav:
     col_prev, col_today, col_next, col_month_label = st.columns([1, 1, 1, 3])
 
     with col_prev:
-        if st.button("◀ Zurück", use_container_width=True):
+        if st.button("◀ Zurück", width="stretch"):
             if st.session_state.calendar_view == 'month':
                 st.session_state.calendar_date = current_date.replace(day=1) - timedelta(days=1)
             elif st.session_state.calendar_view == 'week':
@@ -116,13 +116,13 @@ with col_nav:
             st.rerun()
 
     with col_today:
-        if st.button("📍 Heute", use_container_width=True):
+        if st.button("📍 Heute", width="stretch"):
             st.session_state.calendar_date = datetime.now()
             st.session_state.selected_day = datetime.now().day
             st.rerun()
 
     with col_next:
-        if st.button("Weiter ▶", use_container_width=True):
+        if st.button("Weiter ▶", width="stretch"):
             if st.session_state.calendar_view == 'month':
                 next_month = current_date.replace(day=28) + timedelta(days=4)
                 st.session_state.calendar_date = next_month.replace(day=1)
@@ -352,7 +352,7 @@ with col_calendar:
                             label = f"{day} {icons}"
 
                         btn_type = "primary" if is_today else "secondary"
-                        if st.button(label, key=f"day_{day}", use_container_width=True,
+                        if st.button(label, key=f"day_{day}", width="stretch",
                                     type=btn_type if is_today else "secondary"):
                             st.session_state.selected_day = day
                             st.rerun()
@@ -535,7 +535,7 @@ with col_events:
         )
         event_desc = st.text_area("Beschreibung", height=80)
 
-        if st.form_submit_button("Erstellen", use_container_width=True):
+        if st.form_submit_button("Erstellen", width="stretch"):
             if event_title:
                 with get_db() as session:
                     new_event = CalendarEvent(

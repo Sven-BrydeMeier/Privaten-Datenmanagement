@@ -95,7 +95,7 @@ def render_overview(service: InventoryService):
                 hole=0.4
             )
             fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=300)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("Keine Daten vorhanden")
 
@@ -111,7 +111,7 @@ def render_overview(service: InventoryService):
                 labels={"x": "Wert (€)", "y": "Raum"}
             )
             fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=300)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("Keine Daten vorhanden")
 

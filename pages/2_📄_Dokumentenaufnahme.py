@@ -202,20 +202,20 @@ def render_duplicate_comparison(new_file_data: bytes, new_filename: str, existin
     col_action1, col_action2, col_action3 = st.columns(3)
 
     with col_action1:
-        if st.button("🚫 Nicht hochladen", use_container_width=True, help="Abbrechen, bestehendes Dokument behalten"):
+        if st.button("🚫 Nicht hochladen", width="stretch", help="Abbrechen, bestehendes Dokument behalten"):
             if 'duplicate_check' in st.session_state:
                 del st.session_state.duplicate_check
             st.rerun()
 
     with col_action2:
-        if st.button("📂 Zum bestehenden Dokument", use_container_width=True, help="Bestehendes Dokument öffnen"):
+        if st.button("📂 Zum bestehenden Dokument", width="stretch", help="Bestehendes Dokument öffnen"):
             st.session_state.current_folder_id = existing_doc['folder_id']
             if 'duplicate_check' in st.session_state:
                 del st.session_state.duplicate_check
             st.switch_page("pages/3_📁_Dokumente.py")
 
     with col_action3:
-        if st.button("✅ Trotzdem hochladen", type="primary", use_container_width=True, help="Als neues Dokument speichern"):
+        if st.button("✅ Trotzdem hochladen", type="primary", width="stretch", help="Als neues Dokument speichern"):
             st.session_state.force_upload = True
             if 'duplicate_check' in st.session_state:
                 del st.session_state.duplicate_check
@@ -2562,7 +2562,7 @@ with tab_process:
             # Verarbeitungs-Button mit Live-Fortschritt
             col_btn, col_space = st.columns([1, 3])
             with col_btn:
-                start_processing = st.button("▶️ Alle verarbeiten", type="primary", use_container_width=True)
+                start_processing = st.button("▶️ Alle verarbeiten", type="primary", width="stretch")
 
             if start_processing:
                 from utils.helpers import get_document_file_content

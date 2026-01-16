@@ -218,7 +218,7 @@ with tab_deadlines:
             color_continuous_scale="RdYlGn_r"
         )
         fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Detailliste
         st.write("**Fristen im Detail:**")
@@ -272,7 +272,7 @@ with tab_costs:
         fig.update_traces(texttemplate='%{text:.2f} €', textposition='auto')
         fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # Kategorien-Aufschlüsselung
     st.divider()
@@ -296,7 +296,7 @@ with tab_costs:
                 title="Verteilung der Kosten",
                 hole=0.4
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col2:
             st.metric("Gesamt monatlich", f"{categories['total_monthly']:,.2f} €")
@@ -347,7 +347,7 @@ with tab_projection:
             yaxis_title="Kosten (€)"
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Detailtabelle
         st.write("**Monatliche Details:**")

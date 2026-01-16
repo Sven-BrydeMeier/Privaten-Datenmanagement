@@ -84,7 +84,7 @@ with tab_smart:
 
         st.markdown("**Vordefiniert**")
         for pf in predefined:
-            if st.button(pf["name"], use_container_width=True, key=f"smart_{pf['name']}"):
+            if st.button(pf["name"], width="stretch", key=f"smart_{pf['name']}"):
                 st.session_state.active_smart_folder = pf
 
         st.divider()
@@ -94,7 +94,7 @@ with tab_smart:
             # Icon basierend auf Modus
             mode = cf['filter_rules'].get("mode", "auto") if cf['filter_rules'] else "auto"
             icon = "📋" if mode == "manual" else "🔍"
-            if st.button(f"{icon} {cf['name']}", use_container_width=True, key=f"custom_{cf['id']}"):
+            if st.button(f"{icon} {cf['name']}", width="stretch", key=f"custom_{cf['id']}"):
                 st.session_state.active_smart_folder = {
                     "id": cf['id'],  # ID für Bearbeitung
                     "name": cf['name'],
@@ -393,11 +393,11 @@ with tab_cart:
                 # Aktionen
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    if st.button("📧 Per E-Mail senden", use_container_width=True):
+                    if st.button("📧 Per E-Mail senden", width="stretch"):
                         st.session_state.send_cart_email = True
 
                 with col_b:
-                    if st.button("🔗 Freigabelink erstellen", use_container_width=True):
+                    if st.button("🔗 Freigabelink erstellen", width="stretch"):
                         from utils.helpers import generate_share_link
                         links = []
                         for doc_id in cart_items:
@@ -406,7 +406,7 @@ with tab_cart:
                         st.session_state.share_links = links
 
                 # Aktentasche teilen
-                if st.button("✂️ Aktentasche aufteilen", use_container_width=True):
+                if st.button("✂️ Aktentasche aufteilen", width="stretch"):
                     st.session_state.split_cart = True
 
         else:

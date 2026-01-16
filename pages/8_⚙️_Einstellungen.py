@@ -526,7 +526,7 @@ with tab_bank:
     quick_cols = st.columns(4)
     for idx, (label, bank, color) in enumerate(quick_banks):
         with quick_cols[idx % 4]:
-            if st.button(label, key=f"quick_{bank}", use_container_width=True):
+            if st.button(label, key=f"quick_{bank}", width="stretch"):
                 with get_db() as session:
                     existing = session.query(BankAccount).filter(
                         BankAccount.user_id == user_id,

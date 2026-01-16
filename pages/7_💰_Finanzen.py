@@ -466,7 +466,7 @@ with tab_groups:
 
             for group in groups:
                 is_active = "🟢" if group.is_active else "⚪"
-                if st.button(f"{is_active} {group.name}", key=f"group_{group.id}", use_container_width=True):
+                if st.button(f"{is_active} {group.name}", key=f"group_{group.id}", width="stretch"):
                     st.session_state.selected_group = group.id
 
     with col_balance:
@@ -677,7 +677,7 @@ with tab_overview:
                 title=f"Ausgaben nach {group_by}",
                 color_discrete_sequence=['#1E88E5']
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Typ-Aufteilung
             if include_invoices:
@@ -690,7 +690,7 @@ with tab_overview:
                         names=type_grouped.index,
                         title="Aufteilung nach Typ"
                     )
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    st.plotly_chart(fig_pie, width="stretch")
 
                 with col_detail:
                     st.markdown("**Top 10 Ausgaben:**")
@@ -772,11 +772,11 @@ with tab_invoices:
                         st.markdown(f"**{len(st.session_state.selected_invoices)} von {len(open_invoices)} ausgewählt**")
                         col_sel_all, col_desel = st.columns(2)
                         with col_sel_all:
-                            if st.button("☑️ Alle auswählen", use_container_width=True):
+                            if st.button("☑️ Alle auswählen", width="stretch"):
                                 st.session_state.selected_invoices = {inv.id for inv in open_invoices}
                                 st.rerun()
                         with col_desel:
-                            if st.button("☐ Keine", use_container_width=True):
+                            if st.button("☐ Keine", width="stretch"):
                                 st.session_state.selected_invoices = set()
                                 st.rerun()
 
@@ -796,7 +796,7 @@ with tab_invoices:
                         selected_total = sum(inv.invoice_amount for inv in open_invoices if inv.id in st.session_state.selected_invoices)
                         if selected_count > 0:
                             st.markdown(f"**Summe: {format_currency(selected_total)}**")
-                            if st.button(f"✅ {selected_count} Rechnungen als bezahlt markieren", type="primary", use_container_width=True):
+                            if st.button(f"✅ {selected_count} Rechnungen als bezahlt markieren", type="primary", width="stretch"):
                                 payment_date = datetime.now()
                                 account_name = bulk_account_options.get(bulk_pay_account, "Unbekannt")
                                 success_count = 0
@@ -934,7 +934,7 @@ with tab_invoices:
                                 key=f"bank_{inv_data['id']}",
                                 label_visibility="collapsed"
                             )
-                            if st.button("✅ Bezahlt", key=f"pay_{inv_data['id']}", use_container_width=True):
+                            if st.button("✅ Bezahlt", key=f"pay_{inv_data['id']}", width="stretch"):
                                 payment_date = datetime.now()
                                 account_name = bank_account_options.get(pay_bank_id, "Unbekannt")
 
@@ -957,14 +957,14 @@ with tab_invoices:
                                 st.write(f"📅 **{format_date(inv_data['paid_date'])}**")
                             if inv_data['paid_with']:
                                 st.write(f"🏦 {inv_data['paid_with']}")
-                            if st.button("↩️ Wieder öffnen", key=f"reopen_{inv_data['id']}", use_container_width=True):
+                            if st.button("↩️ Wieder öffnen", key=f"reopen_{inv_data['id']}", width="stretch"):
                                 inv.invoice_status = InvoiceStatus.OPEN
                                 inv.invoice_paid_date = None
                                 inv.paid_with_bank_account = None
                                 session.commit()
                                 st.rerun()
 
-                        if st.button("💼 Aktentasche", key=f"cart_inv_{inv_data['id']}", use_container_width=True):
+                        if st.button("💼 Aktentasche", key=f"cart_inv_{inv_data['id']}", width="stretch"):
                             add_to_cart(inv_data['id'])
                             st.success("Hinzugefügt!")
 
