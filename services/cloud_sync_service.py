@@ -1129,8 +1129,19 @@ class CloudSyncService:
                           local_folder_id: int = None,
                           sync_interval_minutes: int = None,
                           provider_name: str = None) -> 'CloudSyncConnectionWrapper':
-        """Erstellt eine neue Cloud-Sync-Verbindung"""
+        """Erstellt eine neue Cloud-Sync-Verbindung (verhindert Duplikate)"""
         with get_db() as session:
+            # Duplikat-Prüfung: Existiert bereits eine Verbindung mit gleichem Ordner?
+            existing = session.query(CloudSyncConnection).filter(
+                CloudSyncConnection.user_id == self.user_id,
+                CloudSyncConnection.provider == provider,
+                CloudSyncConnection.remote_folder_id == folder_id
+            ).first()
+
+            if existing:
+                logger.info(f"Verbindung für Ordner {folder_id} existiert bereits (ID: {existing.id})")
+                return CloudSyncConnectionWrapper(existing)
+
             connection = CloudSyncConnection(
                 user_id=self.user_id,
                 provider=provider,
@@ -1220,6 +1231,54 @@ class CloudSyncService:
             session.commit()
             logger.info(f"Cloud-Verbindung {connection_id} und verknüpfte Daten gelöscht")
             return True
+
+    def cleanup_duplicate_connections(self) -> int:
+        """
+        Entfernt doppelte Cloud-Verbindungen.
+        Behält nur die älteste Verbindung pro Provider+Ordner-Kombination.
+
+        Returns:
+            Anzahl der gelöschten Duplikate
+        """
+        deleted_count = 0
+        with get_db() as session:
+            # Alle Verbindungen des Benutzers holen
+            connections = session.query(CloudSyncConnection).filter(
+                CloudSyncConnection.user_id == self.user_id
+            ).order_by(CloudSyncConnection.created_at.asc()).all()
+
+            # Gruppiere nach provider + folder_id
+            seen = {}  # key = (provider, folder_id), value = connection_id
+            duplicates_to_delete = []
+
+            for conn in connections:
+                key = (conn.provider, conn.remote_folder_id)
+                if key in seen:
+                    # Duplikat gefunden - zur Löschung markieren
+                    duplicates_to_delete.append(conn.id)
+                else:
+                    seen[key] = conn.id
+
+            # Duplikate löschen
+            for conn_id in duplicates_to_delete:
+                # Verknüpfte Datensätze löschen
+                session.query(CloudSyncLog).filter(
+                    CloudSyncLog.connection_id == conn_id
+                ).delete()
+                session.query(CloudSyncDiagnostic).filter(
+                    CloudSyncDiagnostic.connection_id == conn_id
+                ).delete()
+                # Verbindung löschen
+                session.query(CloudSyncConnection).filter(
+                    CloudSyncConnection.id == conn_id
+                ).delete()
+                deleted_count += 1
+
+            session.commit()
+            if deleted_count > 0:
+                logger.info(f"{deleted_count} doppelte Cloud-Verbindungen gelöscht")
+
+        return deleted_count
 
     def get_diagnostic_reports(self, limit: int = 20, connection_id: int = None) -> List[Dict]:
         """

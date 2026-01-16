@@ -1493,6 +1493,13 @@ with tab_cloud:
         user_id = get_current_user_id()
         cloud_service = CloudSyncService(user_id)
 
+        # Duplikate automatisch bereinigen (einmalig pro Session)
+        if 'cloud_duplicates_cleaned' not in st.session_state:
+            deleted = cloud_service.cleanup_duplicate_connections()
+            st.session_state.cloud_duplicates_cleaned = True
+            if deleted > 0:
+                st.toast(f"✅ {deleted} doppelte Cloud-Verbindungen bereinigt")
+
         # Aktive Sync-Verbindungen anzeigen
         connections = cloud_service.get_connections()
         active_connections = [c for c in connections if c.is_active]
