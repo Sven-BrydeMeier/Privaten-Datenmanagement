@@ -2669,6 +2669,7 @@ class CloudSyncService:
             "skipped_files": 0,
             "errors": [],
             "error": None,
+            "failed_files": [],  # Dateien die fehlgeschlagen sind (für Retry)
             "synced_files": [],
             "batch_info": {
                 "batch_size": batch_size,
@@ -3068,6 +3069,12 @@ class CloudSyncService:
                                     error_detail = step.get("detail", error_detail)
                                     break
                             result["errors"].append(f"{file_info.get('name')}: {error_detail}")
+                            # Fehlgeschlagene Datei für späteren Retry speichern
+                            result["failed_files"].append({
+                                "file_info": file_info,
+                                "error": error_detail,
+                                "attempt": 1
+                            })
                             # Diagnose: Fehler bei Datei
                             if diag:
                                 diag.log_file_operation(
@@ -3079,6 +3086,12 @@ class CloudSyncService:
                         logger.error(f"Fehler beim Import von {file_info.get('name')}: {e}")
                         result["files_error"] += 1
                         result["errors"].append(f"{file_info.get('name')}: {str(e)}")
+                        # Fehlgeschlagene Datei für späteren Retry speichern
+                        result["failed_files"].append({
+                            "file_info": file_info,
+                            "error": str(e),
+                            "attempt": 1
+                        })
                         # Diagnose: Exception bei Datei
                         if diag:
                             diag.log_error("file_exception", f"Datei {file_info.get('name')}: {str(e)}", e)
@@ -3166,6 +3179,101 @@ class CloudSyncService:
                     # (besonders wichtig für Supabase Storage)
                     if idx < len(files_to_sync) - 1:  # Nicht nach letzter Datei
                         time.sleep(pause_between_files)
+
+                # Phase 2.5: Retry für fehlgeschlagene Dateien (einzeln, mit Pause)
+                if result["failed_files"]:
+                    result["phase"] = "retry"
+                    if diag:
+                        diag.set_phase("retry")
+                        diag.log_event("retry_start", f"Starte Retry für {len(result['failed_files'])} fehlgeschlagene Dateien")
+
+                    logger.info(f"[RETRY] Starte Retry für {len(result['failed_files'])} fehlgeschlagene Dateien")
+                    result["current_step"] = "retry"
+                    result["current_step_detail"] = f"Versuche {len(result['failed_files'])} fehlgeschlagene Dateien erneut..."
+                    yield add_live_diagnostics(result)
+
+                    # Warte vor Retry (Netzwerk/API könnte sich erholt haben)
+                    time.sleep(3)
+
+                    retry_success_count = 0
+                    still_failed = []
+
+                    for retry_idx, failed_entry in enumerate(result["failed_files"]):
+                        file_info = failed_entry["file_info"]
+                        prev_error = failed_entry["error"]
+
+                        result["current_file"] = file_info.get("name", "Unbekannt")
+                        result["current_step_detail"] = f"Retry {retry_idx+1}/{len(result['failed_files'])}: {file_info.get('name')}"
+                        yield add_live_diagnostics(result)
+
+                        logger.info(f"[RETRY] Versuche erneut: {file_info.get('name')} (vorheriger Fehler: {prev_error})")
+
+                        # RAM-Check vor Retry
+                        current_ram = get_current_ram_mb()
+                        if current_ram > ram_critical_mb:
+                            logger.warning(f"[RETRY] RAM zu hoch ({current_ram:.1f}MB), überspringe restliche Retries")
+                            still_failed.append(failed_entry)
+                            continue
+
+                        # Cleanup vor Retry
+                        aggressive_memory_cleanup(light_mode=True)
+
+                        try:
+                            retry_status, retry_steps = self._process_file_with_status(
+                                connection, session, file_info, process_documents, result
+                            )
+
+                            if retry_status == "synced":
+                                retry_success_count += 1
+                                result["files_synced"] += 1
+                                result["files_error"] -= 1
+                                result["synced_files"].append(file_info.get("name"))
+                                # Fehler aus Liste entfernen
+                                error_entry = f"{file_info.get('name')}: {prev_error}"
+                                if error_entry in result["errors"]:
+                                    result["errors"].remove(error_entry)
+                                logger.info(f"[RETRY] Erfolgreich: {file_info.get('name')}")
+                                if diag:
+                                    diag.log_event("retry_success", f"Retry erfolgreich: {file_info.get('name')}")
+                                try:
+                                    session.commit()
+                                except Exception as commit_err:
+                                    logger.error(f"[RETRY] Commit Fehler: {commit_err}")
+                                    session.rollback()
+                                    still_failed.append(failed_entry)
+                            elif retry_status == "skipped":
+                                result["files_skipped"] += 1
+                                result["files_error"] -= 1
+                            else:
+                                # Immer noch fehlgeschlagen
+                                failed_entry["attempt"] += 1
+                                still_failed.append(failed_entry)
+                                logger.warning(f"[RETRY] Immer noch fehlgeschlagen: {file_info.get('name')}")
+                                try:
+                                    session.rollback()
+                                except:
+                                    pass
+
+                        except Exception as retry_err:
+                            logger.error(f"[RETRY] Exception bei {file_info.get('name')}: {retry_err}")
+                            failed_entry["attempt"] += 1
+                            failed_entry["error"] = str(retry_err)
+                            still_failed.append(failed_entry)
+                            try:
+                                session.rollback()
+                            except:
+                                pass
+
+                        # Längere Pause zwischen Retries
+                        time.sleep(2)
+
+                    # Update failed_files mit denen die immer noch fehlgeschlagen sind
+                    result["failed_files"] = still_failed
+
+                    if retry_success_count > 0:
+                        logger.info(f"[RETRY] Abgeschlossen: {retry_success_count} von {len(result['failed_files']) + retry_success_count} erfolgreich")
+                        if diag:
+                            diag.log_event("retry_complete", f"Retry abgeschlossen: {retry_success_count} erfolgreich, {len(still_failed)} fehlgeschlagen")
 
                 # Phase 3: Abschluss
                 result["phase"] = "completed"

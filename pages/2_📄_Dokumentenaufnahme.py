@@ -2290,9 +2290,44 @@ File Extensions: {conn.file_extensions}""")
                             # Fehler anzeigen wenn vorhanden
                             errors_list = final_result.get("errors", [])
                             files_error = final_result.get("files_error", 0)
+                            failed_files = final_result.get("failed_files", [])
+
                             if files_error > 0 or errors_list:
                                 st.error(f"❌ **{files_error} Dateien konnten nicht importiert werden**")
-                                with st.expander(f"🔍 Fehlerdetails ({len(errors_list)} Fehler)", expanded=True):
+
+                                # Fehlgeschlagene Dateien mit Retry-Option anzeigen
+                                if failed_files:
+                                    with st.expander(f"🔄 Fehlgeschlagene Dateien - Einzeln wiederholen ({len(failed_files)})", expanded=True):
+                                        st.markdown("Diese Dateien konnten nicht importiert werden. Sie können einzeln erneut versucht werden:")
+
+                                        for idx, failed_entry in enumerate(failed_files[:20]):
+                                            file_info = failed_entry.get("file_info", {})
+                                            error_msg = failed_entry.get("error", "Unbekannter Fehler")
+                                            attempts = failed_entry.get("attempt", 1)
+                                            file_name = file_info.get("name", "Unbekannt")
+                                            file_size = file_info.get("size", 0)
+                                            size_kb = file_size / 1024
+
+                                            col_info, col_action = st.columns([3, 1])
+                                            with col_info:
+                                                st.markdown(f"**{file_name}** ({size_kb:.1f} KB)")
+                                                st.caption(f"Fehler: {error_msg} | Versuche: {attempts}")
+                                            with col_action:
+                                                if st.button("🔄 Retry", key=f"retry_single_{idx}"):
+                                                    st.session_state[f"retry_file_{idx}"] = file_info
+                                                    st.rerun()
+
+                                        if len(failed_files) > 20:
+                                            st.caption(f"... und {len(failed_files) - 20} weitere fehlgeschlagene Dateien")
+
+                                        # Button zum erneuten Versuch aller fehlgeschlagenen Dateien
+                                        st.markdown("---")
+                                        if st.button("🔄 Alle erneut versuchen", type="primary", key="retry_all_failed"):
+                                            st.session_state["retry_all_failed_files"] = failed_files
+                                            st.rerun()
+
+                                # Detaillierte Fehlerliste
+                                with st.expander(f"🔍 Fehlerdetails ({len(errors_list)} Fehler)", expanded=False):
                                     if errors_list:
                                         for i, err in enumerate(errors_list[:20]):  # Nur erste 20 anzeigen
                                             st.text(f"• {err}")
