@@ -2872,6 +2872,10 @@ class CloudSyncService:
                     if diag:
                         diag.log_event("ram_initial_after", f"RAM nach initial cleanup: {new_ram:.1f}MB (freed: {freed:.1f}MB)")
 
+                # RAM-Schwellwerte für die gesamte Sync-Phase
+                ram_warning_mb = SYNC_CONFIG.get("ram_warning_threshold_mb", 450)
+                ram_critical_mb = SYNC_CONFIG.get("ram_critical_threshold_mb", 550)
+
                 # Phase 2: Dateien herunterladen und importieren
                 for idx, file_info in enumerate(files_to_sync):
                     file_start_time = time.time()
@@ -3124,8 +3128,6 @@ class CloudSyncService:
 
                     # RAM-Check nach JEDER Datei - kritisch für Streamlit Cloud
                     current_ram = get_current_ram_mb()
-                    ram_warning_mb = SYNC_CONFIG.get("ram_warning_threshold_mb", 450)
-                    ram_critical_mb = SYNC_CONFIG.get("ram_critical_threshold_mb", 550)
 
                     if current_ram > ram_critical_mb:
                         # Kritisch hoher RAM - Abbruch um Crash zu vermeiden
