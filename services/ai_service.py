@@ -218,7 +218,7 @@ Wichtig:
 
             # Prüfen ob Ergebnis leer ist
             if not result or not result.strip():
-                st.warning("KI-Extraktion fehlgeschlagen: Leere Antwort von der KI-API")
+                logger.warning("KI-Extraktion: Leere Antwort von der KI-API")
                 return {}
 
             # JSON aus der Antwort extrahieren (mit verbesserter Erkennung)
@@ -243,26 +243,52 @@ Wichtig:
                 try:
                     return json.loads(json_str)
                 except json.JSONDecodeError as e:
-                    # 3. Versuche verschachteltes JSON zu reparieren
-                    # Manchmal gibt die KI ungültiges JSON zurück, versuche zu bereinigen
-                    json_str_cleaned = re.sub(r',\s*}', '}', json_str)  # Trailing comma entfernen
+                    # 3. Versuche JSON zu reparieren
+                    json_str_cleaned = json_str
+                    # Trailing comma entfernen
+                    json_str_cleaned = re.sub(r',\s*}', '}', json_str_cleaned)
                     json_str_cleaned = re.sub(r',\s*]', ']', json_str_cleaned)
+                    # Ungültige Escape-Sequenzen korrigieren
+                    json_str_cleaned = json_str_cleaned.replace('\n', '\\n')
+                    json_str_cleaned = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', json_str_cleaned)
                     try:
                         return json.loads(json_str_cleaned)
                     except json.JSONDecodeError:
-                        st.warning(f"KI-Extraktion fehlgeschlagen: Ungültiges JSON-Format - {e}")
+                        # 4. Letzter Versuch: Nur die äußerste Struktur nehmen
+                        try:
+                            # Finde zusammengehörige Klammern
+                            depth = 0
+                            start_idx = json_start
+                            for i, c in enumerate(result[json_start:], start=json_start):
+                                if c == '{':
+                                    depth += 1
+                                elif c == '}':
+                                    depth -= 1
+                                    if depth == 0:
+                                        balanced_json = result[start_idx:i+1]
+                                        balanced_json = re.sub(r',\s*}', '}', balanced_json)
+                                        return json.loads(balanced_json)
+                        except (json.JSONDecodeError, Exception):
+                            pass
+                        logger.warning(f"JSON-Extraktion fehlgeschlagen: {e}")
                         return {}
 
+            # Kein JSON gefunden - prüfe auf bekannte Nicht-JSON-Antworten
+            lower_result = result_stripped.lower()
+            if any(x in lower_result for x in ['kann ich nicht', 'i cannot', 'entschuldigung', 'es tut mir leid', 'sorry']):
+                logger.info("KI konnte Dokument nicht analysieren")
+                return {}
+
             # Kein JSON gefunden - logge für Debugging
-            st.warning("KI-Extraktion fehlgeschlagen: Kein gültiges JSON in der Antwort gefunden")
-            if len(result_stripped) < 200:
-                st.caption(f"Antwort: {result_stripped}")
+            logger.warning(f"KI-Extraktion: Kein JSON gefunden. Antwortlänge: {len(result_stripped)}")
+            if len(result_stripped) < 300:
+                logger.debug(f"KI-Antwort: {result_stripped}")
             return {}
         except json.JSONDecodeError as e:
-            st.warning(f"KI-Extraktion fehlgeschlagen: Ungültiges JSON-Format - {e}")
+            logger.warning(f"KI-Extraktion: Ungültiges JSON-Format - {e}")
             return {}
         except Exception as e:
-            st.warning(f"KI-Extraktion fehlgeschlagen: {e}")
+            logger.warning(f"KI-Extraktion fehlgeschlagen: {e}")
             return {}
 
     def generate_response_draft(self, document_text: str, context: str = "") -> str:

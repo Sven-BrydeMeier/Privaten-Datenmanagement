@@ -426,8 +426,15 @@ class StorageService:
                 except Exception as e:
                     last_error = str(e)
 
+                    # Timeout-Fehler - warte und retry
+                    if "timeout" in last_error.lower() or "timed out" in last_error.lower():
+                        wait_time = 2 * (2 ** attempt)  # 2s, 4s, 8s
+                        logger.warning(f"Download Timeout, warte {wait_time}s (Versuch {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+
                     # Resource temporarily unavailable - warte und retry
-                    if "Resource temporarily unavailable" in last_error or "Errno 11" in last_error:
+                    elif "Resource temporarily unavailable" in last_error or "Errno 11" in last_error:
                         wait_time = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s
                         logger.warning(f"Ressource nicht verfügbar, warte {wait_time}s (Versuch {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
@@ -437,6 +444,13 @@ class StorageService:
                     elif "429" in last_error or "rate" in last_error.lower():
                         wait_time = 2 ** attempt  # 1s, 2s, 4s
                         logger.warning(f"Rate Limit, warte {wait_time}s (Versuch {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+
+                    # Connection/Netzwerk-Fehler - retry
+                    elif "connection" in last_error.lower() or "network" in last_error.lower():
+                        wait_time = 2 * (2 ** attempt)  # 2s, 4s, 8s
+                        logger.warning(f"Netzwerkfehler, warte {wait_time}s (Versuch {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                         continue
 
