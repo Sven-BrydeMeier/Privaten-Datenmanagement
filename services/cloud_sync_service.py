@@ -6,6 +6,8 @@ import os
 import hashlib
 import json
 import logging
+import random
+import time
 import traceback
 from datetime import datetime, timedelta
 
@@ -39,6 +41,118 @@ except ImportError:
     st = None
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== SICHERHEIT: API-KEY MASKIERUNG ====================
+
+def mask_sensitive_url(url: str) -> str:
+    """
+    Maskiert sensible Parameter (API Keys) in URLs für sicheres Logging.
+
+    Beispiel:
+        Input:  https://api.example.com?key=AIzaSyB1234567890abcdef&other=value
+        Output: https://api.example.com?key=AIza***MASKED***&other=value
+    """
+    if not url:
+        return url
+
+    # Patterns für sensible Parameter
+    sensitive_params = ['key', 'api_key', 'apikey', 'access_token', 'token', 'secret']
+
+    masked_url = url
+    for param in sensitive_params:
+        # Match: param=value (bis zum nächsten & oder Ende)
+        pattern = rf'({param}=)([^&\s]+)'
+        def mask_match(m):
+            value = m.group(2)
+            if len(value) > 8:
+                return f"{m.group(1)}{value[:4]}***MASKED***"
+            return f"{m.group(1)}***MASKED***"
+        masked_url = re.sub(pattern, mask_match, masked_url, flags=re.IGNORECASE)
+
+    return masked_url
+
+
+def mask_api_key(key: str) -> str:
+    """Maskiert einen API-Key für sicheres Logging (zeigt nur erste 4 Zeichen)."""
+    if not key:
+        return "None"
+    if len(key) > 8:
+        return f"{key[:4]}***"
+    return "***"
+
+
+# ==================== DOWNLOAD & PDF VERIFICATION ====================
+
+def verify_download_size(content: bytes, expected_size: int, tolerance_percent: float = 5.0) -> Tuple[bool, str]:
+    """
+    Verifiziert dass der Download vollständig ist durch Größenvergleich.
+
+    Args:
+        content: Heruntergeladene Bytes
+        expected_size: Erwartete Größe aus dem Listing
+        tolerance_percent: Erlaubte Abweichung in Prozent (für Metadaten-Unterschiede)
+
+    Returns:
+        (is_valid, message)
+    """
+    if expected_size is None or expected_size == 0:
+        return True, "Keine erwartete Größe angegeben"
+
+    actual_size = len(content)
+    tolerance = expected_size * (tolerance_percent / 100)
+
+    if abs(actual_size - expected_size) <= tolerance:
+        return True, f"Größe OK: {actual_size} bytes (erwartet: {expected_size})"
+
+    # Größerer Unterschied
+    diff_percent = abs(actual_size - expected_size) / expected_size * 100
+    return False, f"Größe NICHT OK: {actual_size} bytes (erwartet: {expected_size}, Diff: {diff_percent:.1f}%)"
+
+
+def pdf_sanity_check(content: bytes) -> Tuple[bool, str]:
+    """
+    Schnelle Prüfung ob ein PDF gültig und vollständig ist.
+    Erkennt: EOF marker fehlt, korrupte Header, unvollständige Downloads.
+
+    Args:
+        content: PDF als Bytes
+
+    Returns:
+        (is_valid, message)
+    """
+    if not content:
+        return False, "Leerer Inhalt"
+
+    # PDF muss mit %PDF beginnen
+    if not content[:5].startswith(b'%PDF'):
+        return False, "Kein gültiger PDF-Header"
+
+    # EOF Marker sollte am Ende sein (%%EOF)
+    # Suche in letzten 1024 bytes (normalerweise dort)
+    tail = content[-1024:] if len(content) > 1024 else content
+    if b'%%EOF' not in tail:
+        return False, "EOF marker not found (PDF möglicherweise abgeschnitten)"
+
+    # Versuche PDF zu parsen (leichtgewichtig)
+    try:
+        from PyPDF2 import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(content), strict=False)
+        page_count = len(reader.pages)
+        if page_count == 0:
+            return False, "PDF hat 0 Seiten"
+        return True, f"PDF OK: {page_count} Seiten"
+    except Exception as e:
+        error_msg = str(e)
+        # Bekannte Fehler
+        if 'EOF marker' in error_msg:
+            return False, "EOF marker not found (abgeschnittener Download?)"
+        elif 'encrypt' in error_msg.lower():
+            return True, "PDF ist verschlüsselt (kann trotzdem gültig sein)"
+        else:
+            return False, f"PDF-Parsing fehlgeschlagen: {error_msg[:100]}"
+
 
 # Flag für Heartbeat-Spalten-Verfügbarkeit (None = ungeprüft, True/False = Ergebnis)
 # Ermöglicht graceful degradation wenn Migration nicht angewendet wurde
@@ -103,6 +217,7 @@ class SyncDiagnostics:
         self.last_successful_time = None
         self.phase = "not_started"
         self.connection_info = {}
+        self.final_stats = None  # Echte Zähler von finish()
 
     def start(self, connection_info: dict = None):
         """Startet die Diagnose-Erfassung"""
@@ -252,6 +367,8 @@ class SyncDiagnostics:
         """Beendet die Diagnose-Erfassung"""
         self.end_time = datetime.now()
         self.capture_memory("end")
+        # Speichere echte Zähler für get_summary()
+        self.final_stats = final_stats
         self.log_event("sync_finished",
                        f"Sync {'erfolgreich' if success else 'mit Fehlern'} beendet",
                        {"success": success, "stats": final_stats})
@@ -270,10 +387,17 @@ class SyncDiagnostics:
         api_durations = [c["duration_ms"] for c in self.api_calls]
         api_errors = [c for c in self.api_calls if c.get("error") or c.get("status_code", 200) >= 400]
 
-        # Datei-Statistiken
-        successful_files = [f for f in self.file_operations if f["status"] == "success"]
-        failed_files = [f for f in self.file_operations if f["status"] == "error"]
-        skipped_files = [f for f in self.file_operations if f["status"] == "skipped"]
+        # Datei-Statistiken: Bevorzuge echte Zähler aus final_stats
+        # (file_operations wird auf 50 Einträge begrenzt und kann ungenau sein)
+        if self.final_stats:
+            files_successful = self.final_stats.get("files_synced", 0)
+            files_failed = self.final_stats.get("files_error", 0)
+            files_skipped = self.final_stats.get("files_skipped", 0)
+        else:
+            # Fallback auf file_operations (weniger genau)
+            files_successful = len([f for f in self.file_operations if f["status"] == "success"])
+            files_failed = len([f for f in self.file_operations if f["status"] == "error"])
+            files_skipped = len([f for f in self.file_operations if f["status"] == "skipped"])
 
         # Speicher-Statistiken
         if self.memory_snapshots:
@@ -288,9 +412,9 @@ class SyncDiagnostics:
             "phase": self.phase,
             "total_files": self.total_files,
             "files_processed": self.current_file_index,
-            "files_successful": len(successful_files),
-            "files_failed": len(failed_files),
-            "files_skipped": len(skipped_files),
+            "files_successful": files_successful,
+            "files_failed": files_failed,
+            "files_skipped": files_skipped,
             "last_successful_file": self.last_successful_file,
             "last_successful_time": self.last_successful_time.isoformat() if self.last_successful_time else None,
             "api_calls_total": len(self.api_calls),
@@ -1674,36 +1798,73 @@ class CloudSyncService:
     def _google_api_list_folder(self, folder_id: str, api_key: str) -> Dict:
         """
         Listet Dateien über die offizielle Google Drive API.
-        Zuverlässigste Methode wenn ein API Key verfügbar ist.
+        Mit Retry + Exponential Backoff für 429/500/503 Fehler.
         """
+        MAX_RETRIES = 6
+        BASE = "https://www.googleapis.com/drive/v3/files"
+
         try:
             items = []
-            token = None
-            BASE = "https://www.googleapis.com/drive/v3/files"
+            page_token = None
+            page_count = 0
 
             while True:
                 params = {
                     "q": f"'{folder_id}' in parents and trashed=false",
                     "fields": "nextPageToken, files(id,name,mimeType,size)",
-                    "pageSize": 1000,
+                    "pageSize": 500,  # Reduziert von 1000 für stabilere Requests
                     "supportsAllDrives": "true",
                     "includeItemsFromAllDrives": "true",
                     "key": api_key,
                 }
-                if token:
-                    params["pageToken"] = token
+                if page_token:
+                    params["pageToken"] = page_token
 
-                response = requests.get(BASE, params=params, timeout=30)
+                # Retry mit Exponential Backoff + Jitter
+                last_error = None
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        response = requests.get(BASE, params=params, timeout=(10, 30))
 
-                if response.status_code == 403:
-                    logger.warning("Google API: Zugriff verweigert (403) - Key ungültig oder Ordner nicht öffentlich")
-                    return {"error": "API Key ungültig oder Ordner nicht öffentlich", "success": False}
-                elif response.status_code == 404:
-                    logger.warning("Google API: Ordner nicht gefunden (404)")
-                    return {"error": "Ordner nicht gefunden", "success": False}
+                        # Permanente Fehler - nicht retry-bar
+                        if response.status_code == 403:
+                            logger.warning("Google API: Zugriff verweigert (403) - Key ungültig oder Ordner nicht öffentlich")
+                            return {"error": "API Key ungültig oder Ordner nicht öffentlich", "success": False}
+                        elif response.status_code == 404:
+                            logger.warning("Google API: Ordner nicht gefunden (404)")
+                            return {"error": "Ordner nicht gefunden", "success": False}
 
-                response.raise_for_status()
+                        # Transiente Fehler - retry mit Backoff
+                        if response.status_code in (429, 500, 502, 503, 504):
+                            sleep_time = min(8.0, 0.5 * (2 ** attempt)) * (1 + random.random() * 0.2)
+                            logger.warning(f"Google API: {response.status_code} (Versuch {attempt+1}/{MAX_RETRIES}), warte {sleep_time:.1f}s...")
+                            time.sleep(sleep_time)
+                            continue
+
+                        response.raise_for_status()
+                        break  # Erfolg - aus Retry-Loop ausbrechen
+
+                    except requests.exceptions.Timeout as e:
+                        last_error = f"Timeout: {e}"
+                        sleep_time = min(8.0, 1.0 * (2 ** attempt))
+                        logger.warning(f"Google API Timeout (Versuch {attempt+1}/{MAX_RETRIES}), warte {sleep_time:.1f}s...")
+                        time.sleep(sleep_time)
+                        continue
+
+                    except requests.exceptions.ConnectionError as e:
+                        last_error = f"Connection Error: {e}"
+                        sleep_time = min(8.0, 1.0 * (2 ** attempt))
+                        logger.warning(f"Google API Connection Error (Versuch {attempt+1}/{MAX_RETRIES}), warte {sleep_time:.1f}s...")
+                        time.sleep(sleep_time)
+                        continue
+
+                else:
+                    # Alle Retries fehlgeschlagen
+                    logger.error(f"Google API: Alle {MAX_RETRIES} Versuche fehlgeschlagen. Letzter Fehler: {last_error}")
+                    return {"error": f"API nach {MAX_RETRIES} Versuchen fehlgeschlagen: {last_error}", "success": False}
+
                 data = response.json()
+                page_count += 1
 
                 for file_info in data.get("files", []):
                     items.append({
@@ -1713,15 +1874,26 @@ class CloudSyncService:
                         "size": int(file_info.get("size", 0)) if file_info.get("size") else 0
                     })
 
-                token = data.get("nextPageToken")
-                if not token:
+                page_token = data.get("nextPageToken")
+                if not page_token:
                     break
 
-            logger.info(f"Google API: {len(items)} Dateien/Ordner gefunden in {folder_id}")
+                # Kurze Pause zwischen Pages um Rate Limiting zu vermeiden
+                if page_count % 5 == 0:
+                    time.sleep(0.5)
+
+            logger.info(f"Google API: {len(items)} Dateien/Ordner gefunden in {folder_id} ({page_count} Pages)")
             return {"files": items, "success": True}
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Google API Fehler: {e}")
+            # URL maskieren für sicheres Logging
+            error_msg = str(e)
+            if 'key=' in error_msg.lower():
+                error_msg = mask_sensitive_url(error_msg)
+            logger.error(f"Google API Fehler: {error_msg}")
+            return {"error": error_msg, "success": False}
+        except Exception as e:
+            logger.error(f"Google API unerwarteter Fehler: {e}")
             return {"error": str(e), "success": False}
 
     def _google_public_list_folder(self, folder_id: str) -> Dict:
@@ -1735,7 +1907,7 @@ class CloudSyncService:
         api_key = self._get_google_api_key()
         logger.info(f"API Key verfügbar: {bool(api_key)}")
         if api_key:
-            logger.info(f"Verwende Google Drive API mit API Key: {api_key[:10]}...")
+            logger.info(f"Verwende Google Drive API mit API Key: {mask_api_key(api_key)}")
             api_result = self._google_api_list_folder(folder_id, api_key)
             logger.info(f"API Ergebnis: success={api_result.get('success')}, files={len(api_result.get('files', []))}")
             if api_result.get("success") and api_result.get("files") is not None:
@@ -4199,19 +4371,51 @@ class CloudSyncService:
                             file_content = f.read()
 
                     if mime_type == "application/pdf":
-                        processing_steps.append({
-                            "step": "ocr_pdf",
-                            "detail": f"📄 Verarbeite PDF mit OCR..."
-                        })
-                        # extract_text_from_pdf erwartet bytes und gibt List[Tuple[str, float]] zurück
-                        ocr_results = ocr_service.extract_text_from_pdf(file_content)
+                        # PDF Sanity Check vor OCR
+                        pdf_valid, pdf_msg = pdf_sanity_check(file_content)
+                        ocr_results = None
+                        ocr_text = ""
+
+                        if not pdf_valid:
+                            logger.warning(f"PDF-Prüfung fehlgeschlagen für {filename}: {pdf_msg}")
+                            processing_steps.append({
+                                "step": "pdf_invalid",
+                                "detail": f"⚠️ PDF-Problem: {pdf_msg}"
+                            })
+                            # Bei EOF marker: OCR überspringen (abgeschnittenes PDF)
+                            if "EOF marker" in pdf_msg:
+                                doc.ocr_text = f"[PDF KORRUPT: {pdf_msg}]"
+                                doc.ocr_confidence = 0
+                                processing_steps.append({
+                                    "step": "ocr_skipped",
+                                    "detail": f"⏭️ OCR übersprungen wegen korruptem PDF"
+                                })
+                            else:
+                                # Andere Fehler: trotzdem OCR versuchen
+                                processing_steps.append({
+                                    "step": "ocr_pdf",
+                                    "detail": f"📄 Verarbeite PDF mit OCR (trotz Warnung)..."
+                                })
+                                try:
+                                    ocr_results = ocr_service.extract_text_from_pdf(file_content)
+                                except Exception as ocr_err:
+                                    logger.warning(f"OCR fehlgeschlagen nach PDF-Warnung: {ocr_err}")
+                                    ocr_results = None
+                        else:
+                            processing_steps.append({
+                                "step": "ocr_pdf",
+                                "detail": f"📄 Verarbeite PDF mit OCR... ({pdf_msg})"
+                            })
+                            ocr_results = ocr_service.extract_text_from_pdf(file_content)
+
+                        # OCR-Ergebnisse verarbeiten (nur wenn OCR ausgeführt wurde)
                         if ocr_results:
-                            # Texte aller Seiten zusammenfügen
                             ocr_text = "\n\n".join([text for text, conf in ocr_results if text])
                             avg_confidence = sum([conf for text, conf in ocr_results]) / len(ocr_results) if ocr_results else 0
                             doc.ocr_text = ocr_text
                             doc.ocr_confidence = avg_confidence
-                        else:
+                        elif pdf_valid:
+                            # PDF war gültig aber OCR lieferte nichts
                             ocr_text = ""
                             doc.ocr_confidence = 0
 
