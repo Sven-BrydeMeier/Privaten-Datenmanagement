@@ -602,6 +602,27 @@ def process_document(document_id: int, file_data: bytes, user_id: int) -> dict:
                         if structured_data.get('bank_name'):
                             document.bank_name = structured_data['bank_name']
 
+                        # Vertragsdaten
+                        if structured_data.get('contract_start'):
+                            from utils.helpers import parse_date_string
+                            contract_start = parse_date_string(structured_data['contract_start'])
+                            if contract_start:
+                                document.contract_start = contract_start
+                        if structured_data.get('contract_end'):
+                            from utils.helpers import parse_date_string
+                            contract_end = parse_date_string(structured_data['contract_end'])
+                            if contract_end:
+                                document.contract_end = contract_end
+                        if structured_data.get('contract_notice_period_days'):
+                            try:
+                                document.contract_notice_period = int(structured_data['contract_notice_period_days'])
+                            except:
+                                pass
+
+                        # Erweiterte dokumenttyp-spezifische Metadaten
+                        if structured_data.get('extended_metadata'):
+                            document.extended_metadata = structured_data['extended_metadata']
+
                         # Automatische Rechnungserkennung - als OFFEN markieren
                         is_invoice = structured_data.get('is_invoice', False)
                         if is_invoice or structured_data.get('category') in ['Rechnung', 'Mahnung']:

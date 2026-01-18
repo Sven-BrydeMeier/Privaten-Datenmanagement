@@ -187,9 +187,9 @@ Antworte im JSON-Format mit diesen Feldern (nur vorhandene Informationen, leere 
     "sender_address": "Vollständige Adresse mit Straße, PLZ, Ort",
     "document_date": "YYYY-MM-DD",
     "subject": "Betreff/Titel des Schreibens",
-    "category": "Rechnung|Vertrag|Versicherung|Mahnung|Kontoauszug|Lohnabrechnung|Steuerbescheid|Kündigung|Angebot|Sonstiges",
+    "category": "Rechnung|Vertrag|Versicherung|Mahnung|Kontoauszug|Lohnabrechnung|Steuerbescheid|Kündigung|Kredit|Angebot|Sonstiges",
     "is_invoice": true/false,
-    "summary": "Kurze Zusammenfassung des Dokumentinhalts in 1-2 Sätzen",
+    "summary": "Kurze Zusammenfassung des Dokumentinhalts in 2-3 Sätzen mit den wichtigsten Fakten",
     "reference_number": "Aktenzeichen/Geschäftszeichen/Az.",
     "customer_number": "Kundennummer/Kd-Nr.",
     "insurance_number": "Versicherungsnummer/Policennummer",
@@ -204,7 +204,27 @@ Antworte im JSON-Format mit diesen Feldern (nur vorhandene Informationen, leere 
     "bank_name": "Name der Bank",
     "deadline": "YYYY-MM-DD (andere wichtige Frist)",
     "deadline_type": "payment|response|cancellation|contract_end",
-    "key_points": ["Wichtiger Punkt 1", "Wichtiger Punkt 2"]
+    "key_points": ["Wichtiger Punkt 1", "Wichtiger Punkt 2"],
+
+    "contract_start": "YYYY-MM-DD (Vertragsbeginn)",
+    "contract_end": "YYYY-MM-DD (Vertragsende/Ablaufdatum)",
+    "contract_notice_period_days": 90,
+
+    "extended_metadata": {{
+        "monthly_rate": 123.45,
+        "remaining_payments": 24,
+        "payout_amount": 50000.00,
+        "payout_date": "YYYY-MM-DD",
+        "payout_conditions": "Bedingungen für Auszahlung",
+        "surrender_value": 15000.00,
+        "interest_rate": 3.5,
+        "loan_amount": 100000.00,
+        "remaining_debt": 75000.00,
+        "minimum_term": "24 Monate",
+        "renewal_type": "automatisch|manuell",
+        "coverage_amount": 500000.00,
+        "deductible": 150.00
+    }}
 }}
 
 Wichtig:
@@ -212,7 +232,10 @@ Wichtig:
 - Suche nach allen Nummern wie "Rechnungsnr:", "RE-Nr:", "Kd-Nr:", "Vers.-Nr:", etc.
 - Extrahiere den vollständigen Absendernamen inkl. Rechtsform (GmbH, AG, etc.)
 - Bei Rechnungen: Betrag, IBAN, Fälligkeit, Rechnungsnummer extrahieren
-- Erstelle eine prägnante Zusammenfassung
+- Bei Versicherungen: Monatsbeitrag, Versicherungssumme, Selbstbeteiligung, Auszahlungsbetrag, Rückkaufswert
+- Bei Krediten/Darlehen: Darlehenssumme, Zinssatz, Restschuld, monatliche Rate, verbleibende Raten
+- Bei Verträgen: Laufzeit, Kündigungsfrist, automatische Verlängerung
+- Erstelle eine prägnante Zusammenfassung mit den wichtigsten Informationen
 - WICHTIG: Antworte NUR mit dem JSON-Objekt, ohne zusätzlichen Text oder Erklärungen!
 """
 

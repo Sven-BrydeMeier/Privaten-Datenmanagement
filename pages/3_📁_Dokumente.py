@@ -206,6 +206,8 @@ def reanalyze_document(doc_id: int, user_id: int) -> dict:
 
                 if structured_data.get('sender'):
                     doc.sender = structured_data['sender']
+                if structured_data.get('sender_address'):
+                    doc.sender_address = structured_data['sender_address']
                 if structured_data.get('subject'):
                     doc.subject = structured_data['subject']
                     doc.title = structured_data['subject']
@@ -219,6 +221,46 @@ def reanalyze_document(doc_id: int, user_id: int) -> dict:
                     doc.customer_number = structured_data['customer_number']
                 if structured_data.get('invoice_number'):
                     doc.invoice_number = structured_data['invoice_number']
+                if structured_data.get('insurance_number'):
+                    doc.insurance_number = structured_data['insurance_number']
+                if structured_data.get('processing_number'):
+                    doc.processing_number = structured_data['processing_number']
+                if structured_data.get('contract_number'):
+                    doc.contract_number = structured_data['contract_number']
+
+                # Vertragsdaten
+                from utils.helpers import parse_date_string
+                if structured_data.get('contract_start'):
+                    contract_start = parse_date_string(structured_data['contract_start'])
+                    if contract_start:
+                        doc.contract_start = contract_start
+                if structured_data.get('contract_end'):
+                    contract_end = parse_date_string(structured_data['contract_end'])
+                    if contract_end:
+                        doc.contract_end = contract_end
+                if structured_data.get('contract_notice_period_days'):
+                    try:
+                        doc.contract_notice_period = int(structured_data['contract_notice_period_days'])
+                    except:
+                        pass
+
+                # Erweiterte dokumenttyp-spezifische Metadaten
+                if structured_data.get('extended_metadata'):
+                    doc.extended_metadata = structured_data['extended_metadata']
+
+                # Finanzinformationen
+                if structured_data.get('invoice_amount'):
+                    doc.invoice_amount = float(structured_data['invoice_amount'])
+                if structured_data.get('invoice_due_date'):
+                    due_date = parse_date_string(structured_data['invoice_due_date'])
+                    if due_date:
+                        doc.invoice_due_date = due_date
+                if structured_data.get('iban'):
+                    doc.iban = structured_data['iban']
+                if structured_data.get('bic'):
+                    doc.bic = structured_data['bic']
+                if structured_data.get('bank_name'):
+                    doc.bank_name = structured_data['bank_name']
 
             doc.status = DocumentStatus.COMPLETED
             session.commit()
@@ -956,6 +998,10 @@ if 'view_document_id' in st.session_state:
                 'insurance_number': doc.insurance_number,
                 'processing_number': doc.processing_number,
                 'contract_number': doc.contract_number,
+                'contract_start': getattr(doc, 'contract_start', None),
+                'contract_end': getattr(doc, 'contract_end', None),
+                'contract_notice_period': getattr(doc, 'contract_notice_period', None),
+                'extended_metadata': getattr(doc, 'extended_metadata', None),
                 'invoice_number': getattr(doc, 'invoice_number', None),
                 'invoice_amount': doc.invoice_amount,
                 'invoice_due_date': doc.invoice_due_date,
@@ -967,7 +1013,8 @@ if 'view_document_id' in st.session_state:
                 'bank_name': getattr(doc, 'bank_name', None),
                 'ocr_text': doc.ocr_text,
                 'created_at': doc.created_at,
-                'folder_id': doc.folder_id
+                'folder_id': doc.folder_id,
+                'user_id': doc.user_id
             }
 
     st.divider()
@@ -1010,6 +1057,30 @@ if 'view_document_id' in st.session_state:
                     # PDF-Vorschau mit iframe
                     if mime_type == "application/pdf" or filename_lower.endswith(".pdf"):
                         pdf_base64 = base64.b64encode(file_data).decode('utf-8')
+
+                        # Vollansicht-Button (öffnet PDF in neuem Tab)
+                        col_fullview, col_download = st.columns([1, 1])
+                        with col_fullview:
+                            fullview_html = f'''
+                            <a href="data:application/pdf;base64,{pdf_base64}"
+                               target="_blank"
+                               style="display: inline-block; padding: 0.5rem 1rem;
+                                      background-color: #0066cc; color: white;
+                                      text-decoration: none; border-radius: 5px;
+                                      font-weight: 500; margin-bottom: 10px;">
+                                🔍 Vollansicht in neuem Tab öffnen
+                            </a>
+                            '''
+                            st.markdown(fullview_html, unsafe_allow_html=True)
+                        with col_download:
+                            st.download_button(
+                                "⬇️ PDF herunterladen",
+                                data=file_data,
+                                file_name=doc_data['filename'],
+                                mime="application/pdf",
+                                key=f"download_pdf_{doc_id}"
+                            )
+
                         pdf_display = f'''
                         <iframe
                             src="data:application/pdf;base64,{pdf_base64}"
@@ -1134,6 +1205,108 @@ if 'view_document_id' in st.session_state:
             st.info("Kein OCR-Text verfügbar")
 
     with tab_metadata:
+        # === DOKUMENTZUSAMMENFASSUNG ===
+        st.markdown("### 📋 Zusammenfassung")
+
+        # AI-Zusammenfassung anzeigen (falls vorhanden)
+        if doc_data.get('ai_summary'):
+            st.info(doc_data['ai_summary'])
+        else:
+            st.caption("Keine KI-Zusammenfassung verfügbar")
+
+        # Dokumenttyp-spezifische Informationen
+        category = doc_data.get('category', '').lower() if doc_data.get('category') else ''
+        extended_meta = doc_data.get('extended_metadata') or {}
+
+        # Versicherung-spezifische Anzeige
+        if 'versicherung' in category or category == 'insurance':
+            with st.container():
+                st.markdown("#### 🛡️ Versicherungsdetails")
+                vers_col1, vers_col2 = st.columns(2)
+
+                with vers_col1:
+                    if doc_data.get('insurance_number'):
+                        st.write(f"**Versicherungsnr.:** {doc_data['insurance_number']}")
+                    if doc_data.get('contract_start'):
+                        st.write(f"**Vertragsbeginn:** {format_date(doc_data['contract_start'])}")
+                    if doc_data.get('contract_end'):
+                        st.write(f"**Vertragsende:** {format_date(doc_data['contract_end'])}")
+                        # Restlaufzeit berechnen
+                        from datetime import datetime
+                        if isinstance(doc_data['contract_end'], datetime):
+                            remaining = (doc_data['contract_end'] - datetime.now()).days
+                            if remaining > 0:
+                                years = remaining // 365
+                                months = (remaining % 365) // 30
+                                st.write(f"**Restlaufzeit:** {years} Jahre, {months} Monate")
+                            else:
+                                st.warning("⚠️ Vertrag abgelaufen")
+                    if doc_data.get('contract_notice_period'):
+                        st.write(f"**Kündigungsfrist:** {doc_data['contract_notice_period']} Tage")
+
+                with vers_col2:
+                    # Erweiterte Metadaten für Versicherungen
+                    if extended_meta.get('monthly_rate'):
+                        st.write(f"**Monatsbeitrag:** {format_currency(extended_meta['monthly_rate'])}")
+                    if extended_meta.get('remaining_payments'):
+                        st.write(f"**Verbleibende Raten:** {extended_meta['remaining_payments']}")
+                    if extended_meta.get('payout_amount'):
+                        st.write(f"**Auszahlungsbetrag:** {format_currency(extended_meta['payout_amount'])}")
+                    if extended_meta.get('payout_date'):
+                        st.write(f"**Auszahlungsdatum:** {extended_meta['payout_date']}")
+                    if extended_meta.get('surrender_value'):
+                        st.write(f"**Rückkaufswert:** {format_currency(extended_meta['surrender_value'])}")
+                    if extended_meta.get('payout_conditions'):
+                        st.write(f"**Auszahlungsbedingungen:** {extended_meta['payout_conditions']}")
+
+        # Vertrag-spezifische Anzeige
+        elif 'vertrag' in category or category == 'contract':
+            with st.container():
+                st.markdown("#### 📝 Vertragsdetails")
+                vert_col1, vert_col2 = st.columns(2)
+
+                with vert_col1:
+                    if doc_data.get('contract_number'):
+                        st.write(f"**Vertragsnr.:** {doc_data['contract_number']}")
+                    if doc_data.get('contract_start'):
+                        st.write(f"**Vertragsbeginn:** {format_date(doc_data['contract_start'])}")
+                    if doc_data.get('contract_end'):
+                        st.write(f"**Vertragsende:** {format_date(doc_data['contract_end'])}")
+                    if doc_data.get('contract_notice_period'):
+                        st.write(f"**Kündigungsfrist:** {doc_data['contract_notice_period']} Tage")
+
+                with vert_col2:
+                    if extended_meta.get('renewal_type'):
+                        st.write(f"**Verlängerungsart:** {extended_meta['renewal_type']}")
+                    if extended_meta.get('minimum_term'):
+                        st.write(f"**Mindestlaufzeit:** {extended_meta['minimum_term']}")
+                    if extended_meta.get('monthly_cost'):
+                        st.write(f"**Monatliche Kosten:** {format_currency(extended_meta['monthly_cost'])}")
+
+        # Kredit/Darlehen-spezifische Anzeige
+        elif 'kredit' in category or 'darlehen' in category or category == 'loan':
+            with st.container():
+                st.markdown("#### 💳 Kreditdetails")
+                kred_col1, kred_col2 = st.columns(2)
+
+                with kred_col1:
+                    if extended_meta.get('loan_amount'):
+                        st.write(f"**Darlehenssumme:** {format_currency(extended_meta['loan_amount'])}")
+                    if extended_meta.get('interest_rate'):
+                        st.write(f"**Zinssatz:** {extended_meta['interest_rate']}%")
+                    if extended_meta.get('remaining_debt'):
+                        st.write(f"**Restschuld:** {format_currency(extended_meta['remaining_debt'])}")
+
+                with kred_col2:
+                    if extended_meta.get('monthly_rate'):
+                        st.write(f"**Monatliche Rate:** {format_currency(extended_meta['monthly_rate'])}")
+                    if extended_meta.get('remaining_payments'):
+                        st.write(f"**Verbleibende Raten:** {extended_meta['remaining_payments']}")
+                    if extended_meta.get('end_date'):
+                        st.write(f"**Laufzeitende:** {extended_meta['end_date']}")
+
+        st.markdown("---")
+
         # Drei-Spalten-Layout für Metadaten
         col_sender, col_refs, col_finance = st.columns(3)
 

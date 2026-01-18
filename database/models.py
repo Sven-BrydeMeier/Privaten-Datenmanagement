@@ -228,6 +228,12 @@ class Document(Base):
     contract_end = Column(DateTime)
     contract_notice_period = Column(Integer)  # Kündigungsfrist in Tagen
 
+    # Erweiterte dokumenttyp-spezifische Metadaten (JSON)
+    # Für Versicherungen: monthly_rate, surrender_value, payout_amount, payout_date, payout_conditions, remaining_payments
+    # Für Verträge: renewal_type, auto_renewal, minimum_term
+    # Für Kredite: interest_rate, total_amount, remaining_debt
+    extended_metadata = Column(JSON, default=dict)
+
     # Zeitstempel
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
