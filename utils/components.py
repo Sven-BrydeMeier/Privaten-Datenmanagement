@@ -391,23 +391,10 @@ def render_sidebar_with_navigation(use_mastr_layout: bool = True):
     """
     if use_mastr_layout:
         # Verwende das neue MaStR-Layout (Enterprise-Stil)
-        from utils.layout_mastr import render_sidebar_navigation, inject_mastr_css, render_header
+        from utils.layout_mastr import render_sidebar_navigation, inject_mastr_css
         inject_mastr_css()
-
-        # Benutzer-Info abrufen
-        user_name = "Benutzer"
-        if 'user_id' in st.session_state:
-            try:
-                from database.db import get_db
-                from database.models import User
-                with get_db() as session:
-                    user = session.query(User).filter(User.id == st.session_state.user_id).first()
-                    if user and user.display_name:
-                        user_name = user.display_name
-            except:
-                pass
-
-        render_header(user_name=user_name)
+        # Header wird NICHT mehr gerendert (verursacht Probleme in Streamlit Cloud)
+        # Stattdessen nur die Sidebar-Navigation
         render_sidebar_navigation()
     else:
         # Verwende die alte Tree-Navigation

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 try:
     from .extended_models import (
         Warranty, Insurance, InsuranceClaim, Subscription,
-        InventoryItem, CloudSyncConnection, CloudSyncLog,
+        InventoryItem, CloudSyncConnection, CloudSyncLog, CloudSyncDiagnostic,
         DocumentVersion, DocumentTemplate, Vehicle, MileageTrip,
         BackupLog, FamilyGroup, FamilyMember, SharedDocument, DocumentComment
     )
@@ -387,6 +387,60 @@ def run_migrations():
                     conn.commit()
                 except Exception:
                     pass
+
+        # cloud_sync_diagnostics Tabelle erstellen (für Diagnose-Berichte)
+        if 'cloud_sync_diagnostics' not in existing_tables:
+            try:
+                conn.execute(text('''
+                    CREATE TABLE IF NOT EXISTS cloud_sync_diagnostics (
+                        id SERIAL PRIMARY KEY,
+                        connection_id INTEGER REFERENCES cloud_sync_connections(id),
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        sync_started_at TIMESTAMP NOT NULL,
+                        sync_ended_at TIMESTAMP,
+                        sync_status VARCHAR(50),
+                        total_files INTEGER DEFAULT 0,
+                        files_processed INTEGER DEFAULT 0,
+                        files_successful INTEGER DEFAULT 0,
+                        files_skipped INTEGER DEFAULT 0,
+                        files_failed INTEGER DEFAULT 0,
+                        duration_seconds REAL,
+                        last_successful_file VARCHAR(500),
+                        last_successful_index INTEGER,
+                        last_successful_at TIMESTAMP,
+                        heartbeat_at TIMESTAMP,
+                        current_file_name VARCHAR(500),
+                        current_file_index INTEGER,
+                        current_step VARCHAR(100),
+                        current_step_detail TEXT,
+                        api_calls_total INTEGER DEFAULT 0,
+                        api_calls_failed INTEGER DEFAULT 0,
+                        api_avg_duration_ms REAL,
+                        api_max_duration_ms REAL,
+                        memory_start_mb REAL,
+                        memory_end_mb REAL,
+                        memory_max_mb REAL,
+                        memory_growth_mb REAL,
+                        possible_causes JSONB,
+                        recommendations JSONB,
+                        events_log JSONB,
+                        api_calls_log JSONB,
+                        file_operations_log JSONB,
+                        errors_log JSONB,
+                        memory_snapshots JSONB,
+                        error_message TEXT,
+                        error_traceback TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                '''))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_sync_diag_user ON cloud_sync_diagnostics(user_id)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_sync_diag_connection ON cloud_sync_diagnostics(connection_id)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_sync_diag_status ON cloud_sync_diagnostics(sync_status)'))
+                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_sync_diag_date ON cloud_sync_diagnostics(sync_started_at)'))
+                conn.commit()
+                logger.info("Tabelle cloud_sync_diagnostics erstellt")
+            except Exception as e:
+                logger.warning(f"Fehler beim Erstellen der cloud_sync_diagnostics Tabelle: {e}")
 
 
 def create_indexes_safely(indexes_info: list):
