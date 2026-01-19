@@ -1057,8 +1057,13 @@ def main():
     # Aktuelle Seite in Session speichern für Navigation-Highlighting
     st.session_state['_current_page'] = 'streamlit_app.py'
 
-    # Neue smarte Navigation rendern
-    render_sidebar_with_navigation()
+    # Neues MaStR-Layout mit Navigation rendern
+    render_sidebar_with_navigation(use_mastr_layout=True)
+
+    # Breadcrumb für Dashboard
+    from utils.layout_mastr import render_breadcrumb, render_page_title
+    render_breadcrumb("Persönliche Startseite")
+    render_page_title("Dashboard")
 
     # Dashboard anzeigen
     render_dashboard()

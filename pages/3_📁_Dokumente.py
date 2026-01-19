@@ -381,7 +381,12 @@ def build_folder_tree(session, user_id: int, include_root: bool = False) -> list
 
 user_id = get_current_user_id()
 
-st.title("📁 Dokumente & Ordner")
+# MaStR-Layout anwenden
+from utils.components import render_sidebar_with_navigation
+from utils.layout_mastr import render_breadcrumb, render_page_title
+render_sidebar_with_navigation(use_mastr_layout=True)
+render_breadcrumb("Dokumente", "Dokumentenverwaltung")
+render_page_title("Dokumentenverwaltung")
 
 # Layout: Sidebar für Ordner, Hauptbereich für Dokumente
 col_folders, col_docs = st.columns([1, 3])

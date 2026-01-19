@@ -111,11 +111,15 @@ def stamp_invoice_pdf(document, payment_date: datetime, bank_account_name: str) 
 
 init_db()
 apply_custom_css()
-render_sidebar_cart()
 
 user_id = get_current_user_id()
 
-st.title("💰 Finanzen & Ausgaben")
+# MaStR-Layout anwenden
+from utils.components import render_sidebar_with_navigation
+from utils.layout_mastr import render_breadcrumb, render_page_title
+render_sidebar_with_navigation(use_mastr_layout=True)
+render_breadcrumb("Finanzen", "Finanzübersicht")
+render_page_title("Finanzen & Ausgaben")
 
 # Tabs
 tab_receipts, tab_groups, tab_overview, tab_invoices, tab_transactions = st.tabs([

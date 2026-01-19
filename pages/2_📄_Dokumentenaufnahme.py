@@ -27,7 +27,12 @@ st.set_page_config(page_title="Dokumentenaufnahme", page_icon="📄", layout="wi
 init_db()
 
 # Sidebar mit Aktentasche
-render_sidebar_cart()
+# MaStR-Layout anwenden
+from utils.components import render_sidebar_with_navigation
+from utils.layout_mastr import render_breadcrumb, render_page_title
+render_sidebar_with_navigation(use_mastr_layout=True)
+render_breadcrumb("Dokumente", "Dokumentenaufnahme")
+render_page_title("Dokumentenaufnahme")
 
 # Debug-Modus Toggle in der Sidebar
 with st.sidebar:
@@ -36,7 +41,6 @@ with st.sidebar:
                              help="Zeigt detaillierte Verarbeitungsschritte an")
     st.session_state.debug_mode = debug_mode
 
-st.title("📄 Dokumentenaufnahme")
 st.markdown("Laden Sie Dokumente hoch oder scannen Sie sie ein")
 
 

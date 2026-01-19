@@ -18,13 +18,14 @@ from services.encryption import get_encryption_service
 st.set_page_config(page_title="Suche", page_icon="🔎", layout="wide")
 init_db()
 
-# Neues Layout anwenden
-from utils.ui_new import apply_new_layout
-apply_new_layout()
-
 user_id = get_current_user_id()
 
-st.title("🔎 Dokumentensuche")
+# MaStR-Layout anwenden
+from utils.components import render_sidebar_with_navigation
+from utils.layout_mastr import render_breadcrumb, render_page_title
+render_sidebar_with_navigation(use_mastr_layout=True)
+render_breadcrumb("Dokumente", "Suche")
+render_page_title("Dokumentensuche")
 
 # Suchbegriff aus Top-Menü übernehmen
 initial_search = st.session_state.pop('search_query_from_top', '')

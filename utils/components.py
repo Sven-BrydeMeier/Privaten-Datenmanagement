@@ -382,11 +382,48 @@ def render_smart_navigation():
     # Hier nur Fallback für Kompatibilität
 
 
-def render_sidebar_with_navigation():
+def render_sidebar_with_navigation(use_mastr_layout: bool = True):
     """
     Rendert die komplette Sidebar mit Navigation, Aktentasche und Status.
-    Verwendet jetzt die neue Tree-Navigation ohne sichtbare Buttons.
+
+    Args:
+        use_mastr_layout: Wenn True, wird das neue MaStR-Layout verwendet
     """
-    # Verwende die neue Tree-Navigation
-    from utils.ui_new import render_tree_sidebar
-    render_tree_sidebar()
+    if use_mastr_layout:
+        # Verwende das neue MaStR-Layout (Enterprise-Stil)
+        from utils.layout_mastr import render_sidebar_navigation, inject_mastr_css, render_header
+        inject_mastr_css()
+
+        # Benutzer-Info abrufen
+        user_name = "Benutzer"
+        if 'user_id' in st.session_state:
+            try:
+                from database.db import get_db
+                from database.models import User
+                with get_db() as session:
+                    user = session.query(User).filter(User.id == st.session_state.user_id).first()
+                    if user and user.display_name:
+                        user_name = user.display_name
+            except:
+                pass
+
+        render_header(user_name=user_name)
+        render_sidebar_navigation()
+    else:
+        # Verwende die alte Tree-Navigation
+        from utils.ui_new import render_tree_sidebar
+        render_tree_sidebar()
+
+
+def apply_mastr_page_layout(page_title: str = None, show_info: bool = False, info_text: str = ""):
+    """
+    Wendet das vollständige MaStR-Layout auf die aktuelle Seite an.
+    Sollte am Anfang jeder Seite nach st.set_page_config() aufgerufen werden.
+
+    Args:
+        page_title: Optionaler Seitentitel (wird sonst aus Navigation ermittelt)
+        show_info: Zeigt eine Info-Box an
+        info_text: Text für die Info-Box
+    """
+    from utils.layout_mastr import apply_mastr_layout
+    apply_mastr_layout(page_title=page_title, show_info=show_info, info_text=info_text)
