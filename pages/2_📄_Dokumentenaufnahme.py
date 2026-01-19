@@ -21,15 +21,13 @@ from services.search_service import get_search_service
 from services.email_parser_service import get_email_parser
 from utils.pdf_utils import get_pdf_processor
 from utils.helpers import format_currency, format_date, sanitize_filename, get_local_now
-from utils.components import render_sidebar_cart
+from utils.components import render_sidebar_with_navigation
+from utils.layout_mastr import render_breadcrumb, render_page_title
 
 st.set_page_config(page_title="Dokumentenaufnahme", page_icon="📄", layout="wide")
 init_db()
 
-# Sidebar mit Aktentasche
 # MaStR-Layout anwenden
-from utils.components import render_sidebar_with_navigation
-from utils.layout_mastr import render_breadcrumb, render_page_title
 render_sidebar_with_navigation(use_mastr_layout=True)
 render_breadcrumb("Dokumente", "Dokumentenaufnahme")
 render_page_title("Dokumentenaufnahme")

@@ -288,11 +288,6 @@ def reanalyze_document(doc_id: int, user_id: int) -> dict:
             return {"success": False, "message": f"Fehler: {str(e)[:200]}"}
 
 
-# Sidebar mit Aktentasche
-from utils.components import render_sidebar_cart, add_to_cart
-render_sidebar_cart()
-
-
 def build_folder_tree(session, user_id: int, include_root: bool = False) -> list:
     """
     Baut eine hierarchische Ordnerliste für Selectboxen.
