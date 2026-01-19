@@ -173,6 +173,14 @@ def run_migrations():
                 except Exception:
                     pass
 
+            # extended_metadata Spalte hinzufügen (für dokumenttyp-spezifische Daten)
+            if 'extended_metadata' not in existing_columns:
+                try:
+                    conn.execute(text("ALTER TABLE documents ADD COLUMN extended_metadata JSONB DEFAULT '{}'"))
+                    conn.commit()
+                except Exception:
+                    pass
+
         # Migration 2: properties Tabelle erstellen (falls nicht existiert)
         if 'properties' not in existing_tables:
             try:
