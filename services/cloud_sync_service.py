@@ -542,7 +542,229 @@ SYNC_CONFIG = {
     "disk_critical_threshold_mb": 50,  # Abbruch wenn weniger als X MB frei
     "ram_warning_threshold_mb": 450,   # RAM-Warnung: Extra Cleanup wenn überschritten (Baseline ~350-380MB)
     "ram_critical_threshold_mb": 550,  # RAM-Kritisch: Abbruch wenn überschritten
+    # Resume und Adaptive Sync Einstellungen
+    "resume_max_age_hours": 24,        # Maximales Alter eines unterbrochenen Syncs für Resume
+    "adaptive_min_batch_size": 10,     # Minimale Batch-Größe
+    "adaptive_max_batch_size": 200,    # Maximale Batch-Größe
+    "slow_file_threshold_seconds": 30, # Ab dieser Zeit gilt eine Datei als "langsam"
+    "throttle_detection_threshold": 3, # Nach X langsamen Dateien: Drosselung erkannt
 }
+
+
+# ==================== RESUME FUNKTIONALITÄT ====================
+
+def generate_file_list_hash(files: List[Dict]) -> str:
+    """
+    Erstellt einen Hash der Dateiliste zur Konsistenzprüfung.
+    Ermöglicht Erkennung von Änderungen seit der letzten Unterbrechung.
+    """
+    if not files:
+        return ""
+    # Nur IDs und Namen hashen (sortiert für Konsistenz)
+    file_ids = sorted([f"{f.get('id', '')}:{f.get('name', '')}" for f in files])
+    content = "|".join(file_ids)
+    return hashlib.md5(content.encode()).hexdigest()
+
+
+def save_resume_state(connection_id: int, user_id: int,
+                      current_index: int, total_files: int,
+                      file_list_hash: str, last_file_name: str,
+                      processing_times: List[float] = None):
+    """
+    Speichert den aktuellen Sync-Status für spätere Fortsetzung.
+    Wird nach jeder erfolgreich verarbeiteten Datei aufgerufen.
+    """
+    import uuid
+    try:
+        with get_db() as session:
+            connection = session.query(CloudSyncConnection).filter(
+                CloudSyncConnection.id == connection_id,
+                CloudSyncConnection.user_id == user_id
+            ).first()
+
+            if connection:
+                connection.resume_from_index = current_index + 1  # Nächste Datei
+                connection.resume_total_files = total_files
+                connection.resume_file_list_hash = file_list_hash
+                connection.last_successful_file = last_file_name
+                connection.sync_interrupted_at = datetime.now()
+
+                # Session-ID erstellen wenn noch keine existiert
+                if not connection.resume_session_id:
+                    connection.resume_session_id = str(uuid.uuid4())[:8]
+
+                # Durchschnittliche Verarbeitungszeit berechnen
+                if processing_times and len(processing_times) > 0:
+                    connection.avg_file_processing_time = sum(processing_times[-10:]) / len(processing_times[-10:])
+
+                    # Drosselung erkennen
+                    slow_threshold = SYNC_CONFIG.get("slow_file_threshold_seconds", 30)
+                    slow_count = sum(1 for t in processing_times[-5:] if t > slow_threshold)
+                    if slow_count >= SYNC_CONFIG.get("throttle_detection_threshold", 3):
+                        connection.api_throttle_detected = True
+                        logger.warning(f"[RESUME] API-Drosselung erkannt: {slow_count} langsame Dateien")
+
+                session.commit()
+                logger.debug(f"[RESUME] Status gespeichert: Datei {current_index + 1}/{total_files}")
+    except Exception as e:
+        logger.warning(f"[RESUME] Fehler beim Speichern des Status: {e}")
+
+
+def clear_resume_state(connection_id: int, user_id: int):
+    """
+    Löscht den Resume-Status nach erfolgreichem Abschluss eines Syncs.
+    """
+    try:
+        with get_db() as session:
+            connection = session.query(CloudSyncConnection).filter(
+                CloudSyncConnection.id == connection_id,
+                CloudSyncConnection.user_id == user_id
+            ).first()
+
+            if connection:
+                connection.resume_from_index = 0
+                connection.resume_session_id = None
+                connection.resume_total_files = None
+                connection.resume_file_list_hash = None
+                connection.sync_interrupted_at = None
+                connection.last_successful_file = None
+                connection.api_throttle_detected = False
+                session.commit()
+                logger.info(f"[RESUME] Status zurückgesetzt für Verbindung {connection_id}")
+    except Exception as e:
+        logger.warning(f"[RESUME] Fehler beim Zurücksetzen: {e}")
+
+
+def get_resume_info(connection_id: int, user_id: int) -> Optional[Dict]:
+    """
+    Prüft ob ein unterbrochener Sync fortgesetzt werden kann.
+
+    Returns:
+        Dict mit Resume-Informationen oder None wenn kein Resume möglich
+    """
+    try:
+        with get_db() as session:
+            connection = session.query(CloudSyncConnection).filter(
+                CloudSyncConnection.id == connection_id,
+                CloudSyncConnection.user_id == user_id
+            ).first()
+
+            if not connection:
+                return None
+
+            # Prüfen ob Resume-Daten vorhanden
+            if not connection.resume_from_index or connection.resume_from_index == 0:
+                return None
+
+            if not connection.sync_interrupted_at:
+                return None
+
+            # Prüfen ob nicht zu alt
+            max_age_hours = SYNC_CONFIG.get("resume_max_age_hours", 24)
+            age = datetime.now() - connection.sync_interrupted_at
+            if age.total_seconds() > max_age_hours * 3600:
+                logger.info(f"[RESUME] Unterbrochener Sync zu alt ({age.total_seconds()/3600:.1f}h > {max_age_hours}h)")
+                clear_resume_state(connection_id, user_id)
+                return None
+
+            return {
+                "resume_from_index": connection.resume_from_index,
+                "resume_total_files": connection.resume_total_files,
+                "resume_file_list_hash": connection.resume_file_list_hash,
+                "resume_session_id": connection.resume_session_id,
+                "last_successful_file": connection.last_successful_file,
+                "interrupted_at": connection.sync_interrupted_at,
+                "age_hours": age.total_seconds() / 3600,
+                "api_throttle_detected": connection.api_throttle_detected,
+                "avg_processing_time": connection.avg_file_processing_time,
+                "adaptive_batch_size": connection.adaptive_batch_size or 50
+            }
+    except Exception as e:
+        logger.warning(f"[RESUME] Fehler beim Lesen des Status: {e}")
+        return None
+
+
+def get_all_interrupted_syncs(user_id: int) -> List[Dict]:
+    """
+    Gibt alle unterbrochenen Syncs für einen Benutzer zurück.
+    Nützlich für Dashboard-Anzeige.
+    """
+    try:
+        with get_db() as session:
+            connections = session.query(CloudSyncConnection).filter(
+                CloudSyncConnection.user_id == user_id,
+                CloudSyncConnection.is_active == True,
+                CloudSyncConnection.sync_interrupted_at.isnot(None),
+                CloudSyncConnection.resume_from_index > 0
+            ).all()
+
+            result = []
+            max_age_hours = SYNC_CONFIG.get("resume_max_age_hours", 24)
+
+            for conn in connections:
+                age = datetime.now() - conn.sync_interrupted_at
+                if age.total_seconds() <= max_age_hours * 3600:
+                    result.append({
+                        "connection_id": conn.id,
+                        "provider": conn.provider.value if conn.provider else "unknown",
+                        "provider_name": conn.provider_name or conn.remote_folder_path,
+                        "resume_from_index": conn.resume_from_index,
+                        "resume_total_files": conn.resume_total_files,
+                        "last_successful_file": conn.last_successful_file,
+                        "interrupted_at": conn.sync_interrupted_at,
+                        "age_hours": age.total_seconds() / 3600,
+                        "progress_percent": round((conn.resume_from_index / conn.resume_total_files * 100) if conn.resume_total_files else 0, 1)
+                    })
+
+            return result
+    except Exception as e:
+        logger.warning(f"[RESUME] Fehler beim Abrufen unterbrochener Syncs: {e}")
+        return []
+
+
+def calculate_adaptive_batch_size(connection_id: int, user_id: int,
+                                   current_batch_size: int,
+                                   recent_processing_times: List[float]) -> int:
+    """
+    Berechnet eine optimale Batch-Größe basierend auf der bisherigen Performance.
+    Reduziert Batch-Größe bei langsamen APIs, erhöht bei schnellen.
+    """
+    min_batch = SYNC_CONFIG.get("adaptive_min_batch_size", 10)
+    max_batch = SYNC_CONFIG.get("adaptive_max_batch_size", 200)
+    slow_threshold = SYNC_CONFIG.get("slow_file_threshold_seconds", 30)
+
+    if not recent_processing_times or len(recent_processing_times) < 3:
+        return current_batch_size
+
+    # Durchschnitt der letzten 5 Dateien
+    recent_avg = sum(recent_processing_times[-5:]) / len(recent_processing_times[-5:])
+
+    new_batch_size = current_batch_size
+
+    if recent_avg > slow_threshold:
+        # API ist langsam - Batch-Größe reduzieren
+        new_batch_size = max(min_batch, current_batch_size // 2)
+        logger.info(f"[ADAPTIVE] API langsam ({recent_avg:.1f}s/Datei) - Batch-Größe reduziert auf {new_batch_size}")
+    elif recent_avg < slow_threshold / 3:
+        # API ist schnell - Batch-Größe erhöhen
+        new_batch_size = min(max_batch, int(current_batch_size * 1.5))
+        logger.info(f"[ADAPTIVE] API schnell ({recent_avg:.1f}s/Datei) - Batch-Größe erhöht auf {new_batch_size}")
+
+    # In DB speichern
+    try:
+        with get_db() as session:
+            connection = session.query(CloudSyncConnection).filter(
+                CloudSyncConnection.id == connection_id,
+                CloudSyncConnection.user_id == user_id
+            ).first()
+            if connection:
+                connection.adaptive_batch_size = new_batch_size
+                connection.avg_file_processing_time = recent_avg
+                session.commit()
+    except Exception as e:
+        logger.warning(f"[ADAPTIVE] Fehler beim Speichern: {e}")
+
+    return new_batch_size
 
 
 def get_current_ram_mb() -> float:
@@ -3014,12 +3236,58 @@ class CloudSyncService:
                     diag.set_phase("downloading")
                 yield add_live_diagnostics(result)
 
+                # ==================== RESUME-LOGIK ====================
+                # Hash der aktuellen Dateiliste für Konsistenzprüfung
+                file_list_hash = generate_file_list_hash(files_to_sync)
+                resume_start_index = 0
+                processing_times = []  # Für adaptive Batch-Berechnung
+
+                # Prüfen ob ein unterbrochener Sync fortgesetzt werden kann
+                resume_info = get_resume_info(connection_id, self.user_id)
+                if resume_info:
+                    # Prüfen ob Dateiliste noch konsistent ist
+                    if resume_info.get("resume_file_list_hash") == file_list_hash:
+                        resume_start_index = resume_info.get("resume_from_index", 0)
+                        if resume_start_index > 0 and resume_start_index < len(files_to_sync):
+                            logger.info(f"[RESUME] Setze unterbrochenen Sync fort ab Datei {resume_start_index + 1}/{len(files_to_sync)}")
+                            logger.info(f"[RESUME] Letzte erfolgreiche Datei: {resume_info.get('last_successful_file')}")
+                            if diag:
+                                diag.log_event("resume_continue",
+                                               f"Fortsetzen ab Datei {resume_start_index + 1}, letzte: {resume_info.get('last_successful_file')}",
+                                               resume_info)
+                            result["resume_info"] = {
+                                "resumed": True,
+                                "from_index": resume_start_index,
+                                "last_file": resume_info.get("last_successful_file"),
+                                "interrupted_at": str(resume_info.get("interrupted_at"))
+                            }
+                            # Überspringe bereits verarbeitete Dateien
+                            files_to_sync = files_to_sync[resume_start_index:]
+                            result["files_total"] = len(files_to_sync) + resume_start_index
+                        else:
+                            logger.info(f"[RESUME] Index außerhalb des Bereichs - starte von vorne")
+                            clear_resume_state(connection_id, self.user_id)
+                    else:
+                        logger.info(f"[RESUME] Dateiliste hat sich geändert - starte von vorne")
+                        if diag:
+                            diag.log_event("resume_reset", "Dateiliste geändert, Resume-Status zurückgesetzt")
+                        clear_resume_state(connection_id, self.user_id)
+
+                # Adaptive Batch-Größe aus vorheriger Session verwenden
+                adaptive_batch = SYNC_CONFIG.get("adaptive_max_batch_size", 200)
+                if resume_info and resume_info.get("api_throttle_detected"):
+                    adaptive_batch = resume_info.get("adaptive_batch_size", 25)
+                    logger.info(f"[ADAPTIVE] API-Drosselung aus vorheriger Session - verwende Batch-Größe {adaptive_batch}")
+                    if diag:
+                        diag.log_event("adaptive_throttle", f"API-Drosselung erkannt, Batch-Größe: {adaptive_batch}")
+
                 # Konfiguration für Pausen und Checks
                 pause_between_files = SYNC_CONFIG.get("pause_between_files", 0.3)
                 memory_check_interval = SYNC_CONFIG.get("memory_check_interval", 5)
                 cache_clear_interval = SYNC_CONFIG.get("cache_clear_interval", 10)
                 db_check_interval = 10  # Alle X Dateien DB-Verbindung prüfen
                 diag_save_interval = 5  # Alle X Dateien Diagnose in DB speichern
+                resume_save_interval = 3  # Alle X Dateien Resume-Status speichern
                 consecutive_errors = 0
                 max_consecutive_errors = 5  # Nach X Fehlern hintereinander abbrechen
 
@@ -3216,6 +3484,29 @@ class CloudSyncService:
                             # Commit nach jedem erfolgreichen Import!
                             try:
                                 session.commit()
+                                consecutive_errors = 0  # Reset bei Erfolg
+
+                                # Verarbeitungszeit für adaptive Batch-Berechnung speichern
+                                file_process_time = time.time() - file_start_time
+                                processing_times.append(file_process_time)
+
+                                # Resume-Status regelmäßig speichern
+                                actual_idx = idx + resume_start_index  # Korrekter Index in Gesamt-Liste
+                                if len(processing_times) % resume_save_interval == 0:
+                                    save_resume_state(
+                                        connection_id, self.user_id,
+                                        actual_idx, result["batch_info"]["total_files_found"],
+                                        file_list_hash, file_info.get("name"),
+                                        processing_times
+                                    )
+
+                                # Adaptive Batch-Größe alle 10 Dateien neu berechnen
+                                if len(processing_times) % 10 == 0 and len(processing_times) >= 10:
+                                    adaptive_batch = calculate_adaptive_batch_size(
+                                        connection_id, self.user_id,
+                                        adaptive_batch, processing_times
+                                    )
+
                             except Exception as commit_err:
                                 logger.error(f"Commit Fehler für {file_info.get('name')}: {commit_err}")
                                 if diag:
@@ -3349,10 +3640,77 @@ class CloudSyncService:
                         gc.collect(generation=0)  # Nur junge Objekte, sehr schnell
                         gc.collect(generation=1)
 
+                    # ==================== TIMEOUT-ERKENNUNG ====================
+                    # Prüfe ob diese Datei ungewöhnlich lange gedauert hat
+                    file_duration_seconds = time.time() - file_start_time
+                    slow_threshold = SYNC_CONFIG.get("slow_file_threshold_seconds", 30)
+                    download_timeout = SYNC_CONFIG.get("download_timeout", 120)
+
+                    if file_duration_seconds > download_timeout:
+                        # Einzelne Datei hat das Timeout überschritten
+                        warning_msg = f"Datei dauerte extrem lange: {file_duration_seconds:.1f}s (Limit: {download_timeout}s)"
+                        logger.warning(f"[TIMEOUT] {warning_msg} - {file_info.get('name')}")
+                        if diag:
+                            diag.log_event("file_timeout_exceeded",
+                                           f"{file_info.get('name')}: {file_duration_seconds:.1f}s",
+                                           {"duration": file_duration_seconds, "limit": download_timeout})
+
+                        # Resume-Status sofort speichern (falls Container abstürzt)
+                        actual_idx = idx + resume_start_index
+                        save_resume_state(
+                            connection_id, self.user_id,
+                            actual_idx, result["batch_info"]["total_files_found"],
+                            file_list_hash, file_info.get("name"),
+                            processing_times
+                        )
+
+                    elif file_duration_seconds > slow_threshold:
+                        # Datei war langsam - loggen für Adaptive-Batch
+                        logger.info(f"[SLOW] Langsame Datei: {file_info.get('name')} ({file_duration_seconds:.1f}s)")
+                        if diag:
+                            diag.log_event("slow_file",
+                                           f"{file_info.get('name')}: {file_duration_seconds:.1f}s")
+
+                    # Prüfe ob wir bei API-Drosselung den Batch frühzeitig beenden sollten
+                    if len(processing_times) >= 5:
+                        recent_avg = sum(processing_times[-5:]) / 5
+                        if recent_avg > slow_threshold * 2:
+                            # Sehr langsame API - Batch beenden um Timeout zu vermeiden
+                            remaining = len(files_to_sync) - idx - 1
+                            if remaining > 10:  # Nur wenn noch viele Dateien übrig sind
+                                warning_msg = f"API stark verlangsamt ({recent_avg:.1f}s/Datei) - beende Batch frühzeitig"
+                                logger.warning(f"[THROTTLE] {warning_msg}")
+                                if diag:
+                                    diag.log_event("throttle_early_exit", warning_msg,
+                                                   {"avg_time": recent_avg, "remaining": remaining})
+
+                                # Resume-Status speichern
+                                actual_idx = idx + resume_start_index
+                                save_resume_state(
+                                    connection_id, self.user_id,
+                                    actual_idx, result["batch_info"]["total_files_found"],
+                                    file_list_hash, file_info.get("name"),
+                                    processing_times
+                                )
+
+                                result["batch_info"]["has_more"] = True
+                                result["batch_info"]["early_exit_reason"] = "api_throttle"
+                                result["error"] = f"API-Drosselung erkannt - Batch unterbrochen bei Datei {idx + 1}"
+                                break
+
                     # Kurze Pause zwischen Dateien um API-Limits zu vermeiden
                     # (besonders wichtig für Supabase Storage)
+                    # Bei erkannter Drosselung: längere Pause
+                    actual_pause = pause_between_files
+                    if len(processing_times) >= 3:
+                        recent_avg = sum(processing_times[-3:]) / 3
+                        if recent_avg > slow_threshold:
+                            actual_pause = min(5.0, pause_between_files * 3)  # Bis zu 5 Sekunden
+                            if diag and idx % 10 == 0:
+                                diag.log_event("adaptive_pause", f"Erhöhte Pause: {actual_pause}s (avg: {recent_avg:.1f}s)")
+
                     if idx < len(files_to_sync) - 1:  # Nicht nach letzter Datei
-                        time.sleep(pause_between_files)
+                        time.sleep(actual_pause)
 
                 # Phase 2.5: Retry für fehlgeschlagene Dateien (einzeln, mit Pause)
                 if result["failed_files"]:
@@ -3466,6 +3824,11 @@ class CloudSyncService:
                 connection.last_sync_at = datetime.now()
                 connection.last_sync_error = None
                 connection.total_files_synced += result["files_synced"]
+
+                # Resume-Status löschen bei erfolgreichem Abschluss
+                if result["success"] or (result["files_synced"] > 0 and len(result.get("failed_files", [])) == 0):
+                    clear_resume_state(connection_id, self.user_id)
+                    logger.info(f"[RESUME] Sync erfolgreich abgeschlossen - Resume-Status gelöscht")
 
                 # Diagnose abschließen
                 if diag:

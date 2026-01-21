@@ -418,6 +418,19 @@ class CloudSyncConnection(Base):
     total_files_synced = Column(Integer, default=0)
     total_bytes_synced = Column(Integer, default=0)
 
+    # Resume-Funktionalität (für unterbrochene Syncs)
+    resume_from_index = Column(Integer, default=0)  # Ab welcher Datei fortsetzen
+    resume_session_id = Column(String(50))  # Eindeutige Session-ID
+    resume_total_files = Column(Integer)  # Gesamtanzahl Dateien bei Unterbrechung
+    resume_file_list_hash = Column(String(64))  # Hash der Dateiliste für Konsistenz
+    sync_interrupted_at = Column(DateTime)  # Zeitpunkt der Unterbrechung
+    last_successful_file = Column(String(500))  # Name der letzten erfolgreichen Datei
+
+    # Adaptive Sync-Einstellungen
+    adaptive_batch_size = Column(Integer, default=50)  # Dynamisch angepasste Batch-Größe
+    avg_file_processing_time = Column(Float)  # Durchschnittliche Verarbeitungszeit in Sekunden
+    api_throttle_detected = Column(Boolean, default=False)  # API-Drosselung erkannt
+
     is_active = Column(Boolean, default=True)
 
     created_at = Column(DateTime, default=func.now())

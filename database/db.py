@@ -442,6 +442,39 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Fehler beim Erstellen der cloud_sync_diagnostics Tabelle: {e}")
 
+        # Migration: Resume-Spalten für cloud_sync_connections hinzufügen
+        if 'cloud_sync_connections' in existing_tables:
+            try:
+                # Prüfe welche Spalten existieren
+                result = conn.execute(text("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'cloud_sync_connections'
+                """))
+                cloud_sync_columns = {row[0] for row in result.fetchall()}
+
+                resume_columns = [
+                    ("resume_from_index", "INTEGER DEFAULT 0"),
+                    ("resume_session_id", "VARCHAR(50)"),
+                    ("resume_total_files", "INTEGER"),
+                    ("resume_file_list_hash", "VARCHAR(64)"),
+                    ("sync_interrupted_at", "TIMESTAMP"),
+                    ("last_successful_file", "VARCHAR(500)"),
+                    ("adaptive_batch_size", "INTEGER DEFAULT 50"),
+                    ("avg_file_processing_time", "REAL"),
+                    ("api_throttle_detected", "BOOLEAN DEFAULT FALSE"),
+                ]
+
+                for col_name, col_type in resume_columns:
+                    if col_name not in cloud_sync_columns:
+                        try:
+                            conn.execute(text(f"ALTER TABLE cloud_sync_connections ADD COLUMN {col_name} {col_type}"))
+                            conn.commit()
+                            logger.info(f"Spalte {col_name} zu cloud_sync_connections hinzugefügt")
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"Fehler bei Resume-Migration: {e}")
+
 
 def create_indexes_safely(indexes_info: list):
     """Erstellt alle Indizes sicher mit IF NOT EXISTS"""
