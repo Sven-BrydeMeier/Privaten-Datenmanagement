@@ -59,8 +59,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from database.db import init_db, get_db, get_current_user_id
 from database.models import (
     Document, Folder, CalendarEvent, Contact, InvoiceStatus,
-    Receipt, EventType, BankAccount
+    Receipt, EventType, BankAccount, Todo, TodoStatus, TodoPriority
 )
+from database.extended_models import Subscription
 from config.settings import get_settings, get_api_key_status
 from utils.components import render_sidebar_with_navigation, apply_custom_css
 from utils.helpers import format_currency, format_date, calculate_days_until, get_local_now
@@ -450,6 +451,30 @@ def render_dashboard():
         diff = month_expenses - last_month if last_month > 0 else 0
         st.metric("📈 Ausgaben (Monat)", format_currency(month_expenses), f"{'+' if diff >= 0 else ''}{format_currency(diff)}" if last_month > 0 else None)
 
+    # Zweite KPI-Zeile für Todos, Termine und Abos
+    col6, col7, col8, col9, col10 = st.columns(5)
+
+    with col6:
+        todo_count = get_pending_todos_count(user_id)
+        st.metric("✅ Offene Todos", todo_count, "zu erledigen" if todo_count > 0 else None, delta_color="inverse" if todo_count > 3 else "off")
+
+    with col7:
+        week_appointments = get_this_week_appointments_count(user_id)
+        st.metric("📅 Diese Woche", week_appointments, "Termine" if week_appointments > 0 else None)
+
+    with col8:
+        sub_costs = get_total_subscription_costs(user_id)
+        st.metric("💳 Abo-Kosten/Monat", format_currency(sub_costs) if sub_costs > 0 else "0 €")
+
+    with col9:
+        expiring_subs = get_expiring_subscriptions_count(user_id, days=30)
+        st.metric("🔔 Abos (30 Tage)", expiring_subs, "auslaufend" if expiring_subs > 0 else None, delta_color="inverse" if expiring_subs > 0 else "off")
+
+    with col10:
+        # Leeres Feld oder zusätzliche Metrik
+        birthdays_count = len(get_upcoming_birthdays(user_id, limit=30))
+        st.metric("🎂 Geburtstage", birthdays_count, "in 30 Tagen" if birthdays_count > 0 else None)
+
     st.divider()
 
     # =====================
@@ -459,11 +484,14 @@ def render_dashboard():
 
     with col_main:
         # Tabs für verschiedene Übersichten
-        tab_urgent, tab_invoices, tab_contracts, tab_recent = st.tabs([
+        tab_urgent, tab_todos, tab_appointments, tab_invoices, tab_subscriptions, tab_contracts, tab_recent = st.tabs([
             "🚨 Dringend",
-            "💳 Offene Rechnungen",
+            "✅ Todos",
+            "📅 Termine",
+            "💳 Rechnungen",
+            "🔔 Abos",
             "📋 Verträge",
-            "📄 Neueste Dokumente"
+            "📄 Dokumente"
         ])
 
         with tab_urgent:
@@ -510,6 +538,154 @@ def render_dashboard():
 
             if not overdue and not urgent_deadlines and not expiring:
                 st.success("✅ Keine dringenden Aufgaben - alles erledigt!")
+
+        with tab_todos:
+            st.subheader("✅ Offene Aufgaben")
+
+            todos = get_pending_todos(user_id, limit=15)
+            if todos:
+                for todo in todos:
+                    # Priorität-Icon und Farbe
+                    priority_icons = {
+                        'urgent': ('🔴', '#dc3545'),
+                        'high': ('🟠', '#fd7e14'),
+                        'medium': ('🟡', '#ffc107'),
+                        'low': ('🟢', '#28a745')
+                    }
+                    icon, color = priority_icons.get(todo['priority'], ('⚪', '#6c757d'))
+
+                    # Status
+                    status_badge = "🔄 In Bearbeitung" if todo['status'] == 'in_progress' else ""
+
+                    # Fälligkeit
+                    due_text = ""
+                    if todo['days_until'] is not None:
+                        if todo['days_until'] < 0:
+                            due_text = f"⚠️ {abs(todo['days_until'])} Tage überfällig!"
+                        elif todo['days_until'] == 0:
+                            due_text = "📌 Heute fällig!"
+                        elif todo['days_until'] == 1:
+                            due_text = "📌 Morgen fällig"
+                        else:
+                            due_text = f"Fällig in {todo['days_until']} Tagen"
+
+                    col_todo, col_btn = st.columns([4, 1])
+                    with col_todo:
+                        st.markdown(f"""
+                        <div class="info-card" style="border-left: 4px solid {color};">
+                            {icon} <strong>{todo['title']}</strong> {status_badge}<br>
+                            <small>{todo['category'] or 'Allgemein'} | {due_text or 'Kein Fälligkeitsdatum'}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col_btn:
+                        if st.button("✏️", key=f"edit_todo_{todo['id']}", help="Im Kalender bearbeiten"):
+                            st.switch_page("pages/5_📅_Kalender.py")
+            else:
+                st.success("✅ Keine offenen Aufgaben - alles erledigt!")
+
+            if st.button("➕ Neue Aufgabe", key="new_todo_btn"):
+                st.switch_page("pages/5_📅_Kalender.py")
+
+        with tab_appointments:
+            st.subheader("📅 Termine diese Woche")
+
+            appointments = get_this_week_appointments(user_id, limit=15)
+            if appointments:
+                # Gruppiere nach Tag
+                current_day = None
+                for apt in appointments:
+                    if apt['day_name'] != current_day:
+                        current_day = apt['day_name']
+                        day_marker = "🌟 HEUTE" if apt['is_today'] else apt['day_name']
+                        st.markdown(f"**{day_marker} ({apt['date']})**")
+
+                    # Event-Type Icon
+                    type_icons = {
+                        'deadline': '⏰',
+                        'birthday': '🎂',
+                        'appointment': '📅',
+                        'reminder': '🔔',
+                        'contract_end': '📋'
+                    }
+                    type_icon = type_icons.get(apt['event_type'], '📅')
+
+                    # Zeitanzeige
+                    time_text = apt['time']
+
+                    col_apt, col_btn = st.columns([4, 1])
+                    with col_apt:
+                        card_style = "background-color: #fff3cd;" if apt['is_today'] else ""
+                        st.markdown(f"""
+                        <div class="info-card" style="{card_style}">
+                            {type_icon} <strong>{apt['title']}</strong><br>
+                            <small>🕐 {time_text}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col_btn:
+                        if st.button("📅", key=f"view_apt_{apt['id']}", help="Im Kalender anzeigen"):
+                            st.switch_page("pages/5_📅_Kalender.py")
+            else:
+                st.info("📅 Keine Termine diese Woche")
+
+            if st.button("➕ Neuer Termin", key="new_apt_btn"):
+                st.switch_page("pages/5_📅_Kalender.py")
+
+        with tab_subscriptions:
+            st.subheader("🔔 Abonnements & Verträge")
+
+            # Monatliche Kosten-Übersicht
+            monthly_costs = get_total_subscription_costs(user_id)
+            if monthly_costs > 0:
+                st.info(f"**Monatliche Abo-Kosten:** {format_currency(monthly_costs)}")
+
+            # Auslaufende Abos
+            subs = get_expiring_subscriptions(user_id, days=60, limit=15)
+            if subs:
+                st.markdown("**Bald auslaufende/abzurechnende Abos:**")
+                for sub in subs:
+                    # Farbe basierend auf Dringlichkeit
+                    if sub['days_until'] is not None:
+                        if sub['days_until'] <= 7:
+                            color = "#dc3545"
+                            urgency = "🔴"
+                        elif sub['days_until'] <= 14:
+                            color = "#fd7e14"
+                            urgency = "🟠"
+                        elif sub['days_until'] <= 30:
+                            color = "#ffc107"
+                            urgency = "🟡"
+                        else:
+                            color = "#28a745"
+                            urgency = "🟢"
+                    else:
+                        color = "#6c757d"
+                        urgency = "⚪"
+
+                    # Info-Text
+                    if sub.get('end_date'):
+                        date_text = f"Endet: {sub['end_date']}"
+                    elif sub.get('next_billing'):
+                        date_text = f"Nächste Abbuchung: {sub['next_billing']}"
+                    else:
+                        date_text = "Kein Datum"
+
+                    col_sub, col_btn = st.columns([4, 1])
+                    with col_sub:
+                        st.markdown(f"""
+                        <div class="info-card" style="border-left: 4px solid {color};">
+                            {urgency} <strong>{sub['name']}</strong><br>
+                            <span style="font-weight: bold;">{format_currency(sub['amount'] or 0)}/{sub['billing_interval']}</span><br>
+                            <small>{sub['provider'] or 'Unbekannt'} | {date_text}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with col_btn:
+                        if st.button("📋", key=f"view_sub_{sub['id']}", help="Details"):
+                            st.switch_page("pages/17_💳_Abonnements.py")
+            else:
+                st.success("✅ Keine Abos mit baldiger Fälligkeit")
+
+            if st.button("➕ Neues Abo erfassen", key="new_sub_btn"):
+                st.switch_page("pages/17_💳_Abonnements.py")
 
         with tab_invoices:
             st.subheader("💳 Offene Rechnungen")
@@ -1050,6 +1226,199 @@ def get_upcoming_birthdays(user_id: int, limit: int = 5) -> list:
         birthdays.sort(key=lambda x: x['days_until'])
 
     return birthdays[:limit]
+
+
+def get_pending_todos(user_id: int, limit: int = 10) -> list:
+    """Offene Todos/Aufgaben"""
+    todos = []
+    with get_db() as session:
+        pending = session.query(Todo).filter(
+            Todo.user_id == user_id,
+            Todo.status.in_([TodoStatus.OPEN, TodoStatus.IN_PROGRESS])
+        ).order_by(
+            Todo.priority.desc(),  # Höchste Priorität zuerst
+            Todo.due_date.asc().nullslast()  # Nächste Fälligkeit zuerst
+        ).limit(limit).all()
+
+        for todo in pending:
+            days_until = None
+            if todo.due_date:
+                days_until = (todo.due_date.date() - datetime.now().date()).days
+
+            todos.append({
+                'id': todo.id,
+                'title': todo.title,
+                'priority': todo.priority.value if todo.priority else 'medium',
+                'status': todo.status.value if todo.status else 'open',
+                'due_date': format_date(todo.due_date) if todo.due_date else None,
+                'days_until': days_until,
+                'category': todo.category
+            })
+
+    return todos
+
+
+def get_pending_todos_count(user_id: int) -> int:
+    """Zählt offene Todos"""
+    with get_db() as session:
+        return session.query(Todo).filter(
+            Todo.user_id == user_id,
+            Todo.status.in_([TodoStatus.OPEN, TodoStatus.IN_PROGRESS])
+        ).count()
+
+
+def get_this_week_appointments(user_id: int, limit: int = 10) -> list:
+    """Termine dieser Woche"""
+    appointments = []
+    now = datetime.now()
+
+    # Wochenstart (Montag) und Wochenende (Sonntag)
+    week_start = now - timedelta(days=now.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+
+    with get_db() as session:
+        events = session.query(CalendarEvent).filter(
+            CalendarEvent.user_id == user_id,
+            CalendarEvent.start_date >= week_start,
+            CalendarEvent.start_date < week_end
+        ).order_by(CalendarEvent.start_date.asc()).limit(limit).all()
+
+        for event in events:
+            days_until = (event.start_date.date() - now.date()).days
+            day_name = event.start_date.strftime("%A")  # Wochentag
+
+            # Deutsche Wochentage
+            day_names_de = {
+                'Monday': 'Montag', 'Tuesday': 'Dienstag', 'Wednesday': 'Mittwoch',
+                'Thursday': 'Donnerstag', 'Friday': 'Freitag', 'Saturday': 'Samstag', 'Sunday': 'Sonntag'
+            }
+            day_name = day_names_de.get(day_name, day_name)
+
+            appointments.append({
+                'id': event.id,
+                'title': event.title,
+                'date': event.start_date.strftime("%d.%m.%Y"),
+                'time': event.start_date.strftime("%H:%M") if not event.all_day else "Ganztägig",
+                'day_name': day_name,
+                'days_until': days_until,
+                'event_type': event.event_type.value if event.event_type else 'appointment',
+                'is_today': days_until == 0
+            })
+
+    return appointments
+
+
+def get_this_week_appointments_count(user_id: int) -> int:
+    """Zählt Termine dieser Woche"""
+    now = datetime.now()
+    week_start = now - timedelta(days=now.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+
+    with get_db() as session:
+        return session.query(CalendarEvent).filter(
+            CalendarEvent.user_id == user_id,
+            CalendarEvent.start_date >= week_start,
+            CalendarEvent.start_date < week_end
+        ).count()
+
+
+def get_expiring_subscriptions(user_id: int, days: int = 30, limit: int = 10) -> list:
+    """Auslaufende Abonnements"""
+    subscriptions = []
+    cutoff = datetime.now() + timedelta(days=days)
+
+    with get_db() as session:
+        # Abos mit Enddatum
+        subs = session.query(Subscription).filter(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,
+            Subscription.end_date.isnot(None),
+            Subscription.end_date <= cutoff
+        ).order_by(Subscription.end_date.asc()).limit(limit).all()
+
+        for sub in subs:
+            days_until = (sub.end_date.date() - datetime.now().date()).days if sub.end_date else None
+
+            subscriptions.append({
+                'id': sub.id,
+                'name': sub.name,
+                'provider': sub.provider,
+                'amount': sub.amount,
+                'billing_interval': sub.billing_interval.value if sub.billing_interval else 'monthly',
+                'end_date': format_date(sub.end_date) if sub.end_date else None,
+                'days_until': days_until,
+                'category': sub.category
+            })
+
+        # Auch Abos mit bald anstehender nächster Abrechnung hinzufügen
+        next_billing = session.query(Subscription).filter(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,
+            Subscription.next_billing_date.isnot(None),
+            Subscription.next_billing_date <= cutoff
+        ).order_by(Subscription.next_billing_date.asc()).limit(limit).all()
+
+        existing_ids = {s['id'] for s in subscriptions}
+        for sub in next_billing:
+            if sub.id not in existing_ids:
+                days_until = (sub.next_billing_date.date() - datetime.now().date()).days if sub.next_billing_date else None
+                subscriptions.append({
+                    'id': sub.id,
+                    'name': sub.name,
+                    'provider': sub.provider,
+                    'amount': sub.amount,
+                    'billing_interval': sub.billing_interval.value if sub.billing_interval else 'monthly',
+                    'end_date': None,
+                    'next_billing': format_date(sub.next_billing_date) if sub.next_billing_date else None,
+                    'days_until': days_until,
+                    'category': sub.category
+                })
+
+    return sorted(subscriptions, key=lambda x: x.get('days_until') or 999)[:limit]
+
+
+def get_expiring_subscriptions_count(user_id: int, days: int = 30) -> int:
+    """Zählt auslaufende Abonnements"""
+    cutoff = datetime.now() + timedelta(days=days)
+
+    with get_db() as session:
+        return session.query(Subscription).filter(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,
+            Subscription.end_date.isnot(None),
+            Subscription.end_date <= cutoff
+        ).count()
+
+
+def get_total_subscription_costs(user_id: int) -> float:
+    """Monatliche Abo-Kosten"""
+    with get_db() as session:
+        subs = session.query(Subscription).filter(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True
+        ).all()
+
+        monthly_total = 0.0
+        for sub in subs:
+            if sub.amount:
+                # Normalisieren auf Monatsbasis
+                interval = sub.billing_interval.value if sub.billing_interval else 'monthly'
+                if interval == 'weekly':
+                    monthly_total += sub.amount * 4.33
+                elif interval == 'monthly':
+                    monthly_total += sub.amount
+                elif interval == 'quarterly':
+                    monthly_total += sub.amount / 3
+                elif interval == 'semi_annually':
+                    monthly_total += sub.amount / 6
+                elif interval == 'annually':
+                    monthly_total += sub.amount / 12
+                else:
+                    monthly_total += sub.amount
+
+        return monthly_total
 
 
 # Hauptanwendung
