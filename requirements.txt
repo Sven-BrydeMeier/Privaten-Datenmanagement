@@ -1,34 +1,69 @@
-streamlit>=1.28.0
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.0  # PostgreSQL-Unterstützung für Cloud-Datenbanken
-redis>=5.0.0            # Redis/Upstash Cache
-supabase>=2.0.0         # Supabase Storage
-cryptography>=41.0.0
-PyPDF2>=3.0.0
-Pillow>=10.0.0
-openai>=1.0.0
-anthropic>=0.8.0
-python-dotenv>=1.0.0
-bcrypt>=4.1.0
-pandas>=2.0.0
-plotly>=5.18.0
-python-dateutil>=2.8.0
-icalendar>=5.0.0
-google-api-python-client>=2.100.0
-google-auth-oauthlib>=1.1.0
-aiosmtplib>=3.0.0
-imapclient>=2.3.0
-whoosh>=2.7.4
-numpy>=1.24.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-pdf2image>=1.16.0
-PyMuPDF>=1.23.0
-pycryptodome>=3.19.0
-pytesseract>=0.3.10
-reportlab>=4.0.0
-streamlit-drawable-canvas>=0.9.3
-python-docx>=1.1.0       # Word-Dokument Vorschau
-openpyxl>=3.1.0          # Excel-Dokument Vorschau
-extract-msg>=0.48.0      # Outlook MSG-Datei Parser
-psutil>=5.9.0            # System-Monitoring für Sync-Diagnostik
+# ============================================
+# Privates Datenmanagement System - Requirements
+# ============================================
+
+# === CORE FRAMEWORK ===
+streamlit>=1.28.0               # Web-Framework für die Anwendung
+
+# === DATENBANK ===
+sqlalchemy>=2.0.0               # ORM für Datenbankoperationen
+psycopg2-binary>=2.9.0          # PostgreSQL-Treiber (Supabase)
+supabase>=2.0.0                 # Supabase Client für Storage
+
+# === CACHING ===
+redis>=5.0.0                    # Redis/Upstash Cache-Unterstützung
+
+# === SICHERHEIT ===
+cryptography>=41.0.0            # Verschlüsselung
+bcrypt>=4.1.0                   # Passwort-Hashing
+pycryptodome>=3.19.0            # Zusätzliche Krypto-Funktionen
+
+# === KI-INTEGRATION ===
+openai>=1.0.0                   # OpenAI API (GPT für Dokumentenanalyse)
+anthropic>=0.8.0                # Anthropic API (Claude für Dokument-Chat)
+
+# === PDF-VERARBEITUNG ===
+PyPDF2>=3.0.0                   # PDF lesen und validieren
+PyMuPDF>=1.23.0                 # PDF-Rendering und Extraktion
+pdf2image>=1.16.0               # PDF zu Bild Konvertierung
+reportlab>=4.0.0                # PDF-Generierung
+
+# === BILDVERARBEITUNG ===
+Pillow>=10.0.0                  # Bildverarbeitung
+pytesseract>=0.3.10             # OCR-Texterkennung (benötigt Tesseract)
+
+# === OFFICE-DOKUMENTE ===
+python-docx>=1.1.0              # Word-Dokumente (.docx)
+openpyxl>=3.1.0                 # Excel-Dokumente (.xlsx)
+extract-msg>=0.48.0             # Outlook MSG-Dateien
+
+# === DATENANALYSE ===
+pandas>=2.0.0                   # Datenverarbeitung
+numpy>=1.24.0                   # Numerische Berechnungen
+plotly>=5.18.0                  # Interaktive Diagramme
+
+# === KALENDER & ZEIT ===
+python-dateutil>=2.8.0          # Datumsberechnungen
+icalendar>=5.0.0                # iCal-Format für Kalender
+
+# === CLOUD-SYNC (Google Drive/Dropbox) ===
+google-api-python-client>=2.100.0   # Google Drive API
+google-auth-oauthlib>=1.1.0         # Google OAuth
+requests>=2.31.0                    # HTTP-Anfragen
+beautifulsoup4>=4.12.0              # HTML-Parsing für Public Drive
+
+# === E-MAIL ===
+aiosmtplib>=3.0.0               # SMTP für E-Mail-Versand
+imapclient>=2.3.0               # IMAP für E-Mail-Empfang
+
+# === SUCHE ===
+whoosh>=2.7.4                   # Volltextsuche-Engine
+
+# === SYSTEM-MONITORING ===
+psutil>=5.9.0                   # RAM/CPU-Überwachung für Sync-Diagnostik
+
+# === UI-ERWEITERUNGEN ===
+streamlit-drawable-canvas>=0.9.3    # Zeichenfläche für Signaturen
+
+# === UTILITIES ===
+python-dotenv>=1.0.0            # Umgebungsvariablen aus .env
